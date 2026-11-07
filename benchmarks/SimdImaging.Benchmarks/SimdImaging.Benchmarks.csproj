@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SimdImaging.Benchmarks</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- A stopwatch harness, not BenchmarkDotNet: it answers "did the end-to-end path move" in
+         seconds, before any kernel work. End-to-end or it does not count. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SimdImaging\SimdImaging.csproj" />
+  </ItemGroup>
+
+</Project>

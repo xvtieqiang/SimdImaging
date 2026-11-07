@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SimdImaging</RootNamespace>
+    <PackageId>SimdImaging</PackageId>
+    <Description>Managed .NET image processing layer over Sdcb.SimdCodecs: load, save and the operator pipeline. Pure managed, NativeAOT-first, three working formats (Rgba8 / Rgba16 / Rgba32F).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SimdImaging.Abstractions\SimdImaging.Abstractions.csproj" />
+    <ProjectReference Include="..\SimdImaging.Processing\SimdImaging.Processing.csproj" />
+    <!-- Codec layer. Referenced from source during development; the shipped package will depend on
+         Sdcb.SimdCodecs 2.0.x from NuGet. -->
+    <ProjectReference Include="..\..\..\SimdCodecs\src\Sdcb.SimdCodecs\Sdcb.SimdCodecs.csproj" />
+  </ItemGroup>
+
+</Project>

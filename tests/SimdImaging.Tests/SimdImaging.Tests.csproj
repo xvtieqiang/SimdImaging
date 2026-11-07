@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SimdImaging.Tests</RootNamespace>
+    <!-- xUnit1051: tests are in-memory and finish in milliseconds, so threading
+         TestContext.Current.CancellationToken through every call adds noise without buying
+         responsiveness. Cancellation itself is covered by dedicated tests once operations run long. -->
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SimdImaging\SimdImaging.csproj" />
+    <ProjectReference Include="..\..\src\SimdImaging.Abstractions\SimdImaging.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

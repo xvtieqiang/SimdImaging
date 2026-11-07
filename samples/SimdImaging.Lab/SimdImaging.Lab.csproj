@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SimdImaging.Lab</RootNamespace>
+    <!-- Not part of SimdImaging.slnx on purpose: the shipped solution must stay buildable without the
+         git-ignored Six Labors licence file. Same rule as the comparison harness. -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <SixLaborsLicenseFile>$(MSBuildThisFileDirectory)..\..\docs\sixlabors.lic</SixLaborsLicenseFile>
+    <NoWarn>$(NoWarn);NU1902;NU1903</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SimdImaging\SimdImaging.csproj" />
+    <PackageReference Include="SixLabors.ImageSharp" />
+  </ItemGroup>
+
+</Project>

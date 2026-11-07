@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SimdImaging.Processing</RootNamespace>
+    <PackageId>SimdImaging.Processing</PackageId>
+    <Description>Pixel operators for SimdImaging: geometry (crop, pad, flip, rotate, resample), alpha handling and composition. Operators take PixelView and never know about files or codecs.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SimdImaging.Abstractions\SimdImaging.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Tests compare each vector kernel against its scalar twin directly. -->
+    <InternalsVisibleTo Include="SimdImaging.Tests" />
+    <!-- The comparison harness tunes the row-band budget in-process to attribute resize cost. -->
+    <InternalsVisibleTo Include="SimdImaging.Comparison" />
+  </ItemGroup>
+
+</Project>

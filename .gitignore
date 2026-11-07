@@ -1,0 +1,31 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+TestResults/
+BenchmarkDotNet.Artifacts/
+*.nupkg
+*.snupkg
+
+# Local read-only checkout of the codec layer (own git repo). Products depend on the NuGet
+# package; this folder exists only to build against unreleased 2.x during development.
+SimdCodecs/
+
+# AOT smoke run artifacts
+tests/SimdImaging.AotSmoke/out-*/
+tests/SimdImaging.AotSmoke/*.txt
+tests/SimdImaging.AotSmoke/*.log
+
+# Commercial license keys — never commit, never paste into a report or a log.
+*.lic
+docs/sixlabors.lic
+
+# Generated measurement output: every run of `perf` / `sizes` / `cores` writes a new timestamped report.
+# They are reproducible with one command; keeping them in the tree buries the real sources.
+benchmarks/SimdImaging.Comparison/results/
+# 示例照片是**入库**的（三个 720p jpg，共 388 KB），为的是克隆后开箱即用。它们不是测试夹具——
+# tests/ 下的所有像素都由程序生成，符合"测试图不入库"的规则。生成脚本见 samples/SimdImaging.Lab/README.md。
+
+# Archives
+*.tar.gz

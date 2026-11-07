@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SimdImaging.Abstractions/SimdImaging.Abstractions.csproj" />
+    <Project Path="src/SimdImaging.Processing/SimdImaging.Processing.csproj" />
+    <Project Path="src/SimdImaging/SimdImaging.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SimdImaging.Tests/SimdImaging.Tests.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/SimdImaging.Benchmarks/SimdImaging.Benchmarks.csproj" />
+  </Folder>
+</Solution>

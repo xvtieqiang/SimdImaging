@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实验台 · SimdImaging vs ImageSharp</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236b4dff'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='sans-serif'%3ES%3C/text%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#f6f6f8; --card:#fff; --line:#e4e4ea; --ink:#1c1c22; --muted:#6b6b78;
+    --accent:#6b4dff; --accent-soft:#efeaff; --ok:#12a150; --warn:#c2410c; --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1200px;margin:0 auto;padding:16px 22px 48px}
+  h1{font-size:25px;margin:0 0 4px;letter-spacing:-.02em}
+  h1 small{font-weight:400;color:var(--muted);font-size:16px}
+  .lede{color:var(--muted);margin:0 0 8px;max-width:92ch;font-size:13.5px}
+  .warn{color:#8a4b12;background:#fff6e8;border:1px solid #f3e0c4;border-radius:10px;
+    padding:9px 12px;font-size:13px;margin:10px 0 14px;max-width:76ch}
+  .status{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);margin-bottom:10px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
+  .bar{flex:1;height:2px;background:var(--line);border-radius:2px;overflow:hidden}
+  .bar i{display:block;height:100%;width:36%;background:var(--accent);border-radius:2px}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+  .tab{border:1px solid var(--line);background:var(--card);color:var(--ink);
+    padding:7px 14px;border-radius:999px;cursor:pointer;font-size:14px}
+  .tab.on{background:var(--accent-soft);border-color:#d6ccff;color:#4326c9;font-weight:600}
+  .tab:disabled{opacity:.45;cursor:default}
+  .modes{display:flex;margin-bottom:10px;border:1px solid var(--line);border-radius:10px;
+    overflow:hidden;width:fit-content;background:var(--card)}
+  .mode{border:0;background:transparent;padding:7px 18px;cursor:pointer;font-size:13.5px;color:var(--muted)}
+  .mode.on{background:var(--accent);color:#fff;font-weight:600}
+  .steps{margin-top:10px;display:flex;flex-direction:column;gap:5px;max-height:340px;overflow:auto}
+  .step{display:flex;align-items:center;gap:9px;padding:4px 7px;border:1px solid var(--line);
+    border-radius:8px;cursor:pointer}
+  .step:hover{border-color:var(--accent);background:var(--accent-soft)}
+  .step img{width:52px;height:32px;object-fit:cover;border-radius:4px;flex:none;background:#eeeef4}
+  .step .sname{flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .step .smeta{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;flex:none}
+  .batch-list{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;font-size:12px}
+  .batch-item{background:#eeeef4;border-radius:6px;padding:2px 8px;white-space:nowrap}
+  .batch-item a{color:var(--muted);text-decoration:none;margin-left:4px}
+  .compare{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+  .compare figure{margin:0;min-width:0}
+  .compare figcaption{font-size:11.5px;color:var(--muted);margin-bottom:4px}
+  .compare img{display:block;width:100%;height:auto;max-height:170px;object-fit:contain;border-radius:8px;
+    background:#eeeef4}
+  .ops{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px}
+  .op{border:1px solid var(--line);background:var(--card);padding:5px 11px;border-radius:8px;
+    cursor:pointer;font-size:13.5px}
+  .op.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(380px,440px);gap:18px;align-items:start}
+  @media(max-width:940px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+  .card h3{margin:0 0 10px;font-size:15px;font-weight:600}
+  .card p.hint{margin:0 0 12px;color:var(--muted);font-size:13px}
+  .drop{border:1px dashed #cfcfda;border-radius:10px;padding:12px;text-align:center;color:var(--muted);
+    cursor:pointer;transition:.15s;font-size:14px}
+  .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft);color:#4326c9}
+  .samples{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .stage{margin-top:10px;min-height:120px;display:flex;align-items:center;justify-content:center;
+    color:var(--muted);font-size:13px}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  .pair figure{margin:0;min-width:0}
+  .pair figcaption{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .pair img{display:block;width:100%;height:auto;max-height:340px;object-fit:contain;border-radius:8px;
+    background-image:linear-gradient(45deg,#e6e6ea 25%,transparent 25%,transparent 75%,#e6e6ea 75%),
+      linear-gradient(45deg,#e6e6ea 25%,transparent 25%,transparent 75%,#e6e6ea 75%);
+    background-size:16px 16px;background-position:0 0,8px 8px}
+  .meta{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:8px}
+  .row{display:flex;align-items:center;gap:10px;margin:9px 0}
+  .row label{width:64px;color:var(--muted);font-size:13px;flex:none}
+  .sel{flex:1;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:13px;
+    background:var(--card);color:var(--ink);min-width:0}
+  input[type=range]{accent-color:var(--accent)}
+  .val{width:54px;text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
+  button.primary{width:100%;margin-top:12px;border:0;background:var(--accent);color:#fff;
+    padding:11px;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer}
+  button.primary:disabled{opacity:.5;cursor:default}
+  .result{margin-top:12px;font-size:13.5px}
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line)}
+  .kv:last-child{border-bottom:0}
+  .big{font-size:24px;font-weight:700;letter-spacing:-.02em}
+  .win{color:var(--ok)} .lose{color:var(--warn)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px}
+  th,td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td:first-child{white-space:normal}   /* names wrap; numbers keep their column */
+  th{color:var(--muted);font-weight:600;font-size:11.5px}
+  td.num{font-variant-numeric:tabular-nums;text-align:right}
+  .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px}
+  .pill.p{background:#e6f7ec;color:#0f7a3d} .pill.n{background:#fdece4;color:#a03a12}
+  .err{color:var(--warn);font-size:13px}
+  .none{color:var(--muted);font-size:12px}
+  .note{color:#9a9aa8;font-size:12px;margin-left:6px}
+  code{background:#eeeef4;padding:1px 5px;border-radius:4px;font-size:.92em}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>实验台 <small>· SimdImaging vs ImageSharp 4.1.3</small></h1>
+  <p class="lede">同一张图，两个库各跑一遍：时间、内存、倍数。全部在本机进程内，不上传。
+    <span class="note">2 次预热 + 7 次取最快；权威数字以 <code>benchmarks/SimdImaging.Comparison</code> 为准</span></p>
+
+  <div class="status">
+    <span class="dot"></span>
+    <div class="bar"><i></i></div>
+    <span id="status">正在读取环境…</span>
+  </div>
+
+  <div class="modes" id="modes">
+    <button class="mode on" data-mode="op">单算子</button>
+    <button class="mode" data-mode="chain">场景链</button>
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+  <div class="ops" id="ops"></div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>图片</h3>
+      <div class="drop" id="drop">点击选择，或把文件拖到这里（PNG / JPEG / WEBP / BMP / TIFF）</div>
+      <input type="file" id="file" accept="image/*" hidden>
+      <div class="samples" id="samples"></div>
+      <div class="stage" id="stage">还没有打开图片</div>
+      <div class="meta" id="meta"></div>
+
+      <div style="margin-top:14px;border-top:1px dashed var(--line);padding-top:12px">
+        <h3 style="margin:0 0 6px">批量处理</h3>
+        <p class="hint">选多张图，用当前选中的算子或配方一次跑完。默认跳过编码——实测编码会让吞吐掉 8 倍
+          （1080p 高斯：不编码 62.8 张/秒，含编码 4.6 张/秒）。</p>
+        <button class="tab" id="batchPick">选择多张图片</button>
+        <input type="file" id="batchFiles" accept="image/*" multiple hidden>
+        <div class="batch-list" id="batchList"></div>
+        <button class="primary" id="batchRun" disabled>批量运行</button>
+        <div class="result" id="batchResult"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3 id="opTitle">选择一个算子</h3>
+        <p class="hint" id="opNote">左侧先打开一张图片。</p>
+        <div id="params"></div>
+        <button class="primary" id="run" disabled>运行并对比</button>
+        <div class="result" id="result"></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h3>本轮记录</h3>
+        <p class="hint">每次运行追加一行。<code>倍</code> &gt; 1 表示 SimdImaging 更快；<code>分配</code> &lt; 1 表示它分配更少。</p>
+        <button class="tab" id="runAll" style="width:100%;margin-bottom:8px">一键跑全部算子（当前图，按默认参数）</button>
+        <div><table id="table">
+          <thead><tr>
+            <th>算子</th><th>参数</th><th class="num">Simd</th><th class="num">IS</th>
+            <th class="num">倍</th><th class="num">分配</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SAMPLES_VERSION = 8;   // bump when /samples/* is overwritten
+const state = {
+  mode: 'op', ops: [], group: null, op: null, image: null, params: {}, result: null,
+  chains: [], chainGroup: null, chain: null, chainParams: {},
+  openImages: [], overlayId: null, overlayScale: 0.6, demoFor: null, batch: [],
+};
+const $ = s => document.querySelector(s);
+const f = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d);
+
+async function boot() {
+  const info = await (await fetch('/api/info')).json();
+  // no guard needed for #file any more, but a missing element used to abort the whole script at top level;
+  // anything assigned below runs inside boot() so a single typo cannot blank the page again.
+  $('#status').textContent =
+    `就绪 · SimdImaging ${info.version} · .NET ${info.runtime} · SIMD ${info.simd} · ${info.cores} 核 · ` +
+    `${info.opCount} 个算子 · 对照 ImageSharp ${info.oracle}`;
+  state.ops = await (await fetch('/api/ops')).json();
+  state.chains = await (await fetch('/api/chains')).json();
+  state.group = state.ops[0].group;
+  state.chainGroup = state.chains.length ? state.chains[0].group : null;
+  renderGroups();
+  renderOps();
+  pick(state.ops.find(o => o.group === state.group));
+  bindModes();
+  renderSamples();
+}
+
+// The two views answer different questions and neither replaces the other: the operator view answers "how
+// fast is this one kernel, and does it match the oracle" — including the two-input ones —, the chain view
+// answers "does the picture survive six of them, and what does it cost in peak memory". A mode that takes
+// two images is still an operator; it was never worth its own view.
+function bindModes() {
+  for (const b of document.querySelectorAll('.mode')) {
+    b.onclick = () => {
+      if (state.mode === b.dataset.mode) return;
+      state.mode = b.dataset.mode;
+      for (const x of document.querySelectorAll('.mode')) x.classList.toggle('on', x === b);
+      $('#result').innerHTML = '';
+      $('#run').textContent = state.mode === 'op' ? '运行并对比' : '运行整条链';
+      renderGroups();
+      renderOps();
+      if (state.mode === 'op') pick(state.op || state.ops[0]);
+      else pickChain(state.chains.find(c => c.group === state.chainGroup));
+      syncRun();
+    };
+  }
+}
+
+function renderGroups() {
+  const items = state.mode === 'chain' ? state.chains : state.ops;
+  const current = state.mode === 'chain' ? state.chainGroup : state.group;
+  const groups = [...new Set(items.map(o => o.group))];
+  const tabs = $('#tabs'); tabs.innerHTML = '';
+  for (const g of groups) {
+    const b = document.createElement('button');
+    b.className = 'tab' + (g === current ? ' on' : '');
+    b.textContent = g;
+    b.onclick = () => {
+      if (state.mode === 'chain') state.chainGroup = g; else state.group = g;
+      renderGroups(); renderOps();
+    };
+    tabs.appendChild(b);
+  }
+}
+
+function renderOps() {
+  const box = $('#ops'); box.innerHTML = '';
+
+  if (state.mode === 'chain') {
+    for (const c of state.chains.filter(x => x.group === state.chainGroup)) {
+      const b = document.createElement('button');
+      b.className = 'op' + (state.chain && c.id === state.chain.id ? ' on' : '');
+      b.textContent = c.title;
+      b.onclick = () => { pickChain(c); renderOps(); };
+      box.appendChild(b);
+    }
+
+    // A survey of every recipe, not another recipe — hence the separator.
+    const sep = document.createElement('span');
+    sep.style.cssText = 'width:1px;background:var(--line);margin:0 4px';
+    box.appendChild(sep);
+
+    const all = document.createElement('button');
+    all.className = 'op';
+    all.style.fontWeight = '600';
+    all.textContent = '▶ 全部跑一遍';
+    all.onclick = runCompare;
+    box.appendChild(all);
+    return;
+  }
+
+  for (const o of state.ops.filter(x => x.group === state.group)) {
+    const b = document.createElement('button');
+    b.className = 'op' + (state.op && o.id === state.op.id ? ' on' : '');
+    b.textContent = o.title;
+    b.onclick = () => { pick(o); renderOps(); };
+    box.appendChild(b);
+  }
+}
+
+function pick(op) {
+  if (!op) return;
+  state.op = op; state.params = {};
+  $('#opTitle').textContent = `${op.group} · ${op.title}`;
+  $('#opNote').textContent = op.note
+    + (op.needsOverlay ? '　——　叠加图自动缩放居中。'
+        + (op.group === 'Porter-Duff' ? '这些算子的语义要有透明区域才看得出来，叠加图建议选「合成 · 带透明」。' : '')
+      : (op.hasOracle ? '' : `　——　${op.oracleNote || 'ImageSharp 无对等算子，只展示效果'}`));
+
+  renderParams(op.params, state.params);
+
+  // Two-input modes get their overlay picker here, in the same panel as every other slider — the only
+  // thing that separates them from a single-input operator is this one extra control.
+  if (op.needsOverlay) {
+    const box = $('#params');
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<label>叠加图</label><select class="sel" id="overlaySel"></select>';
+    const sel = row.querySelector('select');
+    sel.onchange = () => { state.overlayId = sel.value; state.demoFor = null; };
+    box.appendChild(row);
+    fillOverlaySelect(op);
+
+    const scaleRow = document.createElement('div');
+    scaleRow.className = 'row';
+    scaleRow.innerHTML = `<label>叠加缩放</label>
+      <input type="range" min="0.2" max="1" step="0.05" value="${state.overlayScale}">
+      <span class="val">${Math.round(state.overlayScale * 100)}%</span>`;
+    const input = scaleRow.querySelector('input'), val = scaleRow.querySelector('.val');
+    input.oninput = () => { state.overlayScale = +input.value; val.textContent = Math.round(input.value * 100) + '%'; };
+    box.appendChild(scaleRow);
+
+    // A mode is only legible against the right overlay. Defaulting to the current photo made Darken,
+    // Multiply and friends degenerate to the original (min(x,x)=x), so the bench looked like it did
+    // nothing. Generate the synthetic layer this mode is built to be shown with, unless the user has
+    // deliberately picked another image.
+    if (op.demoOverlay && state.demoFor !== op.demoOverlay) ensureDemoOverlay(op);
+  }
+
+  $('#result').innerHTML = '';
+  syncRun();
+}
+
+function pickChain(c) {
+  if (!c) return;
+  state.chain = c; state.chainParams = {};
+  $('#opTitle').textContent = `${c.group} · ${c.title}`;
+  $('#opNote').textContent = c.note + (c.caveat ? `　——　${c.caveat}` : '');
+  renderParams(c.params, state.chainParams);
+  $('#result').innerHTML = '';
+  syncRun();
+}
+
+/// Every recipe against the current image, side by side. One pass each — this is a survey, not a measurement.
+async function runCompare() {
+  if (!state.image) return;
+  const stage = $('#stage');
+  stage.innerHTML = '<span>正在跑全部配方…</span>';
+
+  try {
+    const r = await fetch('/api/compare', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: state.image.id })
+    });
+    const j = await r.json();
+    if (!r.ok || j.error) { stage.innerHTML = `<span class="err">${j.error || '失败'}</span>`; return; }
+
+    const cards = j.results.map(x => x.error
+      ? `<figure><figcaption>${escapeHtml(x.title)}</figcaption>
+           <div class="err">${escapeHtml(x.error)}</div></figure>`
+      : `<figure>
+           <figcaption>${escapeHtml(x.title)} · ${x.steps} 步 · ${f(x.ms, 0)} ms</figcaption>
+           <img src="/api/output/${x.outputId}" alt="">
+         </figure>`).join('');
+
+    stage.innerHTML = `<div class="compare">${cards}</div>`;
+    $('#result').innerHTML = `<p class="hint">同一张图跑完所有配方，每条只跑一次——这里报的毫秒是单次观测，
+      不是稳定性能。要可靠数字，在「场景链」里逐条运行（2 次预热 + 7 次取最快）。
+      中间图在单条链里看，这里只放最终结果。</p>`;
+  } catch (e) {
+    stage.innerHTML = `<span class="err">${e}</span>`;
+  }
+}
+
+/// Fills the overlay dropdown: synthetic demo layers first, opened images after.
+function fillOverlaySelect(op) {
+  const sel = $('#overlaySel');
+  if (!sel) return;
+  const current = state.overlayId || state.image?.id;
+  const option = im => `<option value="${im.id}"${im.id === current ? ' selected' : ''}>`
+    + `${im.demo ? '演示层 · ' : ''}${escapeHtml(im.name)}</option>`;
+  const demo = state.openImages.filter(im => im.demo);
+  const rest = state.openImages.filter(im => !im.demo);
+  sel.innerHTML = demo.map(option).join('') + rest.map(option).join('');
+}
+
+/// Generates the overlay this mode is meant to be shown against, and selects it.
+async function ensureDemoOverlay(op) {
+  try {
+    // 640x480 is enough to read a blend mode and keeps generation at a few milliseconds.
+    const r = await fetch('/api/sample', { method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ width: 640, height: 480, kind: op.demoOverlay }) });
+    if (!r.ok) return;
+    const j = await r.json();
+    j.demo = true;
+    state.openImages.push(j);
+    state.overlayId = j.id;
+    state.demoFor = op.demoOverlay;
+    // The panel may have moved on to another operator while this was in flight.
+    if (state.op && state.op.id === op.id) fillOverlaySelect(op);
+  } catch (e) { console.warn('demo overlay failed', e); }
+}
+
+/// Shared by both views: same slider markup, different backing object.
+function renderParams(params, store) {
+  const box = $('#params'); box.innerHTML = '';
+  for (const p of params || []) {
+    store[p.name] = p.default;
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label>${p.label}</label>
+      <input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.default}">
+      <span class="val">${p.default}</span>`;
+    const input = row.querySelector('input'), val = row.querySelector('.val');
+    input.oninput = () => { store[p.name] = +input.value; val.textContent = input.value; };
+    box.appendChild(row);
+  }
+}
+
+function syncRun() {
+  $('#run').disabled = !state.image || (state.mode === 'chain' ? !state.chain : !state.op);
+  syncBatch();
+}
+
+const escapeHtml = s => String(s).replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function renderSamples() {
+  const box = $('#samples'); box.innerHTML = '';
+  // Real photographs first: they are what people actually judge a filter on. The three `.webp` files that
+  // used to sit here were colour-bar TEST CHARTS, not photographs — labelling them "真实照片" was wrong.
+  // Each photo is picked for what it shows, and the label says which operators change visibly on it. Every
+  // entry was checked by looking at the file: earlier labels ("海岸 / 静物 / 细节") were inherited from a
+  // different set of photographs and described nothing that was actually there.
+  // Three committed 720p photographs, each chosen because a different operator family shows clearly on it.
+  // (The alpha chart used to be a webp copied out of SimdCodecs — not our repository, so it is generated now.)
+  const photos = [
+    ['photo-face.jpg', '人像 · 看双边/锐化/辉光'],
+    ['photo-portrait.jpg', '雨林栈桥 · 纹理密，看模糊/中值'],
+    ['photo-mist.jpg', '雾景低反差 · 看均衡/CLAHE/色调'],
+  ];
+
+  for (const [name, label] of photos) {
+    const b = document.createElement('button');
+    b.className = 'tab'; b.textContent = label;
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const blob = await (await fetch(`/samples/${name}?v=${SAMPLES_VERSION}`, { cache: 'no-store' })).blob();
+        const type = name.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+        await open(new File([blob], name, { type }));
+      } finally { b.disabled = false; }
+    };
+    box.appendChild(b);
+  }
+
+  const list = [
+    ['checker', 1920, 1080, '合成 · 棋盘 1080p'],
+    ['detail', 1920, 1080, '合成 · 细节 1080p'],
+    ['portrait', 1920, 1080, '合成 · 柔光 1080p'],
+    ['alpha', 1920, 1080, '合成 · 带透明 1080p'],
+    ['checker', 3840, 2160, '合成 · 棋盘 4K'],
+  ];
+  for (const [kind, w, h, label] of list) {
+    const b = document.createElement('button');
+    b.className = 'tab'; b.textContent = label;
+    b.onclick = async () => {
+      b.disabled = true;
+      const r = await fetch('/api/sample', { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ width: w, height: h, kind }) });
+      const j = await r.json(); b.disabled = false;
+      if (!r.ok) { alert(j.error || '生成失败'); return; }
+      adopt(j);
+    };
+    box.appendChild(b);
+  }
+}
+
+// Bind defensively. The previous version assigned handlers at top level, so one missing element
+// (`#file`, which I had deleted) threw a TypeError and the rest of the script — including boot() and the
+// whole operator list — never ran. A typo must not be able to blank the page.
+const on = (sel, ev, fn) => {
+  const el = document.querySelector(sel);
+  if (!el) { console.warn('missing element', sel); return; }
+  el.addEventListener(ev, fn);
+  return el;
+};
+
+on('#drop', 'click', () => $('#file')?.click());
+on('#file', 'change', e => { const x = e.target.files?.[0]; if (x) open(x); });
+['dragenter', 'dragover'].forEach(t => on('#drop', t, e => {
+  e.preventDefault(); $('#drop').classList.add('over');
+}));
+['dragleave', 'drop'].forEach(t => on('#drop', t, e => {
+  e.preventDefault(); $('#drop').classList.remove('over');
+}));
+on('#drop', 'drop', e => { const x = e.dataTransfer.files?.[0]; if (x) open(x); });
+
+async function open(file) {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  $('#drop').textContent = '正在解码…';
+  const r = await fetch('/api/open', { method: 'POST', body: form });
+  const j = await r.json();
+  $('#drop').textContent = '点击选择，或把文件拖到这里（PNG / JPEG / BMP / TIFF）';
+  if (!r.ok) { alert(j.error || '打开失败'); return; }
+  adopt(j);
+}
+
+function adopt(j) {
+  state.image = j; state.result = null;
+  // Every opened image stays eligible as the compose view's overlay, current one included: blending an
+  // image with itself is a legitimate first check (Difference should cancel everything out).
+  if (!state.openImages.some(im => im.id === j.id)) state.openImages.push(j);
+  if (!state.overlayId) state.overlayId = j.id;
+  $('#stage').innerHTML = `<div class="pair">
+      <figure><figcaption>原图</figcaption><img src="/api/source/${j.id}" alt=""></figure>
+    </div>`;
+  $('#meta').innerHTML =
+    `<span>${j.name}</span><span>${j.width} × ${j.height}</span><span>${j.format}</span>` +
+    `<span>${(j.bytes / 1024).toFixed(1)} KiB</span>`;
+  $('#table').querySelector('tbody').innerHTML = '';
+  $('#result').innerHTML = '';
+  syncRun();
+}
+
+// One click, every operator, on the image already open. It calls the same /api/run the single-shot button
+// uses — same warm-up protocol, same JSON — so the numbers in this table mean the same thing however they
+// were produced. Sequential on purpose: the server measures one operator at a time, and firing 51 requests
+// at once would put them in contention with each other and with the measurement itself.
+on('#runAll', 'click', async () => {
+  if (!state.image) { alert('先在左边打开一张图片'); return; }
+
+  const button = $('#runAll');
+  button.disabled = true;
+  $('#table').querySelector('tbody').innerHTML = '';
+  $('#stage').innerHTML = `<div class="pair"><figure><figcaption>原图</figcaption>
+      <img src="/api/source/${state.image.id}" alt=""></figure></div>`;
+
+  const ops = state.ops;
+  let done = 0;
+  let failed = 0;
+  let worse = 0;
+  let firstError = null;   // surfaced on screen: a silent catch made "0/51" look like a server problem
+
+  for (const op of ops) {
+    const params = {};
+    for (const p of op.params || []) params[p.name] = p.default;
+
+    button.textContent = `运行中 ${done}/${ops.length} · ${op.title}`;
+    try {
+      const r = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: state.image.id, op: op.id, params })
+      });
+      const j = await r.json();
+      if (j.error) {
+        failed++;
+        firstError ??= `${op.id}: ${j.error}`;
+        console.warn('run-all failed', op.id, j.error);
+      } else {
+        appendRow(op, j);
+        if (j.speedup != null && j.speedup < 1) worse++;
+      }
+    } catch (e) {
+      failed++;
+      firstError ??= `${op.id}: ${e && e.message ? e.message : e}`;
+      console.error('run-all threw', op.id, e);
+    }
+    done++;
+  }
+
+  button.disabled = false;
+  button.textContent = `完成 ${done - failed}/${ops.length}`
+    + (worse ? ` · ${worse} 项慢于 ImageSharp` : '')
+    + ` — 再点一次重跑`;
+  // The panel header still refers to the operator last chosen by hand; make clear the table is now a sweep.
+  $('#result').innerHTML = `<div class="kv"><span>本次为全量扫描</span><span>${done - failed}/${ops.length} 项成功，`
+    + `${worse} 项落后</span></div>`
+    + (firstError ? `<div class="err">首个错误：${firstError}</div>` : '');
+});
+
+// ---------- batch ----------
+on('#batchPick', 'click', () => $('#batchFiles')?.click());
+
+on('#batchFiles', 'change', async e => {
+  const files = [...(e.target.files || [])];
+  $('#batchResult').innerHTML = '';
+  for (const file of files) {
+    if (state.batch.length >= 32) break;
+    try {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      const r = await fetch('/api/open', { method: 'POST', body: form });
+      const j = await r.json();
+      if (r.ok) state.batch.push({ id: j.id, name: j.name });
+    } catch (err) { console.warn('batch upload failed', file.name, err); }
+  }
+  e.target.value = '';
+  renderBatchList();
+});
+
+function renderBatchList() {
+  const box = $('#batchList');
+  box.innerHTML = state.batch.map((b, i) =>
+    `<span class="batch-item">${escapeHtml(b.name)}<a href="#" data-i="${i}">×</a></span>`).join('');
+  for (const a of box.querySelectorAll('a'))
+    a.onclick = ev => {
+      ev.preventDefault();
+      state.batch.splice(+a.dataset.i, 1);
+      renderBatchList();
+    };
+  syncBatch();
+}
+
+function syncBatch() {
+  const btn = $('#batchRun');
+  if (!btn) return;
+  const hasWork = state.mode === 'chain' ? !!state.chain : !!state.op;
+  btn.disabled = !state.batch.length || !hasWork;
+  btn.textContent = state.batch.length ? `批量运行（${state.batch.length} 张）` : '批量运行';
+}
+
+on('#batchRun', 'click', async () => {
+  const chainMode = state.mode === 'chain';
+  if (chainMode ? !state.chain : !state.op) return;
+
+  const btn = $('#batchRun');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '运行中…';
+  try {
+    const r = await fetch('/api/batch', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ids: state.batch.map(b => b.id),
+        op: chainMode ? null : state.op.id,
+        chain: chainMode ? state.chain.id : null,
+        params: chainMode ? state.chainParams : state.params,
+        concurrency: 4,
+        encode: false,
+      })
+    });
+    const j = await r.json();
+    if (!r.ok || j.error) {
+      $('#batchResult').innerHTML = `<div class="err">${j.error || '失败'}</div>`;
+      return;
+    }
+
+    const rows = j.items.map(x => `<tr>
+        <td>${x.index + 1}</td>
+        <td class="num">${x.error ? '—' : f(x.ms, 1)}</td>
+        <td>${x.error ? `<span class="err">${escapeHtml(x.error)}</span>` : 'ok'}</td>
+      </tr>`).join('');
+
+    $('#batchResult').innerHTML = `
+      <div class="kv"><span>数量 / 并发</span><span>${j.count} 张 · ${j.concurrency}</span></div>
+      <div class="kv"><span>总耗时</span><span class="big">${f(j.totalMs, 0)} ms</span></div>
+      <div class="kv"><span>吞吐</span><span>${f(j.throughputPerSec, 2)} 张/秒</span></div>
+      <table><thead><tr><th>#</th><th class="num">ms</th><th>状态</th></tr></thead>
+        <tbody>${rows}</tbody></table>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+});
+
+on('#run', 'click', async () => {
+  if (!state.image) return;
+  const chainMode = state.mode === 'chain';
+  if (chainMode ? !state.chain : !state.op) return;
+
+  const label = chainMode ? '运行整条链' : '运行并对比';
+  $('#run').disabled = true; $('#run').textContent = '运行中…';
+  try {
+    const r = await fetch(chainMode ? '/api/chain' : '/api/run', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(chainMode
+        ? { id: state.image.id, chain: state.chain.id, params: state.chainParams }
+        : { id: state.image.id, op: state.op.id, params: state.params,
+            overlayId: state.op.needsOverlay ? (state.overlayId || state.image.id) : null,
+            scale: state.op.needsOverlay ? state.overlayScale : null })
+    });
+    const j = await r.json();
+    if (!r.ok || j.error) { $('#result').innerHTML = `<div class="err">${j.error || '失败'}</div>`; return; }
+    if (chainMode) showChain(j); else show(j);
+  } finally { $('#run').disabled = false; $('#run').textContent = label; }
+});
+
+function show(j) {
+  const out = `/api/output/${j.outputId}`;
+  // Two panels, always. The previous version overlaid the result on the original and clipped it with
+  // clip-path; when that inset was written the wrong way round the result covered the 原图 half, which read
+  // as "processing destroyed my source image". Side-by-side cannot hide the original, whatever the numbers do.
+  $('#stage').innerHTML = `<div class="pair">
+      <figure><figcaption>原图</figcaption><img src="/api/source/${state.image.id}" alt=""></figure>
+      <figure><figcaption>结果 · ${state.op.title}</figcaption><img src="${out}" alt=""></figure>
+    </div>`;
+
+  const hasOracle = j.theirsMs != null;
+  const tCls = !hasOracle ? '' : (j.speedup >= 1 ? 'win' : 'lose');
+  const aCls = j.allocRatio == null ? '' : (j.allocRatio >= 1 ? 'win' : 'lose');
+
+  $('#result').innerHTML = `
+    <div class="kv"><span>输出</span><span>${j.width} × ${j.height} · ${(j.oursBytes / 1024).toFixed(1)} KiB</span></div>
+    <div class="kv"><span>SimdImaging</span><span>${f(j.oursMs, 2)} ms · ${f(j.oursAllocKiB, 0)} KiB</span></div>
+    <div class="kv"><span>ImageSharp</span><span>${hasOracle
+        ? `${f(j.theirsMs, 2)} ms · ${f(j.theirsAllocKiB, 0)} KiB`
+        : `<span class="none">${j.oracleNote || '无对等算子'}</span>`}</span></div>
+    <div class="kv"><span>时间倍数</span><span class="big ${tCls}">${hasOracle ? f(j.speedup) + '×' : '—'}</span></div>
+    <div class="kv"><span>分配倍数</span><span>${j.allocRatio == null ? '—'
+        : `<span class="${aCls}">${f(j.allocRatio)}×</span>（ImageSharp ÷ SimdImaging）`}</span></div>
+    <div class="kv"><span>工作集</span><span>${f(j.oursWorkingSetMiB, 1)} MiB${
+        hasOracle ? ` · ImageSharp ${f(j.theirsWorkingSetMiB, 1)} MiB` : ''}</span></div>
+    ${j.theirsError ? `<div class="err">ImageSharp 失败：${j.theirsError}</div>` : ''}`;
+
+  appendRow(state.op, j);
+}
+
+/// The chain view. Every thumbnail here is a real step output captured by the plan's observer, not a
+/// reconstruction — which is the whole point: when step 3 is where the shadows crush, it is visible instead
+/// of having to be inferred from the final frame.
+function showChain(j) {
+  const steps = j.steps || [];
+  const final = steps[steps.length - 1];
+
+  $('#stage').innerHTML = `<div class="pair">
+      <figure><figcaption>原图</figcaption><img src="/api/source/${state.image.id}" alt=""></figure>
+      <figure><figcaption>结果 · ${j.title}</figcaption><img id="chainBig" src="/api/output/${final.outputId}" alt=""></figure>
+    </div>`;
+
+  const rows = steps.map((s, i) => {
+    const last = i === steps.length - 1;
+    return `<div class="step" data-id="${s.outputId}">
+      <img src="/api/output/${s.outputId}" alt="">
+      <span class="sname">${last ? s.name : `${i + 1}. ${s.name}`}</span>
+      <span class="smeta">${s.category}${last ? '' : ' · ' + f(s.ms, 2) + ' ms'}</span>
+    </div>`;
+  }).join('');
+
+  const params = Object.entries(j.parameters || {}).map(([k, v]) => `${k}=${v}`).join(' ');
+  $('#result').innerHTML = `
+    <div class="kv"><span>链路</span><span>${steps.length - 1} 步 · ${j.width} × ${j.height}</span></div>
+    <div class="kv"><span>总耗时</span><span class="big">${f(j.totalMs, 2)} ms</span></div>
+    <div class="kv"><span>分配</span><span>${f(j.allocKiB, 0)} KiB</span></div>
+    <div class="kv"><span>工作集</span><span>${f(j.workingSetMiB, 1)} MiB</span></div>
+    ${params ? `<div class="kv"><span>参数</span><span>${params}</span></div>` : ''}
+    <p class="hint" style="margin:10px 0 0">点任意一步在左侧看大图。步内耗时是单次观测、且紧挨着 PNG 编码，
+      只用来看"时间花在哪"；总耗时才是七次采样取最快的结果。</p>
+    <div class="steps">${rows}</div>`;
+
+  for (const el of document.querySelectorAll('.step'))
+    el.onclick = () => { $('#chainBig').src = `/api/output/${el.dataset.id}`; };
+
+  appendRow({ title: j.title }, {
+    parameters: j.parameters, oursMs: j.totalMs, oursAllocKiB: j.allocKiB,
+    theirsMs: null, allocRatio: null,
+  });
+}
+
+/// Draws one result row. Shared by a single run and by the run-all sweep, so the two cannot drift apart.
+function appendRow(op, j) {
+  // `hasOracle` used to be a local of show(); extracting this function left it behind, and every row threw
+  // "hasOracle is not defined" — which the sweep counted as 51 failures. Anything the row needs is computed here.
+  const hasOracle = j.theirsMs != null;
+  const tbody = $('#table').querySelector('tbody');
+  const tr = document.createElement('tr');
+  const ps = Object.entries(j.parameters || {}).map(([k, v]) => `${k}=${v}`).join(' ');
+  // A ratio against "we allocated almost nothing" is not a number: dividing their ~1 MiB by our ~0 bytes
+  // printed 139008× and made the whole column look broken. Below half a KiB we report ∞ instead, which is
+  // what "they allocate, we do not" actually means.
+  const ourAlloc = j.oursAllocKiB;
+  const allocCell = j.allocRatio == null ? '—'
+    : (ourAlloc != null && ourAlloc < 0.5
+        ? '<span class="pill p" title="我方几乎不分配，比值无意义">∞</span>'
+        : `<span class="pill ${j.allocRatio >= 1 ? 'p' : 'n'}">${f(j.allocRatio)}×</span>`);
+
+  // A missing time used to render as an em dash, indistinguishable from "this operator has no oracle".
+  // Print a question mark and log the payload so the next occurrence leaves evidence instead of a mystery.
+  const ourMsCell = Number.isFinite(j.oursMs) ? f(j.oursMs, 2) : '?';
+  if (!Number.isFinite(j.oursMs)) console.warn('run payload without oursMs', j);
+
+  tr.innerHTML = `<td>${op.title}</td><td>${ps || '—'}</td>
+    <td class="num">${ourMsCell}</td>
+    <td class="num">${hasOracle ? f(j.theirsMs, 2) : '—'}</td>
+    <td class="num">${hasOracle ? `<span class="pill ${j.speedup >= 1 ? 'p' : 'n'}">${f(j.speedup)}×</span>` : '—'}</td>
+    <td class="num">${allocCell}</td>`;
+  tbody.prepend(tr);
+}
+
+boot();
+</script>
+</body>
+</html>

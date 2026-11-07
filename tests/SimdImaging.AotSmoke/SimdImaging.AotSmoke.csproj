@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SimdImaging.AotSmoke</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Not in the solution: publishing NativeAOT needs the ILCompiler package and a C++ toolchain,
+         so CI runs run.sh explicitly instead of every build. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SimdImaging\SimdImaging.csproj" />
+  </ItemGroup>
+
+</Project>

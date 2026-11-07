@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SimdImaging.Abstractions</RootNamespace>
+    <PackageId>SimdImaging.Abstractions</PackageId>
+    <Description>Contracts for SimdImaging: the three working formats, pooled pixel buffers with stride, and the operator contract every processing kernel implements. Depends only on Sdcb.SimdCodecs.Abstractions for PixelFormat / SampleFormat / ImageInfo.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Contracts only. Referenced from source during development; products consume the
+         Sdcb.SimdCodecs 2.0.x package once it ships. -->
+    <ProjectReference Include="..\..\..\SimdCodecs\src\Sdcb.SimdCodecs.Abstractions\Sdcb.SimdCodecs.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
