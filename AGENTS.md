@@ -77,12 +77,13 @@ bash tests/SimdImaging.AotSmoke/run.sh            # needs the C++ workload (see 
 - Untrusted input fails with `InvalidDataException`, caller mistakes with `ArgumentException` /
   `NotSupportedException`; no silent fallback to another format, depth or sampler.
 
-## Status (2026-11-05)
+## Status (2026-11-07)
 
-M0 done: solution skeleton, `Abstractions` (formats, pool, `PixelBuffer`/`PixelView`, op contract, options),
-`Image` with Load/Save/Encode, the AOT smoke project, zero warnings.
+**Milestone status: M0 and M1 complete and verified. M2–M4 implemented, exit criteria only partly verified.**
+Each milestone has acceptance criteria in `docs/architecture.md` §11; only M0, M1, and M2's blur criterion
+(1.61–1.86× at 1080p) have actually been measured. Do not call a milestone done until its row has numbers.
 
-M1 done, M2 in progress: `SimdImaging.Processing` has geometry (Crop, Pad, Trim, Flip, Rotate 90/180/arbitrary, affine, perspective, Resize with
+M2–M4 in code: `SimdImaging.Processing` has geometry (Crop, Pad, Trim, Flip, Rotate 90/180/arbitrary, affine, perspective, Resize with
 five resamplers and the five resize modes, canvas pad/crop, tiling, rounded corners, entropy crop, transposes, combined rotate-flip, delegate warping, point sampling, aspect-preserving resize by one axis), point operators (Brightness, Contrast, Saturation, Grayscale, Invert, Gamma, Threshold, Posterize,
 Levels, colour matrices, hue rotation, sepia, normalize,
 vibrance, temperature, tint, colour balance, channel swap,

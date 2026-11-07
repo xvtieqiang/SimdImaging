@@ -520,7 +520,7 @@ internal static class BlurRowKernels
 }
 ```
 
-规则（全部来自 SimdCodecs 的踩坑记录，照抄）：
+规则（全部来自 SimdCodecs 的实践教训）：
 
 1. **一个内核 = 一行**。边界、halo、并行、分块由上层负责，内核不持有状态。
 2. **每个向量内核必须有同文件、同算法的标量孪生**，输出逐字节一致。
@@ -631,7 +631,7 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 
 另外两个断言：`RuntimeFeature.IsDynamicCodeSupported == false` 时全路径可跑；publish 输出零 trim/AOT 警告（`-warnaserror`）。
 
-> 这个坑是从 SimdPaddleOCR 的 README 里学到的：它在 x64 AOT 时要求显式设置 `IlcInstructionSet=avx2`，否则 AVX2 内核被裁、推理明显变慢且不报错。同类问题在我们这里表现为"测试通过但没测到东西"，比性能损失更难发现。
+> 这条经验来自 SimdPaddleOCR 的 README：它在 x64 AOT 时要求显式设置 `IlcInstructionSet=avx2`，否则 AVX2 内核被裁、推理明显变慢且不报错。同类问题在我们这里表现为"测试通过但没测到东西"，比性能损失更难发现。
 
 ---
 
@@ -685,7 +685,7 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 
 三个基准项目，入口命令一致（`matrix` / `ab` / `baseline` / `--ablate`）：
 
-| 项目 | 场景 | 对手 |
+| 项目 | 场景 | 参照实现 |
 |---|---|---|
 | `SimdImaging.Resize.Benchmarks` | 16 种重采样器 × 上/下采样 × 8/16 bit；4K→1080p、1080p→4K、1/8 缩略图 | ImageSharp 4.1.3、SkiaSharp、Magick.NET |
 | `SimdImaging.Filters.Benchmarks` | Gaussian/Box/Median/Morphology/Convolve × 半径矩阵；合成 16 种 blend | ImageSharp 4.1.3、SkiaSharp |
@@ -704,12 +704,15 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 
 | 里程碑 | 内容 | 出口条件 |
 |---|---|---|
-| **M0 骨架（已完成）** | slnx、props、`Abstractions`（格式 / 池 / 缓冲 / 算子契约 / 选项）、`Image` + Load/Save/Encode、18 个测试、AOT 冒烟工程与脚本 | `Release` 构建 0 警告；两种基线的 AOT 产物与 JIT 逐字节一致（含几何算子），`dynamic-code=False` 已断言 |
-| **M1 几何（进行中）** | ✅ Crop / Pad / Flip / Rotate 90·180 / Resize（5 种采样器）/ Premultiply / Unpremultiply / Composite(SourceOver) 已落**标量**版；⏳ SIMD 内核与四档一致性、`ProcessingPlan`、PublicAPI 分析器 | 黄金测试通过；四档一致与对 ImageSharp 的倍数待 SIMD 内核落地后再测 |
-| **M2 色彩 + 滤波** | 35 个点算子 + LUT 融合、Gaussian/Box/Median/Sobel/Unsharp、直方图与均衡、自适应二值化 | 点算子融合后分配 = 0；模糊对 4.1.3 ≥ 1.5× |
-| **M3 量化 + 绘制** | Octree/Wu/Palette/WebSafe、抖动、路径与形状、16 blend + 12 Porter-Duff、渐变 | 量化后 PSNR ≥ ImageSharp 同参数；绘制抗锯齿覆盖率可测 |
-| **M4 HDR/ICC/高级** | 传递函数、色调映射、gain map、ICC 矩阵/TRC 与 LUT、CLAHE、双边、行带流式 | 10-bit HEIF → 16-bit PNG 端点精确；8K 峰值内存 ≤ 2.5× |
+| **M0 骨架（已完成）** | slnx、props、`Abstractions`（格式 / 池 / 缓冲 / 算子契约 / 选项）、`Image` + Load/Save/Encode、AOT 冒烟工程与脚本 | ✅ `Release` 构建 0 警告；两种基线的 AOT 产物与 JIT 逐字节一致，`dynamic-code=False` 已断言 |
+| **M1 几何（已完成）** | Crop / Pad / Flip / Rotate 90·180·任意角 / Affine / Perspective / Resize（5 种采样器）/ Premultiply / Unpremultiply / Composite；SIMD 内核与四档一致性、`ProcessingPlan`、PublicAPI 快照 | ✅ 黄金测试通过、四档逐字节一致；对 ImageSharp 的倍数见 `compare-4.1.3` |
+| **M2 色彩 + 滤波（功能完成）** | 35 个点算子 + LUT 字节域融合、Gaussian/Box/Median/Sobel/Unsharp、直方图与均衡、自适应二值化 | 模糊 ≥ 1.5×：**1080p 实测 1.61–1.86×，达标**；"点算子融合后分配 = 0"：**未逐条核**（实测 8–100 KiB） |
+| **M3 量化 + 绘制（功能完成）** | Octree/Wu/Palette/WebSafe、抖动、路径与形状、18 blend + 12 Porter-Duff、渐变、水印 | ❌ 未验：量化 PSNR 对 ImageSharp 同参数、抗锯齿覆盖率 |
+| **M4 HDR/ICC/高级（功能完成）** | 传递函数、色调映射、gain map、ICC 矩阵/TRC 与 LUT、CLAHE、双边、行带流式 | ❌ 未验：10-bit HEIF → 16-bit PNG 端点精确、8K 峰值内存 ≤ 2.5× |
 | **M5 验收** | 12 场景基准报告、分配报告、AOT 报告、`known-gaps.md` 定稿 | §1.3 六条全部出数，输的条目写清原因 |
+
+> **状态口径**：M2–M4 的功能（算子、测试、公开 API）都已落地；上表"出口条件"是当初写进设计的验收标准，
+> 目前只有 M0/M1 与 M2 的模糊一项逐条核过。要宣称某个里程碑"完成"，先把它那一行的出口条件跑出数来。
 
 每个里程碑结束跑一次 `bash tests/SimdImaging.AotSmoke/run.sh`，不只是 M5。
 

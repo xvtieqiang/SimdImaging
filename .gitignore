@@ -29,3 +29,6 @@ benchmarks/SimdImaging.Comparison/results/
 
 # Archives
 *.tar.gz
+
+# Internal review notes: kept locally, not published.
+docs/audit-2026-11-07.md

@@ -47,4 +47,4 @@ dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- all 1920x10
 
 计时口径照 `SimdCodecs/benchmarks/.../Infrastructure.Timing`：同进程交错、每选手热身 ≥300 ms、
 7 轮 × ≥30 ms 采样取中位数；分配用 `GC.GetAllocatedBytesForCurrentThread`；PSNR 只算 RGB、忽略 alpha。
-对手固定 `MaxDegreeOfParallelism = 1`，两边都从共享源**产生一张新图**（对手 `Clone(ctx => ...)`）。
+参照实现固定 `MaxDegreeOfParallelism = 1`，两边都从共享源**产生一张新图**（参照实现 `Clone(ctx => ...)`）。

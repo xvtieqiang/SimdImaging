@@ -18,11 +18,14 @@ OCR 识别链路由 `Sdcb.SimdPaddleOCR` 负责。本项目不做文档垂直场
 
 ## 状态
 
-**M0 完成，M1 完成，M2 进行中。** 已可用：`Image.Load / Save / Encode`、三个工作格式、池化缓冲；几何
+**M0–M4 的功能已全部落地；出口条件尚未逐条核验，逐项状态见
+[`docs/architecture.md` §11](docs/architecture.md)。** 592 个测试全绿、`Release` 构建 0 警告、public API 由快照锁定。
+
+**已可用：**`Image.Load / Save / Encode`、三个工作格式、池化缓冲；几何
 （Crop / Pad / Flip / Rotate90·180 / Rotate 任意角 / Affine / Perspective / Resize 五种采样器）；点算子（Brightness / Contrast / Saturation /
 Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueRotate / Sepia / Normalize / Vibrance / Temperature / Tint / ColorBalance / ChannelSwap / BlackWhite / Curves / Opacity / Clamp）、直方图与均衡；滤波（GaussianBlur / BoxBlur / Median3x3 / Sobel / 形态学 3×3 / 双边 / 卷积 / 浮雕 / 锐化 / 运动模糊 / 散景 / 渐变 / 贴图 / 水印）；合成（Porter-Duff 12 式 + 18 种混合模式）、原地填充/清空、矩形描边、Bresenham 直线、椭圆与多边形填充、预乘/反预乘、调色板量化（中位切分 / Wu / WebSafe / 抖动）、直方图与均衡。
 
-- `Release` 构建 0 警告，197 个测试全绿。
+- `Release` 构建 0 警告，**592 个测试**全绿。
 - Resize 走行带执行：4K→1080p 的分配从 70 MB 降到 **17 MB**（16 MB 预算），输出逐字节不变。
 - 第一个向量内核已落地（Rgba8 预乘行读取 + 水平/垂直两遍向量化）：4K→1080p bicubic **200 → 97–111 ms（≈1.8–2.1×）**，
   Lanczos3 243 → 107–123 ms（≈2.0–2.3×）。其余算子仍是标量，含波动区间的明细见
