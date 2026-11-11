@@ -99,6 +99,44 @@ public sealed partial class Image : IDisposable
         return new Image(frames, Info, Format, ColorEncoding, Metadata);
     }
 
+    /// <summary>
+    /// Copies frame 0 through a chain of operations and returns the result — the original is untouched. This is the
+    /// one call for "several edits in a row": the steps are recorded first and executed once, so a chain of point
+    /// operators costs a single destination buffer instead of one per step, and every intermediate buffer is
+    /// released as soon as the next step has read it.
+    /// <para>
+    /// Frame 0 only: a multi-frame image would lose every frame after the first, so this throws rather than
+    /// silently dropping them.
+    /// </para>
+    /// </summary>
+    /// <param name="steps">Records the operations, e.g. <c>x => x.Resize(800, 600).Saturation(1.2f)</c>.</param>
+    /// <param name="pool">Where the buffers are rented from; null uses <see cref="ArrayPixelPool.Shared"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="steps"/> is null.</exception>
+    /// <exception cref="NotSupportedException">The image has more than one frame.</exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    public Image Clone(Action<ImageChain> steps, IPixelPool? pool = null)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (_frames.Length > 1)
+            throw new NotSupportedException(
+                $"The image has {_frames.Length} frames and a chain edits one; select a frame with KeepFrames first.");
+
+        var chain = new ImageChain();
+        steps(chain);
+
+        var buffer = chain.Run(_frames[0].Pixels.View, pool);
+        try
+        {
+            return ReplaceBuffer(buffer, Metadata, Info.Orientation);
+        }
+        catch
+        {
+            buffer.Dispose();
+            throw;
+        }
+    }
+
     /// <summary>Releases every frame's buffer. Afterwards the indexer and <see cref="WritablePixels"/> throw.</summary>
     public void Dispose()
     {

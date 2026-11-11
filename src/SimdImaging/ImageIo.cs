@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Sdcb.SimdCodecs;
 using Sdcb.SimdCodecs.Abstractions;
 using Sdcb.SimdCodecs.Jpeg;
+using Sdcb.SimdCodecs.Webp;
 using SimdImaging.Abstractions;
 
 namespace SimdImaging;
@@ -365,6 +366,19 @@ public sealed partial class Image
             encodeOptions = new JpegEncodeOptions { Quality = options.JpegQuality ?? 90 };
         else if (options.JpegQuality is not null)
             throw new ArgumentException("JpegQuality only applies to ImageFormat.Jpeg.", nameof(options));
+
+        // Sdcb.SimdCodecs 2.0 encodes WebP lossily unless told otherwise; this is the knob that says otherwise.
+        // Exact keeps the RGB under alpha 0, which the codec otherwise flattens: "lossless" should mean the bytes
+        // come back unchanged, hidden pixels included.
+        if (format == ImageFormat.Webp)
+        {
+            if (options.WebpLossless == true)
+                encodeOptions = new WebpLosslessEncodeOptions { Exact = true };
+        }
+        else if (options.WebpLossless is not null)
+        {
+            throw new ArgumentException("WebpLossless only applies to ImageFormat.Webp.", nameof(options));
+        }
 
         var frame = image[0];
         var view = frame.Pixels.View;

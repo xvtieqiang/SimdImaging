@@ -82,16 +82,20 @@ public static class PointOps
     {
         RequireFinite(amount, nameof(amount));
         var (lr, lg, lb) = bt709 ? (0.2126f, 0.7152f, 0.0722f) : (0.299f, 0.587f, 0.114f);
-        return Apply(source, pool, (row, width) =>
+
+        // out_c = luma + (c - luma) * amount is linear in (r, g, b), so it is a matrix:
+        //     out_c = Σ_j (amount·δ_cj + (1 - amount)·w_j) · c_j
+        // Pushing it through the matrix path instead of a per-pixel float loop is what Grayscale and Sepia already
+        // do; the old loop measured 0.67 ms against the oracle's 0.18 at 640x480. At amount = 0 the matrix is
+        // exactly Grayscale's, so the two stay byte-identical (Saturation_ZeroEqualsGrayscale).
+        var k = 1f - amount;
+        Span<float> matrix = stackalloc float[12]
         {
-            for (var i = 0; i < width * 4; i += 4)
-            {
-                var luma = row[i] * lr + row[i + 1] * lg + row[i + 2] * lb;
-                row[i] = luma + (row[i] - luma) * amount;
-                row[i + 1] = luma + (row[i + 1] - luma) * amount;
-                row[i + 2] = luma + (row[i + 2] - luma) * amount;
-            }
-        });
+            amount + k * lr, k * lg, k * lb, 0f,
+            k * lr, amount + k * lg, k * lb, 0f,
+            k * lr, k * lg, amount + k * lb, 0f,
+        };
+        return ColorMatrixCore(source, matrix, pool);
     }
 
     /// <summary>Replaces colour with its luma (BT.601 or BT.709); alpha is preserved.</summary>

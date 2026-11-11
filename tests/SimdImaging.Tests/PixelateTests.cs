@@ -9,10 +9,20 @@ namespace SimdImaging.Tests;
 /// accumulator still sees its samples in the same row-major order — this test is the only thing that makes that
 /// claim worth anything.
 ///
-/// <para>The reference below is the pre-2026-11-07 shape, verbatim: one integer division per pixel into
+/// <para>The reference below is the pre-2026-11-07 shape: one integer division per pixel into
 /// <c>sums[x / blockSize * 4 + c]</c>, then per block one reciprocal and a fill. Sizes include a block wider
 /// than the image and widths that are not multiples of the block, because those are the paths where the
 /// block-major walk has to clamp differently.</para>
+///
+/// <para><b>2026-11-12 change:</b> alpha is now averaged over the block's area. The old shape divided the alpha
+/// sum by the block HEIGHT, which lifts any translucent image to 255 — a 12×12 block of alpha 128 summed to
+/// 18432 and divided by 12 gave 1536, clamped to 255. Colour is unaffected (it is already weighted by the alpha
+/// sum). The Rgba8 path now does this in integers; the reference below keeps the float shape.</para>
+///
+/// <para>Byte equality with the old float path is not universal: when a block mean lands exactly on x.5 the float
+/// path rounds up while the integer path only matches it for an even area, so random byte data differs by 1 LSB on
+/// about 1% of pixels (measured 2448 / 262144 at 512×512, block 12). The gradient inputs below do not hit those
+/// ties, which is what lets this test compare bytes instead of bounds.</para>
 /// </summary>
 public class PixelateTests
 {
@@ -94,10 +104,9 @@ public class PixelateTests
                 var r = sums[source4] * inverse;
                 var g = sums[source4 + 1] * inverse;
                 var b = sums[source4 + 2] * inverse;
-                var a = alphaSum / count;
-
                 var start = column * blockSize;
                 var end = Math.Min(start + blockSize, width);
+                var a = alphaSum / (count * (end - start));
                 for (var y = top; y < bottom; y++)
                 for (var x = start; x < end; x++)
                 {
@@ -111,6 +120,27 @@ public class PixelateTests
         }
 
         return result;
+    }
+
+    [Fact]
+    public void Pixelate_KeepsATranslucentBlockTranslucent()
+    {
+        // 8x8 of alpha 128 in 4x4 blocks: the old height-only division produced 255 here.
+        using var image = SimdImaging.Image.Create(8, 8, WorkingFormat.Rgba8);
+        var pixels = image.WritablePixels;
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = 40;
+            pixels[i + 1] = 90;
+            pixels[i + 2] = 200;
+            pixels[i + 3] = 128;
+        }
+
+        using var pixelated = image.Pixelate(4);
+
+        var result = pixelated.WritablePixels;
+        for (var i = 0; i < result.Length; i += 4)
+            Assert.Equal(128, result[i + 3]);
     }
 
     private static byte ToByte(float value)

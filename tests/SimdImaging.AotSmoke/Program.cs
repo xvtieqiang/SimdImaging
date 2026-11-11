@@ -67,6 +67,14 @@ using (var rotated = image.Rotate90())
 using (var flipped = image.FlipHorizontal())
     Console.WriteLine($"flip sha={Hash(flipped.WritablePixels)}");
 
+// 2026-11-12: Pixelate moved to an integer path and Rotate180 gained an AVX2 body. Both are hashed here or
+// "AOT output == JIT output" would stop covering the two operators that changed most.
+using (var pixelated = image.Pixelate(5))
+    Console.WriteLine($"pixelate sha={Hash(pixelated.WritablePixels)}");
+
+using (var flipped180 = image.Rotate180())
+    Console.WriteLine($"rotate180 sha={Hash(flipped180.WritablePixels)}");
+
 using (var padded = image.Pad(3, new RgbaColor(1, 2, 3, 255)))
     Console.WriteLine($"pad sha={Hash(padded.WritablePixels)}");
 

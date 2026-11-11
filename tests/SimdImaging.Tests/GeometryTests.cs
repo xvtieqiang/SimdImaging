@@ -61,6 +61,37 @@ public class GeometryTests
         rotated.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
 
+    [Theory]
+    [InlineData(37, 23)]     // width not a multiple of 8: the scalar tail
+    [InlineData(64, 16)]     // exactly on the vector boundary
+    public void Rotate180_MatchesTheScalarReference(int width, int height)
+    {
+        using var source = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
+        using var rotated = source.Rotate180();
+
+        var from = source.WritablePixels;
+        var to = rotated.WritablePixels;
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var sourceOffset = ((height - 1 - y) * width + (width - 1 - x)) * 4;
+            var targetOffset = (y * width + x) * 4;
+            for (var c = 0; c < 4; c++)
+                to[targetOffset + c].ShouldBe(from[sourceOffset + c]);
+        }
+
+        using var twice = rotated.Rotate180();
+        twice.WritablePixels.ToArray().ShouldBe(from.ToArray());
+    }
+
+    [Fact]
+    public void Rotate180_WorksOnSixteenBit()
+    {
+        using var source = TestImages.Gradient(33, 17, WorkingFormat.Rgba16);
+        using var twice = source.Rotate180().Rotate180();
+        twice.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
+    }
+
     [Fact]
     public void Rotate90_ClockwiseMovesTopLeftToTopRight()
     {

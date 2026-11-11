@@ -80,6 +80,7 @@
   SimdImaging.Abstractions.SaveOptions.JpegQuality : System.Int32? { get; set; }
   SimdImaging.Abstractions.SaveOptions.Metadata : Sdcb.SimdCodecs.Abstractions.ImageMetadata { get; set; }
   SimdImaging.Abstractions.SaveOptions.ToString() -> System.String
+  SimdImaging.Abstractions.SaveOptions.WebpLossless : System.Boolean? { get; set; }
   SimdImaging.Abstractions.SaveOptions.op_Equality(SimdImaging.Abstractions.SaveOptions? left, SimdImaging.Abstractions.SaveOptions? right) -> System.Boolean
   SimdImaging.Abstractions.SaveOptions.op_Inequality(SimdImaging.Abstractions.SaveOptions? left, SimdImaging.Abstractions.SaveOptions? right) -> System.Boolean
   SimdImaging.Abstractions.WorkingBuffer.Clone(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
@@ -128,6 +129,7 @@
   SimdImaging.Image.Clear() -> System.Void
   SimdImaging.Image.ClipPath(SimdImaging.Processing.PixelPath path, SimdImaging.Processing.PathFillRule rule) -> System.Void
   SimdImaging.Image.Clone(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
+  SimdImaging.Image.Clone(System.Action<SimdImaging.ImageChain> steps, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Close3x3(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.ColorBalance(SimdImaging.Processing.ColorBalanceShifts shadows, SimdImaging.Processing.ColorBalanceShifts midtones, SimdImaging.Processing.ColorBalanceShifts highlights, System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.ColorBlindness(SimdImaging.Processing.ColorVisionDeficiency kind, System.Single severity, System.Boolean correct, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
@@ -257,6 +259,21 @@
   SimdImaging.Image.Width : System.Int32 { get; }
   SimdImaging.Image.WithMetadata(Sdcb.SimdCodecs.Abstractions.ImageMetadata metadata, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.WritablePixels : System.Span<System.Byte> { get; }
+  SimdImaging.ImageChain.#ctor()
+  SimdImaging.ImageChain.Brightness(System.Single amount) -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Contrast(System.Single amount) -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Crop(Sdcb.SimdCodecs.Abstractions.PixelRect region) -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.FlipHorizontal() -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.FlipVertical() -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Gamma(System.Single gamma) -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.GaussianBlur(System.Single sigma) -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Grayscale(System.Boolean bt709) -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Invert() -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Resize(System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler) -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Rotate180() -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Rotate90(System.Boolean clockwise) -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Saturation(System.Single amount, System.Boolean bt709) -> SimdImaging.ImageChain
+  SimdImaging.ImageChain.Sharpen(System.Single amount, System.Single sigma) -> SimdImaging.ImageChain
   SimdImaging.ImageFrame.Dispose() -> System.Void
   SimdImaging.ImageFrame.Duration : System.TimeSpan? { get; }
   SimdImaging.ImageFrame.Pixels : SimdImaging.Abstractions.WorkingBuffer { get; }
@@ -691,6 +708,7 @@ class SimdImaging.Abstractions.SaveOptions
 class SimdImaging.Abstractions.WorkingBuffer
 class SimdImaging.Abstractions.WorkingFormatExtensions
 class SimdImaging.Image
+class SimdImaging.ImageChain
 class SimdImaging.ImageFrame
 class SimdImaging.Processing.AlphaOps
 class SimdImaging.Processing.AnalysisOps

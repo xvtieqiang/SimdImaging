@@ -286,6 +286,70 @@ public class ImageIoTests
     }
 
     [Fact]
+    public void Encode_Webp_DefaultsToLossyAndLosslessRoundTrips()
+    {
+        using var image = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
+        var expected = image.WritablePixels.ToArray();
+
+        // Sdcb.SimdCodecs 2.0's default: lossy, and it shows on a gradient.
+        using var lossy = Image.Load(Image.Encode(image, ImageFormat.Webp));
+        lossy.WritablePixels.ToArray().ShouldNotBe(expected);
+
+        using var lossless = Image.Load(Image.Encode(image, ImageFormat.Webp,
+            new SaveOptions { WebpLossless = true }));
+        lossless.WritablePixels.ToArray().ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Encode_WebpLosslessOnlyAppliesToWebp()
+    {
+        using var image = TestImages.Gradient(4, 4, WorkingFormat.Rgba8);
+
+        // Even an explicit false is an error elsewhere: a field that is silently ignored is worse than a throw.
+        Should.Throw<ArgumentException>(() =>
+            Image.Encode(image, ImageFormat.Png, new SaveOptions { WebpLossless = false }));
+    }
+
+    [Fact]
+    public void Clone_Chain_MatchesStepByStep()
+    {
+        using var source = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
+
+        using var stepwise1 = source.Saturation(1.2f);
+        using var stepwise2 = stepwise1.Contrast(1.1f);
+        using var stepwise = stepwise2.GaussianBlur(1.5f);
+
+        using var chained = source.Clone(x => x.Saturation(1.2f).Contrast(1.1f).GaussianBlur(1.5f));
+
+        chained.Width.ShouldBe(stepwise.Width);
+        chained.WritablePixels.ToArray().ShouldBe(stepwise.WritablePixels.ToArray());
+        // The chain edits a copy: the source must be untouched.
+        source.WritablePixels.ToArray().ShouldBe(TestImages.Gradient(64, 48, WorkingFormat.Rgba8).WritablePixels.ToArray());
+    }
+
+    [Fact]
+    public void Clone_EmptyChain_IsAPlainCopy()
+    {
+        using var source = TestImages.Gradient(16, 9, WorkingFormat.Rgba8);
+
+        using var copy = source.Clone(_ => { });
+
+        copy.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
+        copy.Info.Orientation.ShouldBe(source.Info.Orientation);
+    }
+
+    [Fact]
+    public void Clone_Chain_ResizesInsideTheChain()
+    {
+        using var source = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
+
+        using var chained = source.Clone(x => x.Resize(32, 24).Saturation(1.2f));
+
+        chained.Width.ShouldBe(32);
+        chained.Height.ShouldBe(24);
+    }
+
+    [Fact]
     public void LoadOptions_ScaleDenominatorMustBeAPowerOfTwo()
     {
         Should.Throw<ArgumentOutOfRangeException>(() => new LoadOptions { ScaleDenominator = 3 });

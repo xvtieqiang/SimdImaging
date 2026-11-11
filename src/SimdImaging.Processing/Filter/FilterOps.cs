@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -108,7 +109,13 @@ public static class FilterOps
         var height = source.Height;
         var stride = width * 4;
 
-        var bandRows = BandRowsOverride > 0 ? BandRowsOverride : Math.Max(128, radius * 8);
+        // Band height decides the worker count: 128 rows gave only 4 bands on a 480-row image, so a 16-core
+        // machine ran box-blur on 3.8 cores while the oracle used 8.9 (cores 640x480). Scale the band with the
+        // image instead of pinning it, floor 32 rows (a band must still amortise the 2xradius halo), ceiling 128.
+        // Bands write disjoint output rows and read shared source rows, so this cannot change a byte.
+        var bandRows = BandRowsOverride > 0
+            ? BandRowsOverride
+            : Math.Clamp(height / Math.Max(1, RowParallel.Degree * 2), 32, Math.Max(128, radius * 8));
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
         var bandCount = (height + bandRows - 1) / bandRows;
@@ -1233,6 +1240,9 @@ public static class FilterOps
         var stride = width * 4;
         var columns = (width + blockSize - 1) / blockSize;
 
+        if (source.Format == WorkingFormat.Rgba8)
+            return PixelateRgba8(source, blockSize, pool);
+
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
 
@@ -1245,16 +1255,20 @@ public static class FilterOps
         var blockRows = (height + blockSize - 1) / blockSize;
         RowParallel.ForBands(blockRows, (firstBand, lastBand) =>
         {
-            var sums = new float[columns * 4];
-            var row = new float[stride];
-            var output = new float[stride];
-
+            // Rented, not allocated: one set per worker per call, and at 1920 px that was ~1 MiB of float
+            // scratch per call (measured: 1007 KiB/op against the oracle's 35). The contents are cleared below
+            // over the range actually used, so a larger rented buffer is harmless.
+            var sums = ArrayPool<float>.Shared.Rent(columns * 4);
+            var row = ArrayPool<float>.Shared.Rent(stride);
+            var output = ArrayPool<float>.Shared.Rent(stride);
+            try
+            {
             for (var band = firstBand; band < lastBand; band++)
             {
                 var top = band * blockSize;
                 var bottom = Math.Min(top + blockSize, height);
                 var count = bottom - top;
-                Array.Clear(sums);
+                Array.Clear(sums, 0, columns * 4);
 
                 for (var y = top; y < bottom; y++)
                 {
@@ -1275,7 +1289,7 @@ public static class FilterOps
                     }
                 }
 
-                Array.Clear(output);
+                Array.Clear(output, 0, stride);
                 for (var column = 0; column < columns; column++)
                 {
                     var source4 = column * 4;
@@ -1300,6 +1314,108 @@ public static class FilterOps
 
                 for (var y = top; y < bottom; y++)
                     Pixels.WriteRowRaw(output, width, source.Format, view.Row(y));
+            }
+            }
+            finally
+            {
+                ArrayPool<float>.Shared.Return(sums);
+                ArrayPool<float>.Shared.Return(row);
+                ArrayPool<float>.Shared.Return(output);
+            }
+        });
+
+        return destination;
+    }
+
+    /// <summary>
+    /// Rgba8 fast path: integers all the way. The generic path converts every row to float, un-premultiplies,
+    /// averages, then converts back — two full-row float passes per block row plus a divide per pixel. A block
+    /// only needs a sum, so this accumulates <c>c × a</c> in <c>long</c>, divides twice per block, and writes the
+    /// block back as one 32-bit value per pixel. No float, no per-pixel division.
+    /// </summary>
+    /// <remarks>
+    /// Alpha is averaged over the block's <em>area</em>. The generic path divides by the block height, which is
+    /// only correct when every sample is 0 or 255; a uniform alpha of 128 has to come back as 128.
+    /// </remarks>
+    private static WorkingBuffer PixelateRgba8(PixelView source, int blockSize, IPixelPool? pool)
+    {
+        var width = source.Width;
+        var height = source.Height;
+        var columns = (width + blockSize - 1) / blockSize;
+        var blockRows = (height + blockSize - 1) / blockSize;
+
+        var destination = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba8, pool);
+        var view = destination.View;
+
+        RowParallel.ForBands(blockRows, (firstBand, lastBand) =>
+        {
+            var sums = ArrayPool<long>.Shared.Rent(columns * 4);
+            try
+            {
+                for (var band = firstBand; band < lastBand; band++)
+                {
+                    var top = band * blockSize;
+                    var bottom = Math.Min(top + blockSize, height);
+                    var rows = bottom - top;
+                    Array.Clear(sums, 0, columns * 4);
+
+                    for (var y = top; y < bottom; y++)
+                    {
+                        var row = source.Row(y);
+                        var x = 0;
+                        for (var column = 0; column < columns; column++)
+                        {
+                            var end = Math.Min(x + blockSize, width);
+                            var at = column * 4;
+                            for (; x < end; x++)
+                            {
+                                var o = x * 4;
+                                var a = row[o + 3];
+                                sums[at] += row[o] * a;
+                                sums[at + 1] += row[o + 1] * a;
+                                sums[at + 2] += row[o + 2] * a;
+                                sums[at + 3] += a;
+                            }
+                        }
+                    }
+
+                    for (var column = 0; column < columns; column++)
+                    {
+                        var at = column * 4;
+                        var alphaSum = sums[at + 3];
+                        var start = column * blockSize;
+                        var end = Math.Min(start + blockSize, width);
+                        var area = (long)(end - start) * rows;
+
+                        uint r = 0, g = 0, b = 0;
+                        if (alphaSum > 0)
+                        {
+                            // Round-half-up. It cannot be bit-identical to the float path this replaced: when a
+                            // block mean lands exactly on x.5 the float path's own error decides the direction, so
+                            // about 1% of pixels come out one LSB apart (measured, see known-gaps). Using
+                            // (2·sum + d) / (2·d) instead was tried and changed nothing — the difference is the
+                            // float error, not odd/even parity.
+                            var half = alphaSum / 2;
+                            r = (uint)((sums[at] + half) / alphaSum);
+                            g = (uint)((sums[at + 1] + half) / alphaSum);
+                            b = (uint)((sums[at + 2] + half) / alphaSum);
+                        }
+
+                        var a8 = (uint)((alphaSum + (area / 2)) / area);
+                        var packed = r | (g << 8) | (b << 16) | (a8 << 24);
+
+                        for (var y = top; y < bottom; y++)
+                        {
+                            var row = view.Row(y);
+                            for (var x = start; x < end; x++)
+                                Unsafe.WriteUnaligned(ref row[x * 4], packed);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                ArrayPool<long>.Shared.Return(sums);
             }
         });
 
