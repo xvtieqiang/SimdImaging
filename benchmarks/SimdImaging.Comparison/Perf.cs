@@ -19,11 +19,13 @@ internal static class Perf
         report.Heading(2, "C 组 · 运行时与工程");
         report.Heading(3, "C2/C3 端到端同进程 A/B");
         report.Line($"> 输入：{width}×{height} `Rgba8`（{width * height / 1_000_000.0:F2} MPix），自生成确定性图案。");
-        report.Line("> 口径：两边都**从共享源产生一张新图**（对手用 `Clone(ctx => ...)`，我方用算子返回新图），含输出缓冲分配；对手 `MaxDegreeOfParallelism=1`，我方单线程。");
+        report.Line("> 口径：两边都**从共享源产生一张新图**（对手用 `Clone(ctx => ...)`，我方用算子返回新图），含输出缓冲分配；两侧都按各自默认并行度执行，线程数见下一行。");
         report.Line("> **不做计时外预热**。每个场景先单独计时**第一次调用**（cold，含 JIT 分层编译 / 动态 PGO / 大对象页提交），再按 SimdCodecs 规矩热身 ≥300 ms、7 轮交错采样取稳态中位数（steady）。");
         report.Line("> 两笔账**各算各的、不互相抵消**：cold 是各自首次调用的完整成本（含各自预热），steady 是算子内核的真实吞吐。**「超越」判定一律以 steady 为准** —— 对手初始化慢不等于我方算子快。");
         report.Line($"> 对手 `MaxDegreeOfParallelism = {Fixture.OracleConfiguration.MaxDegreeOfParallelism}`"
-                  + "（1 = SimdCodecs 单线程口径；>1 = 放开对手真实能力）。我方算子单线程。");
+                  + "（`SIMDIMAGING_COMPARE_PARALLEL=0` 才锁 1，其余为对手真实并行能力）。"
+                  + "我方走 `RowParallel` 默认行带并行（`Degree = Environment.ProcessorCount`），**未强制单线程**；"
+                  + "只有 `cores` 模式的「同核数比」才把 `DegreeOverride = 1`。");
         report.Line("> 加速比 = 对手 ms ÷ 我方 ms，>1 表示我方更快。分配为 `GC.GetTotalAllocatedBytes` 单次操作净值（**进程级**，含线程池线程；两边交替采样，背景噪声对称）。");
         report.Line();
 

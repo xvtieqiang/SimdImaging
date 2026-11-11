@@ -20,8 +20,8 @@ internal sealed record ParamSpec(string Name, string Label, double Min, double M
 /// <para><c>Theirs</c> is null when the oracle has no fair counterpart. That is a real outcome, not a gap to
 /// paper over: showing a ratio against a differently-defined "same name" API would be worse than showing
 /// nothing. <c>OracleNote</c> says why.</para>
-/// <para><c>Ours</c> and <c>ComposeRun</c> are mutually exclusive: <c>NeedsOverlay</c> entries fill
-/// <c>ComposeRun</c> and leave <c>Ours</c> null, single-input entries the other way round. The run endpoint
+/// <para><c>Ours</c> is the whole story for every entry: the two-input families (blend modes, Porter-Duff)
+/// were pulled from this catalogue on 2026-11-12 — see the README. The run endpoint
 /// branches on the flag, so neither is ever invoked against null.</para>
 /// </summary>
 internal sealed record OpSpec(
@@ -32,57 +32,10 @@ internal sealed record OpSpec(
     ParamSpec[] Params,
     Func<OurImage, IReadOnlyDictionary<string, double>, OurImage>? Ours,
     Func<TheirImage, IReadOnlyDictionary<string, double>, TheirImage>? Theirs,
-    string? OracleNote = null,
-    // True when the operator needs a second image; ComposeRun is then the body.
-    bool NeedsOverlay = false,
-    // Receives the backdrop, an overlay already rescaled to fit, and the overlay's top-left corner.
-    Func<OurImage, OurImage, int, int, OurImage>? ComposeRun = null,
-    // Synthetic overlay this mode is legible against ("glow" / "mark" / "alpha"), generated on demand by
-    // /api/sample. Defaulting to the current image is worse than useless: min(x, x) = x, so Darken,
-    // Multiply and friends degenerate to the original and the bench appears to do nothing.
-    string? DemoOverlay = null);
+    string? OracleNote = null);
 
 internal static class Ops
 {
-    /// <summary>The 18 W3C blend modes. Notes lead with the job the mode does.</summary>
-    private static readonly (BlendMode Mode, string Title, string Note, string Demo)[] BlendDefs =
-    [
-        (BlendMode.Normal, "正常", "直接盖上去——所有模式的地基", "mark"),
-        (BlendMode.Multiply, "正片叠底", "压印水印/文字/双曝光：白色不影响底，越叠越暗", "mark"),
-        (BlendMode.Screen, "滤色", "加光斑/漏光/辉光：黑色不影响底，越叠越亮", "glow"),
-        (BlendMode.Overlay, "叠加", "海报质感：暗区正片叠底、亮区滤色，保中间调", "glow"),
-        (BlendMode.Darken, "变暗", "逐通道取小", "mark"),
-        (BlendMode.Lighten, "变亮", "逐通道取大", "glow"),
-        (BlendMode.ColorDodge, "颜色减淡", "按源的亮度提亮底图——霓虹发光的一步", "glow"),
-        (BlendMode.ColorBurn, "颜色加深", "按源的亮度压暗底图", "mark"),
-        (BlendMode.HardLight, "强光", "给底图打硬光", "glow"),
-        (BlendMode.SoftLight, "柔光", "给底图打软光，pegtop 曲线", "glow"),
-        (BlendMode.Difference, "差值", "|b−s|；两图对齐校验、故障风常用", "mark"),
-        (BlendMode.Exclusion, "排除", "低对比版的差值", "glow"),
-        (BlendMode.Add, "线性减淡（加）", "b+s 钳制，加法发光", "glow"),
-        (BlendMode.Subtract, "减法", "b−s 钳制", "mark"),
-        (BlendMode.Hue, "色相", "取源的色相 + 底的饱和与明暗", "alpha"),
-        (BlendMode.Saturation, "饱和度", "取源的饱和 + 底的色相与明暗", "alpha"),
-        (BlendMode.Color, "颜色", "给黑白照片上色：取源的颜色 + 底的明暗", "alpha"),
-        (BlendMode.Luminosity, "明度", "取源的明暗 + 底的颜色", "alpha"),
-    ];
-
-    /// <summary>The twelve Porter-Duff operators. Notes lead with the job.</summary>
-    private static readonly (PorterDuff Mode, string Title, string Note, string Demo)[] PorterDefs =
-    [
-        (PorterDuff.Clear, "清除", "重叠区清成透明", "alpha"),
-        (PorterDuff.Source, "仅源", "丢弃底图", "alpha"),
-        (PorterDuff.Destination, "仅底", "丢弃叠加图", "alpha"),
-        (PorterDuff.SourceOver, "源在底上", "常规叠加——画任何东西的默认", "alpha"),
-        (PorterDuff.DestinationOver, "底在源上", "叠加图垫到底图下面", "alpha"),
-        (PorterDuff.SourceIn, "源入", "叠加图被裁到底图的不透明区", "alpha"),
-        (PorterDuff.DestinationIn, "底入", "蒙版：底图被裁到叠加图的形状", "alpha"),
-        (PorterDuff.SourceOut, "源出", "叠加图只画在底图透明处", "alpha"),
-        (PorterDuff.DestinationOut, "底出", "橡皮擦：叠加图的形状擦掉底图", "alpha"),
-        (PorterDuff.SourceAtop, "源置顶", "叠加图只画在底图已有内容上——水印不溢出", "alpha"),
-        (PorterDuff.DestinationAtop, "底置顶", "底图只画在叠加图内容上", "alpha"),
-        (PorterDuff.Xor, "异或", "重叠处双双变透明——做镂空", "alpha"),
-    ];
 
     public static readonly OpSpec[] Catalog =
     [
@@ -348,22 +301,6 @@ internal static class Ops
             [new("bits", "位深", 1, 7, 1, 3)],
             (i, p) => i.Dither((int)Math.Round(p["bits"])), null, "对手 Dither 参数含义不同"),
 
-        // ---------- 混合（第二张图） ----------
-        // Same catalog, same run endpoint, same table — the only difference is one extra input. The notes
-        // lead with what each mode is FOR, not its formula: a mode whose note is only its equation explains
-        // nothing about when to reach for it.
-        ..BlendDefs.Select(d => new OpSpec(
-            $"blend-{d.Mode}", "混合", d.Title, d.Note, [],
-            Ours: null, Theirs: null,
-            NeedsOverlay: true,
-            ComposeRun: (bg, ov, x, y) => bg.Blend(ov, x, y, d.Mode), DemoOverlay: d.Demo)),
-
-        // ---------- Porter-Duff（第二张图） ----------
-        ..PorterDefs.Select(d => new OpSpec(
-            $"pd-{d.Mode}", "Porter-Duff", d.Title, d.Note, [],
-            Ours: null, Theirs: null,
-            NeedsOverlay: true,
-            ComposeRun: (bg, ov, x, y) => bg.Composite(ov, x, y, d.Mode), DemoOverlay: d.Demo)),
     ];
 
     public static Dictionary<string, double> Resolve(OpSpec spec, Dictionary<string, double>? given)

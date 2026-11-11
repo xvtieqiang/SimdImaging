@@ -45,8 +45,9 @@ internal static class Paths
 
 internal static class Fixture
 {
-    /// <summary>Single-thread the oracle so both sides pay the same parallelism model. Same rule as
-    /// SimdCodecs' Contestants.CreateImageSharpOptions().</summary>
+    /// <summary>Both sides run at their REAL default parallelism. Pinning the oracle to one thread flattered
+    /// our own numbers; `SIMDIMAGING_COMPARE_PARALLEL=0` only reproduces that historical single-thread A/B.
+    /// Our side is not single-threaded either: `RowParallel.Degree` defaults to ProcessorCount.</summary>
     public static readonly Configuration OracleConfiguration = CreateConfiguration();
 
     private static Configuration CreateConfiguration()

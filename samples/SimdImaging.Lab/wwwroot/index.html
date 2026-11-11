@@ -115,6 +115,7 @@
   </div>
 
   <div class="tabs" id="tabs"></div>
+  <div class="meta" id="groupnote"></div>
   <div class="ops" id="ops"></div>
 
   <div class="grid">
@@ -168,7 +169,7 @@ const SAMPLES_VERSION = 8;   // bump when /samples/* is overwritten
 const state = {
   mode: 'op', ops: [], group: null, op: null, image: null, params: {}, result: null,
   chains: [], chainGroup: null, chain: null, chainParams: {},
-  openImages: [], overlayId: null, overlayScale: 0.6, demoFor: null, batch: [],
+  openImages: [], batch: [],
 };
 const $ = s => document.querySelector(s);
 const f = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d);
@@ -179,7 +180,7 @@ async function boot() {
   // anything assigned below runs inside boot() so a single typo cannot blank the page again.
   $('#status').textContent =
     `就绪 · SimdImaging ${info.version} · .NET ${info.runtime} · SIMD ${info.simd} · ${info.cores} 核 · ` +
-    `${info.opCount} 个算子 · 对照 ImageSharp ${info.oracle}`;
+    `${info.opCount} 个算子 · 对照 ImageSharp ${info.oracle}（默认 ${info.oracleThreads} 线程）；我方算子单线程`;
   state.ops = await (await fetch('/api/ops')).json();
   state.chains = await (await fetch('/api/chains')).json();
   state.group = state.ops[0].group;
@@ -227,7 +228,17 @@ function renderGroups() {
     };
     tabs.appendChild(b);
   }
+  // One line per group: a tab called 混合 says nothing about what separates it from 滤波, and the difference
+  // is the whole point of having both.
+  $('#groupnote').textContent = state.mode === 'chain' ? '' : (GROUP_NOTES[current] || '');
 }
+
+const GROUP_NOTES = {
+  '点算子': '逐像素：只看这个像素自己的值，和邻居无关（亮度、对比度、阈值、色阶）。',
+  '滤波': '看邻域：每个输出像素由周围一圈算出来（模糊、锐化、边缘、形态学）。',
+  '几何': '改坐标不改颜色：裁剪、缩放、旋转、透视；重采样时才插值。',
+  '色调': '换色彩空间再算：白平衡、色彩矩阵、ICC、HDR 传递函数。'
+};
 
 function renderOps() {
   const box = $('#ops'); box.innerHTML = '';
@@ -269,39 +280,9 @@ function pick(op) {
   state.op = op; state.params = {};
   $('#opTitle').textContent = `${op.group} · ${op.title}`;
   $('#opNote').textContent = op.note
-    + (op.needsOverlay ? '　——　叠加图自动缩放居中。'
-        + (op.group === 'Porter-Duff' ? '这些算子的语义要有透明区域才看得出来，叠加图建议选「合成 · 带透明」。' : '')
-      : (op.hasOracle ? '' : `　——　${op.oracleNote || 'ImageSharp 无对等算子，只展示效果'}`));
+    + (op.hasOracle ? '' : `　——　${op.oracleNote || 'ImageSharp 无对等算子，只展示效果'}`);
 
   renderParams(op.params, state.params);
-
-  // Two-input modes get their overlay picker here, in the same panel as every other slider — the only
-  // thing that separates them from a single-input operator is this one extra control.
-  if (op.needsOverlay) {
-    const box = $('#params');
-    const row = document.createElement('div');
-    row.className = 'row';
-    row.innerHTML = '<label>叠加图</label><select class="sel" id="overlaySel"></select>';
-    const sel = row.querySelector('select');
-    sel.onchange = () => { state.overlayId = sel.value; state.demoFor = null; };
-    box.appendChild(row);
-    fillOverlaySelect(op);
-
-    const scaleRow = document.createElement('div');
-    scaleRow.className = 'row';
-    scaleRow.innerHTML = `<label>叠加缩放</label>
-      <input type="range" min="0.2" max="1" step="0.05" value="${state.overlayScale}">
-      <span class="val">${Math.round(state.overlayScale * 100)}%</span>`;
-    const input = scaleRow.querySelector('input'), val = scaleRow.querySelector('.val');
-    input.oninput = () => { state.overlayScale = +input.value; val.textContent = Math.round(input.value * 100) + '%'; };
-    box.appendChild(scaleRow);
-
-    // A mode is only legible against the right overlay. Defaulting to the current photo made Darken,
-    // Multiply and friends degenerate to the original (min(x,x)=x), so the bench looked like it did
-    // nothing. Generate the synthetic layer this mode is built to be shown with, unless the user has
-    // deliberately picked another image.
-    if (op.demoOverlay && state.demoFor !== op.demoOverlay) ensureDemoOverlay(op);
-  }
 
   $('#result').innerHTML = '';
   syncRun();
@@ -348,37 +329,6 @@ async function runCompare() {
   }
 }
 
-/// Fills the overlay dropdown: synthetic demo layers first, opened images after.
-function fillOverlaySelect(op) {
-  const sel = $('#overlaySel');
-  if (!sel) return;
-  const current = state.overlayId || state.image?.id;
-  const option = im => `<option value="${im.id}"${im.id === current ? ' selected' : ''}>`
-    + `${im.demo ? '演示层 · ' : ''}${escapeHtml(im.name)}</option>`;
-  const demo = state.openImages.filter(im => im.demo);
-  const rest = state.openImages.filter(im => !im.demo);
-  sel.innerHTML = demo.map(option).join('') + rest.map(option).join('');
-}
-
-/// Generates the overlay this mode is meant to be shown against, and selects it.
-async function ensureDemoOverlay(op) {
-  try {
-    // 640x480 is enough to read a blend mode and keeps generation at a few milliseconds.
-    const r = await fetch('/api/sample', { method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ width: 640, height: 480, kind: op.demoOverlay }) });
-    if (!r.ok) return;
-    const j = await r.json();
-    j.demo = true;
-    state.openImages.push(j);
-    state.overlayId = j.id;
-    state.demoFor = op.demoOverlay;
-    // The panel may have moved on to another operator while this was in flight.
-    if (state.op && state.op.id === op.id) fillOverlaySelect(op);
-  } catch (e) { console.warn('demo overlay failed', e); }
-}
-
-/// Shared by both views: same slider markup, different backing object.
 function renderParams(params, store) {
   const box = $('#params'); box.innerHTML = '';
   for (const p of params || []) {
@@ -393,6 +343,7 @@ function renderParams(params, store) {
     box.appendChild(row);
   }
 }
+
 
 function syncRun() {
   $('#run').disabled = !state.image || (state.mode === 'chain' ? !state.chain : !state.op);
@@ -486,10 +437,7 @@ async function open(file) {
 
 function adopt(j) {
   state.image = j; state.result = null;
-  // Every opened image stays eligible as the compose view's overlay, current one included: blending an
-  // image with itself is a legitimate first check (Difference should cancel everything out).
   if (!state.openImages.some(im => im.id === j.id)) state.openImages.push(j);
-  if (!state.overlayId) state.overlayId = j.id;
   $('#stage').innerHTML = `<div class="pair">
       <figure><figcaption>原图</figcaption><img src="/api/source/${j.id}" alt=""></figure>
     </div>`;
@@ -656,8 +604,7 @@ on('#run', 'click', async () => {
       body: JSON.stringify(chainMode
         ? { id: state.image.id, chain: state.chain.id, params: state.chainParams }
         : { id: state.image.id, op: state.op.id, params: state.params,
-            overlayId: state.op.needsOverlay ? (state.overlayId || state.image.id) : null,
-            scale: state.op.needsOverlay ? state.overlayScale : null })
+          })
     });
     const j = await r.json();
     if (!r.ok || j.error) { $('#result').innerHTML = `<div class="err">${j.error || '失败'}</div>`; return; }

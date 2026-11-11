@@ -34,24 +34,42 @@ bash tests/SimdImaging.AotSmoke/run.sh
 
 ## 用法
 
+三行就够：
+
 ```csharp
 using SimdImaging;
-using SimdImaging.Abstractions;
-using Sdcb.SimdCodecs.Abstractions;
 
-using var image = Image.Load("photo.jpg");                 // 位深跟随源：8 → Rgba8，16 → Rgba16
-byte[] png = Image.Encode(image, ImageFormat.Png);
-Image.Save(image, "out.png");
-
-// 缩放解码：输出恒为 ⌈w/d⌉；codec 原生没有这一档时，先解到它的原生档再 box 过滤（精确，多一趟）
-using var small = Image.Load(bytes, new LoadOptions { ScaleDenominator = 4 });
-
-// 只求快：直接取 codec 原生能给的那一档，跳过过滤（1/16 的 JPEG 拿到 1/8，图更大但少一趟）
-using var quick = Image.Load(bytes, new LoadOptions { ScaleDenominator = 16, PreferNativeScale = true });
-
-// EXIF 方向：默认只报告标签、不动像素；开了由解码器直接出正片（5..8 交换宽高，标签复位）
-using var upright = Image.Load(bytes, new LoadOptions { ApplyOrientation = true });
+using var photo = Image.Load("photo.jpg");       // 位深跟随源：8 → Rgba8，16 → Rgba16，float → Rgba32F
+using var small = photo.Resize(800, 600);        // 默认 bicubic；返回新图，原图不动
+Image.Save(small, "out.png");                    // 格式由扩展名决定，不需要枚举
 ```
+
+`Resize` / `Crop` / `Rotate90` / `GaussianBlur` / `Saturation` … 都是 `Image` 上的实例方法，**返回新图**，
+原图不动。一串编辑用 `Clone(x => ...)`：操作先记录、最后一次性执行，中间缓冲读完立刻还池，只有结果要 `using`。
+
+```csharp
+using var edited = photo.Clone(x => x.Crop(rect).Resize(800, 600).Saturation(1.2f).GaussianBlur(1.5f));
+```
+
+1080p 实测（三个点算子）：链式 **8.8 ms / 14 KiB**，逐步写法 9.4 ms / 8.2 MB —— 链式不仅不用逐个 `using`，
+分配还少两个数量级。
+
+需要控制解码/编码时，才用两个选项类型（`SimdImaging.Abstractions`）：
+
+| 我要 | 写 |
+|---|---|
+| 1/4 缩放解码（精确尺寸） | `Load(p, new LoadOptions { ScaleDenominator = 4 })` |
+| 只要快，尺寸可以大一点 | `Load(p, new LoadOptions { ScaleDenominator = 16, PreferNativeScale = true })` |
+| 按 EXIF 转正 | `Load(p, new LoadOptions { ApplyOrientation = true })` |
+| 只解一块（地图/大图切片） | `Load(p, new LoadOptions { Region = new PixelRect(x, y, w, h) })` |
+| 限内存（防解压炸弹） | `Load(p, new LoadOptions { MaxPixels = 40_000_000 })` |
+| 从流读（HTTP 响应体） | `await Image.LoadAsync(stream)` |
+| JPEG 质量 | `Save(img, p, new SaveOptions { JpegQuality = 85 })` |
+| WebP 无损 | `Save(img, p, new SaveOptions { WebpLossless = true })` |
+| 要字节不要文件 | `byte[] png = Image.Encode(img, ImageFormat.Png)`（这个枚举来自 `Sdcb.SimdCodecs.Abstractions`） |
+
+失败分两种，别混：输入不是图片 → `InvalidDataException`（或 `TryLoad` 返回 false）；调用方参数错了 →
+`ArgumentException` / `NotSupportedException`。没有静默降级。
 
 ## 与 ImageSharp 4.1.x 的定位差异
 

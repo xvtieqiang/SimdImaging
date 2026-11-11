@@ -152,6 +152,8 @@
 | IO-8 Thumbnail | 没有 DCT 域下推（JPEG 1/8 缩放），缩略图来自解码器内置预览或整图缩放 |
 | IO-1 `PreferNativeScale` | 输出**可能大于**请求的 `⌈w/d⌉`：它取 codec 原生档，跳过 `BoxDownscaler` 那趟整图过滤。512² JPEG 要 1/16（32×32）会拿到 1/8（64×64）。这是选项的定义不是缺陷——要精确尺寸就别开；调 `.Width` 拿实际结果。与 `Region` 互斥（同开抛 `ArgumentException`），因为两者对"档位"的假设冲突 |
 | HEIF / HEIC | **未接入**：`Sdcb.SimdCodecs.Heif` 是独立包，且要求启动时 `ImageCodecs.Register(HeifImageDecoder.Registration)`。本库既不加包也不注册，`Image.Load` 拿到 HEIC 会抛 `InvalidDataException("not a recognised image format")`。要用就自己引用那个包并注册——同时 HEVC 专利义务落在调用方 |
+| IO-2 JPEG 丢 XMP | 本库把 `SaveOptions.Metadata.Xmp` 交给编码器，但 JPEG 编码器只读 `JpegEncodeOptions.Xmp`（结构化 packet），所以**JPEG 往返会丢 XMP**，Exif / ICC 正常。实测：WebP 与 PNG 保住 Exif+Xmp，JPEG 只保住 Exif。不抛异常是刻意的——转封装一张带 XMP 的 JPEG 不该失败 |
+| IO-2 WebP 默认有损 | 上游 2.0 把「不传编码选项」的 WebP 默认改成了**有损**。实测 64×64 合成渐变往返改掉 **72.8%** 采样。本库跟上游默认走，但给了显式开关 `SaveOptions.WebpLossless = true`（同时打开 codec 的 `Exact`，连 alpha=0 下的 RGB 也保住，实测往返 **0 差异**） |
 
 ## 对标基线里"少"的部分
 
@@ -231,6 +233,45 @@ LUT 都是安全的。**没有发现缺陷**，但在此之前这一点只是"�
 **结论：不是泄漏。** 强制 GC 后 `live` 稳定在 89–217 MiB 且不随运行次数增长，涨的全是可回收的 committed 页。
 诊断入口：`GET /api/memory`（`?compact=true` 手动压缩）。
 
+## 8K 冷启动峰值差额：一次性池预热，不随调用增长（2026-11-12 实测）
+
+`peakmem 7680x4320` 连跑两轮（11-11 与 `2026-11-12.rerun.peakmem.md`）逐位复现：我方 / 对手峰值
+`resize-bicubic 94.2 / 39.8`、`gaussian-blur 339.3 / 266.2`、`grayscale 128.0 / 130.9`、
+`invert 127.6 / 131.0` MiB。点算子两边都正好一张 8K 帧（126.56 MiB），差额只出现在有行带 scratch 的两项。
+
+为判定这 54 / 73 MiB 是**一次性**还是**随调用累积**，新增 `memsteady` 模式（`Comparison/MemSteady.cs`）：
+每格一支全新冷子进程，夹具与 `peakmem` 一致，只改变同一算子连续调用 1 / 3 / 10 次，每次结果立刻
+`Dispose()`，读峰值增量与强制 GC 后的托管存活量。原始数字：`results/2026-11-12.mem.memsteady.md`。
+
+| 场景 | 我方 live @1 / @3 / @10 MiB | 收敛 Δ(3→10) | 判定 |
+|---|---|---|---|
+| resize-bicubic | 107.0 / 107.0 / 112.0 | +5.0（≤8 MiB 噪声阈值） | 收敛 |
+| gaussian-blur | 342.2 / 342.2 / 342.2 | +0.0 | 收敛 |
+| grayscale | 127.0 / 127.0 / 127.0 | +0.0 | 收敛 |
+| invert | 127.0 / 127.0 / 127.0 | +0.0 | 收敛 |
+
+**结论：四项都在 3 次调用内饱和，1→3 的预热增量为 0，之后不再增长。** 差额是首次调用一次性提交的
+池缓冲——`FloatScratch` 的 `[ThreadStatic]` 每 worker 一套，加上 `ArrayPixelPool` 保留的输出图——
+不是泄漏，也不随调用次数累积。稳态每次调用的分配在 `perf` 表里是 0–8 KiB/op（对手 8–32 KiB/op）。
+**判为已知代价，不改产品代码**：每 worker 独享 scratch 是 `ForBands`「输出字节与 worker 数无关」的
+前提，换来的是 `2026-11-12.rerun.sizes.md` 的 4K 19/19 领先（1.6907×）与 1080p 1.7060×。
+
+⚠ **口径边界**：`live` 是 `GC.GetTotalMemory` 的**托管堆**口径，对手实现的大像素缓冲由其自身分配器
+管理，读数恒为 0，**不能读作「对手零占用」**；两侧内存高低只能看 `peakmem` 的进程级 WorkingSet。
+`peakmem` 本身是「冷进程 + 单次调用」，不是工作负载，不能拿它当「谁更省内存」的结论，更不能拿它
+当优化目标去改稳态热路径（§「测量方法论」铁律 4）。
+
+**两处作废的推算**：此前「~11 套 scratch、每套 17.9 MiB、乘起来正好对上 212.7 MiB」是用
+`Cores` 的核数估算凑出来的，不是实测。`memsteady` 实测 `RowParallel.LastWorkerCount = 16`，且这是
+`ForBands` / `For` 的**计划** worker 数而非实际调度线程数，单套大小不能用峰值 ÷ workers 得出。
+该推算作废，只保留上表的可复现数字。
+
+**三个被否的「降内存」方向**（均不实施）：全局预算 ÷ Degree —— σ3 的 halo 是 18 行，摊薄后每 worker
+有效行约 12，重算量涨到 1.5 倍，`Resize.cs` 的 16/8/4/2/1 MiB sweep 也早已给出 4 MiB 最优；
+限制 8K worker 数 —— 11→4 按 Amdahl 粗估耗时翻倍，19/19 全胜当场消失；
+共享 `FloatScratch` —— 破坏 `[ThreadStatic]` 无锁前提与逐字节确定性。三条都是拿冷启动峰值这把
+错尺子去改产品热路径，按 `known-gaps.md` 铁律 4「不要自己造尺子」否决。
+
 ## 实验台暴露的两个真短板（2026-11-06）
 
 | 项 | 事实 | 状态 |
@@ -256,6 +297,62 @@ LUT 都是安全的。**没有发现缺陷**，但在此之前这一点只是"�
 - `equalize` **7.54×**（本库 1.595 ms / 参照实现 12.0 ms）——与实验台的 6.58× 同一量级，现在有权威口径背书。
 - 两项落后：`grayscale` 0.95×、`sepia` 0.95×，差值都是 **0.08 ms**（1.690 vs 1.605 / 1.689 vs 1.609）。这两项已到 1.6 ms 的地板，**实质是平手，不该当"落后项"读**——上一轮把 box 0.99× 当结论就是犯过这个错。
 - 未进表的算子（`median3x3` 0.8–1.2 ms、`sobel` 7.2 ms、`oilpaint` 38–44 ms、`bilateral` 73–86 ms、`sharpen` 65 ms、`clahe` 17–21 ms）在 ImageSharp 4.1.3 里**没有对等实现**，给不出有意义的倍数，只能留在实验台做单侧展示。
+
+## 基准扩容与三项性能修复（2026-11-12）
+
+口径：`benchmarks/SimdImaging.Comparison -- perf`，同进程 A/B、7 轮交错取稳态。**双方都按各自默认并行度跑**——`RowParallel.Degree` 默认 `ProcessorCount`，我方从未强制单线程（`Infrastructure.cs` 第 50 行原话：Our side is not single-threaded either）；对手用 ImageSharp 默认。场景从 17 项扩到 **19 项**。
+
+### 当前总账
+
+| 分辨率 | 超越判定（steady） | 领先项 |
+|---|---|---|
+| 640×480 | **1.981×** | 16 / 19 |
+| 1920×1080 | **2.248×** | 19 / 19 |
+| 3840×2160 | **1.881×** | 19 / 19 |
+
+同日三轮优化的起点是 640 / 1080p / 4K = 1.371× / 1.595× / 1.746×（13 / 16 / 19 项领先）。
+
+### 补进表里的两个场景
+
+`saturation` 与 `pixelate` 从来不在表里，所以「比对手慢 3.7 倍」活了很久没被任何门禁发现——是实验台第一次全量扫描暴露的。
+
+| 项 | 问题 | 修法 |
+|---|---|---|
+| `Saturation` | 逐像素 float 循环（同类 `Grayscale`/`Sepia` 早就在矩阵路径上） | 展开成 3×3 矩阵走 `ColorMatrixCore`；`amount=0` 时矩阵与 Grayscale 逐项相同 |
+| `Pixelate` | 每块行两次整行 float 转换（字节→解预乘→回字节）+ 每像素一次除法 | Rgba8 走全整数：块内累加 `c×a`（`long`），每块两次整数除法，整块 32 位写入铺开 |
+
+`Saturation` 0.67 → 0.26 ms（640×480，0.27× → 0.75×），1080p 2.098 ms（0.96×）。`Pixelate` 三档 0.37 / 0.80 / 0.86 → **0.85 / 1.60 / 2.04**。
+
+> 顺带修了 `Pixelate` 一个真 bug：旧实现 alpha 除的是**块高**而不是块面积，任何半透明图（alpha=128）像素化后都饱和成 255。现在按面积平均，`Pixelate_KeepsATranslucentBlockTranslucent` 锁住。
+>
+> **字节变化范围（实测，512×512 随机字节，block=12）**：alpha 通道 100% 改变（这正是修复本身）；**不透明图的 RGB 也有约 0.93%（2448/262144）像素差 1 LSB**——旧实现走 float 累加 + `round-half-up`，新实现是整数 `(sum + area/2)/area`，当块均值恰好落在 x.5 上时两者取整方向不同。整数路径无法复现 float 的表示误差，这 1 LSB 是算法换轨的固有代价，不是 bug。
+
+### 并行审计：谁还没并行
+
+脚本扫全库，命中 **56 个**「方法里有 `for (var y = 0; y < …)` 但方法体内没有 `RowParallel`」的方法。只动了其中语义上逐行独立、且被基准覆盖的五个：
+
+| 场景 | 改前 640 / 1080p | 改后 640 / 1080p | 改法 |
+|---|---|---|---|
+| crop | 0.93 / 1.57 | **1.92 / 6.37** | `RowParallel.For` 行带 |
+| flip-horizontal | 0.95 / 1.01 | **3.14 / 2.83** | 单趟反向拷贝 + `Avx2.PermuteVar8x32` |
+| flip-vertical | 1.75 / 1.63 | **5.29 / 3.67** | `RowParallel.For` 行带 |
+| rotate180 | 1.57 / **0.88** | **7.34 / 2.60** | 同上；旧版是「整行 CopyTo 再 Reverse」两遍内存 |
+| box-blur | 0.77 / 1.20 | **1.33 / 1.42** | 带高从钉死 128 行改为 `clamp(height/(Degree×2), 32, 128)` |
+| gaussian-blur | 1.04 / 1.61 | **1.51 / 1.78** | 同上 |
+
+模糊那两项的根因不是代码写法，是**分不到核**：480 行 ÷ 128 行只有 4 个带，`cores 640x480` 实测我方 **3.77 核**、对手 **8.95 核**。带大小随高度自适应后同样 480 行切成 15 带。
+
+**跨行依赖的算子一律不切带**（`Dither` / `FloodFill` / `AdaptiveThreshold` / `GuidedFilter` / 扫描线 `Rasterize`）——切了会改字节。规则已写进 `AGENTS.md`。
+
+### 还没动的并候选
+
+`AlphaOps.Premultiply` / `Unpremultiply`、`ColorConversionOps.Convert`、`PointOps.Normalize`（第二遍可并行）、`TransferOps.Apply`、`DitherOps.Ordered`、`HdrOps.ToneMap`、`PathOps.Rasterize`、`PaletteQuantizer.Build/Dither`。每个都要单独确认「切带不改变字节」。
+
+### 读数纪律
+
+- **单次数字不能当结论。** 同一二进制、同一尺寸连跑三次，`resize-bicubic` 在 640×480 上是 4.86× 中位、波动 3.68；`rotate180` 曾一次 1.50、一次 0.88。
+- **两套协议结论可能相反。** 640×480 的 `grayscale`：`perf` 0.91×，`cores`（子进程隔离、21 轮取最小）0.24×。引用必须说明协议。
+- 现在 640×480 上低于 1.0 的只剩 `saturation` 0.87 与 `pixelate` 0.92，绝对时间都是 0.3 ms 量级，属平手区间。
 
 ## SIMD 路线：先立参照，再动内核（2026-11-07）
 

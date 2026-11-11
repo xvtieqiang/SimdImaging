@@ -80,9 +80,11 @@ for (var y = 0; y < height; y++)
                 0 => (1f, 0f, 0f), 1 => (1f, 1f, 0f), 2 => (0f, 1f, 0f),
                 3 => (0f, 1f, 1f), 4 => (0f, 0f, 1f), _ => (1f, 0f, 1f),
             };
+            // The falloff has to reach 0 *inside* the card, or every Porter-Duff mode reads as "a solid
+            // rectangle was erased". Normalised to the half-diagonal so the transparent band clears the corners.
             var adx = (x - width * 0.5f) / (width * 0.5f);
             var ady = (y - height * 0.5f) / (height * 0.5f);
-            alpha = Math.Clamp(1.15f - MathF.Sqrt(adx * adx + ady * ady), 0f, 1f);
+            alpha = Math.Clamp(1.45f - 1.5f * MathF.Sqrt(adx * adx + ady * ady), 0f, 1f);
         }
         else if (kind == "portrait")
         {
@@ -120,19 +122,79 @@ for (var y = 0; y < height; y++)
             g = Math.Clamp(b1 * 0.55f + b2 * 0.90f + b3 * 0.35f, 0f, 1f);
             b = Math.Clamp(b1 * 0.20f + b2 * 1.00f + b3 * 0.90f, 0f, 1f);
         }
+        else if (kind == "beam")
+        {
+            // A smooth whole-frame gradient, not blobs. A bright blob under Lighten/Screen flattens a disc of the
+            // picture to a single value, and on a face that reads as a grey smudge — which is exactly how it
+            // looked. Real light falls across the frame; 0..0.5 is the amplitude that brightens without
+            // blowing the highlights.
+            var u = width > 1 && height > 1 ? 0.5f * (x / (float)(width - 1) + y / (float)(height - 1)) : 0f;
+            r = g = b = 0.35f * u;
+        }
+        else if (kind == "shadow")
+        {
+            // The mirror of beam: white at the top-left (identity for Darken / ColorBurn) falling to 0.55 at the
+            // bottom-right. Same reason — a soft whole-frame gradient darkens the picture, a dark blob smears it.
+            var u = width > 1 && height > 1 ? 0.5f * (x / (float)(width - 1) + y / (float)(height - 1)) : 0f;
+            r = g = b = 1f - 0.30f * u;
+        }
+        else if (kind == "dim")
+        {
+            // Black base, low amplitude: Subtract is b - s, so a bright overlay crushes the whole picture to
+            // black. 0.35 is enough to read as "darkened" without clipping.
+            var dx1 = (x - width * 0.34f) / (width * 0.22f);
+            var dy1 = (y - height * 0.36f) / (height * 0.28f);
+            var dx2 = (x - width * 0.66f) / (width * 0.24f);
+            var dy2 = (y - height * 0.64f) / (height * 0.30f);
+            var d1 = MathF.Exp(-(dx1 * dx1 + dy1 * dy1) * 1.6f);
+            var d2 = MathF.Exp(-(dx2 * dx2 + dy2 * dy2) * 1.9f) * 0.8f;
+            r = g = b = Math.Clamp(0.35f * Math.Max(d1, d2), 0f, 1f);
+        }
+        else if (kind == "ramp")
+        {
+            // Neutral black-to-white gradient, no colour. Under Lighten the picture gets brighter toward the
+            // right and stays untouched at the left edge — "the photo brightened", which is what the Chinese
+            // name 变亮 promises. A coloured glow reads as "something was pasted on", which is right for Screen
+            // (light leak) and wrong for the tonal modes.
+            var t = width > 1 ? x / (float)(width - 1) : 0f;
+            r = g = b = t;
+        }
+        else if (kind == "shade")
+        {
+            // White-to-black ramp: white is the identity for Darken (min(x, 1) = x), so the left edge is the
+            // untouched photo and it darkens toward the right. The black-to-white ramp has the opposite
+            // problem — under Darken its black end wipes a rectangle of the picture out.
+            var t = width > 1 ? 1f - x / (float)(width - 1) : 1f;
+            r = g = b = t;
+        }
+        else if (kind == "light")
+        {
+            // Mid-grey base: 0.5 is the identity for Overlay / HardLight / SoftLight, so the picture changes only
+            // where a blob sits — bright blob lightens locally, dark one darkens. These modes were being shown
+            // against the black-backed glow layer, and black under HardLight multiplies the backdrop to 0:
+            // a black rectangle pasted over the photo, which is what it looked like.
+            var dx1 = (x - width * 0.30f) / (width * 0.16f);
+            var dy1 = (y - height * 0.36f) / (height * 0.22f);
+            var dx2 = (x - width * 0.68f) / (width * 0.18f);
+            var dy2 = (y - height * 0.62f) / (height * 0.24f);
+            var bright = MathF.Exp(-(dx1 * dx1 + dy1 * dy1) * 1.6f);
+            var dark = MathF.Exp(-(dx2 * dx2 + dy2 * dy2) * 1.6f);
+            r = g = b = Math.Clamp(0.5f + 0.5f * bright - 0.42f * dark, 0f, 1f);
+        }
         else if (kind == "mark")
         {
             // White card with dark strokes: under Multiply the white drops out and only the strokes
             // print onto the photo — exactly how a watermark or logo layer is actually used. Text is out
             // of scope for this library, so the mark is geometry.
+            // No outer frame: a border along the overlay's own edges draws a rectangle around the picture as
+            // soon as the layer is shown full-frame, and a blend mode demo must not look like a pasted card.
             var m = Math.Max(2, width / 140);
-            var border = Math.Min(Math.Min(x, width - 1 - x), Math.Min(y, height - 1 - y)) < m;
             var cx = x - width / 2f;
             var cy = y - height / 2f;
             var ring = Math.Abs(MathF.Sqrt(cx * cx + cy * cy) - Math.Min(width, height) * 0.22f) < m;
             var diag = Math.Abs(Math.Abs(cx) - Math.Abs(cy)) < m * 0.8f
                 && Math.Abs(cx) < Math.Min(width, height) * 0.30f;
-            var ink = border || ring || diag;
+            var ink = ring || diag;
             r = g = b = ink ? 0.08f : 1f;
         }
         else
@@ -173,6 +235,11 @@ app.MapGet("/api/info", () => Results.Json(new
     cores = Environment.ProcessorCount,
     machine = $"{Environment.OSVersion.VersionString} · {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}",
     oracle = typeof(TheirImage).Assembly.GetName().Version?.ToString() ?? "?",
+    // The oracle runs on its own default configuration, exactly as an application would: pinning it to one
+    // thread would flatter our numbers, and this bench exists to show what a user actually gets.
+    oracleThreads = SixLabors.ImageSharp.Configuration.Default.MaxDegreeOfParallelism > 0
+        ? SixLabors.ImageSharp.Configuration.Default.MaxDegreeOfParallelism
+        : Environment.ProcessorCount,
     opCount = Ops.Catalog.Length,
 }));
 
@@ -242,7 +309,6 @@ app.MapGet("/api/memory", (bool? compact) =>
 app.MapGet("/api/ops", () => Results.Json(Ops.Catalog.Select(o => new
 {
     o.Id, o.Group, o.Title, o.Note, o.Params, hasOracle = o.Theirs is not null, o.OracleNote,
-    o.NeedsOverlay, o.DemoOverlay,
 })));
 
 app.MapPost("/api/open", async (HttpRequest request) =>
@@ -296,7 +362,10 @@ app.MapPost("/api/sample", (SampleRequest request) =>
         name = $"合成图 · {kind switch
         {
             "glow" => "光斑层", "mark" => "水印层", "alpha" => "透明彩条",
-            "portrait" => "柔光", "detail" => "细节", _ => "棋盘",
+            "ramp" => "灰度渐变（暗→亮）", "shade" => "灰度渐变（亮→暗）",
+            "light" => "中性灰打光", "beam" => "中性光斑（黑底）",
+            "shadow" => "中性暗斑（白底）", "dim" => "微光斑（黑底）",
+            "portrait" => "柔光人像", "detail" => "细节图", _ => "棋盘",
         }} · {width}×{height}",
     });
 });
@@ -315,19 +384,7 @@ app.MapPost("/api/run", (RunRequest request) =>
 
     var parameters = Ops.Resolve(spec, request.Params);
 
-    // Overlay-bearing modes carry the second image through the same endpoint, the same warm-up protocol and
-    // the same result table as everything else — a mode that takes two inputs is still just an operator.
-    byte[]? overlayBytes = null;
-    double scale = 0.6;
-    if (spec.NeedsOverlay)
-    {
-        if (request.OverlayId is null || !images.TryGetValue(request.OverlayId, out var ovEntry))
-            return Results.BadRequest(new { error = "这个模式需要叠加图，请在参数里选一张" });
-        overlayBytes = ovEntry.Bytes;
-        scale = Math.Clamp(request.Scale ?? 0.6, 0.2, 1.0);
-    }
-
-    var our = MeasureOurs(entry.Bytes, spec, parameters, overlayBytes, scale);
+    var our = MeasureOurs(entry.Bytes, spec, parameters);
     if (our.Png is null)
         return Results.Json(new { error = our.Error ?? "我方执行失败" });
 
@@ -517,7 +574,7 @@ app.MapPost("/api/batch", (BatchRequest request) =>
 
     // Overlay-bearing work is deliberately out: the overlay would have to be regenerated per backdrop size,
     // and a batch of mixed sizes is exactly where that assumption breaks.
-    if (opSpec?.NeedsOverlay == true || chainSpec?.OverlayDemo is not null)
+    if (chainSpec?.OverlayDemo is not null)
         return Results.BadRequest(new { error = "需要叠加图的算子/配方暂不支持批量" });
 
     var parameters = opSpec is not null ? Ops.Resolve(opSpec, request.Params) : Chains.Resolve(chainSpec!, request.Params);
@@ -705,44 +762,37 @@ static (double Ms, long AllocBytes, int Width, int Height, string? Error) Measur
 // Space is measured too, and it has to be measured the same way on both sides: GC.GetTotalAllocatedBytes
 // covers the whole process (pool threads included), sampled around the timed region only. WorkingSet is read
 // right after the fastest run — it is a footprint snapshot, not a peak-over-time.
-static MeasureResult MeasureOurs(byte[] source, OpSpec spec, IReadOnlyDictionary<string, double> parameters,
-    byte[]? overlayBytes = null, double overlayScale = 0.6)
+static MeasureResult MeasureOurs(byte[] source, OpSpec spec, IReadOnlyDictionary<string, double> parameters)
 {
     try
     {
-        // Single-input entries run Ours; overlay-bearing entries run ComposeRun with the overlay rescaled to
-        // `overlayScale` of the backdrop and centred — the compositor's own fit check is what that satisfies.
-        // The two runners are mutually exclusive by construction, so neither is invoked against null.
-        OurImage Run(OurImage bg, OurImage? ov)
-        {
-            if (!spec.NeedsOverlay)
-                return spec.Ours!(bg, parameters);
+        OurImage Run(OurImage bg) => spec.Ours!(bg, parameters);
 
-            var targetW = Math.Max(1, (int)Math.Round(bg.Width * overlayScale));
-            var targetH = Math.Max(1, (int)Math.Round(bg.Height * overlayScale));
-            using var resized = ov!.Resize(targetW, targetH, Resampler.Bilinear);
-            return spec.ComposeRun!(bg, resized, (bg.Width - targetW) / 2, (bg.Height - targetH) / 2);
-        }
-
+        // Warm up for a wall-clock budget, not a fixed iteration count. A 640x480 grayscale takes ~0.3 ms, so
+        // two passes leave the tiered JIT cold and the first sweep after a server restart read 5-20x slow —
+        // which is exactly how a bench stops meaning anything. The comparison harness warms >=300 ms for the
+        // same reason; this is the same protocol at a smaller budget.
         var width = 0;
         var height = 0;
-        for (var w = 0; w < 2; w++)
+        var warmup = Stopwatch.StartNew();
+        var warmups = 0;
+        do
         {
             using var warm = OurImage.Load(source);
-            using var warmOv = overlayBytes is null ? null : OurImage.Load(overlayBytes);
-            using var warmResult = Run(warm, warmOv);
+            using var warmResult = Run(warm);
             width = warmResult.Width;
             height = warmResult.Height;
+            warmups++;
         }
+        while (warmup.ElapsedMilliseconds < 300 || warmups < 2);
 
         var samples = new List<(double Ms, long Alloc)>(7);
         for (var i = 0; i < 7; i++)
         {
             using var decoded = OurImage.Load(source);
-            using var decodedOv = overlayBytes is null ? null : OurImage.Load(overlayBytes);
             var before = GC.GetTotalAllocatedBytes(precise: false);
             var watch = Stopwatch.StartNew();
-            using var result = Run(decoded, decodedOv);
+            using var result = Run(decoded);
             watch.Stop();
             samples.Add((watch.Elapsed.TotalMilliseconds, GC.GetTotalAllocatedBytes(precise: false) - before));
         }
@@ -751,8 +801,7 @@ static MeasureResult MeasureOurs(byte[] source, OpSpec spec, IReadOnlyDictionary
         var best = samples[0];
 
         using var encodeSource = OurImage.Load(source);
-        using var encodeOv = overlayBytes is null ? null : OurImage.Load(overlayBytes);
-        using var final = Run(encodeSource, encodeOv);
+        using var final = Run(encodeSource);
         var png = OurImage.Encode(final, Sdcb.SimdCodecs.Abstractions.ImageFormat.Png);
 
         return new MeasureResult(best.Ms, best.Alloc, Environment.WorkingSet, width, height, png.Length, png, null);
@@ -767,15 +816,20 @@ static MeasureResult MeasureTheirs(byte[] source, OpSpec spec, IReadOnlyDictiona
 {
     try
     {
+        // Same wall-clock warm-up as MeasureOurs: two fixed passes are not enough for a sub-millisecond op.
         var width = 0;
         var height = 0;
-        for (var w = 0; w < 2; w++)
+        var warmup = Stopwatch.StartNew();
+        var warmups = 0;
+        do
         {
             using var warm = TheirImage.Load(source);
             using var warmResult = spec.Theirs!(warm, parameters);
             width = warmResult.Width;
             height = warmResult.Height;
+            warmups++;
         }
+        while (warmup.ElapsedMilliseconds < 300 || warmups < 2);
 
         var samples = new List<(double Ms, long Alloc)>(7);
         for (var i = 0; i < 7; i++)

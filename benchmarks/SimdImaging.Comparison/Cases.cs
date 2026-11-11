@@ -102,6 +102,18 @@ internal static class Cases
             new Case("sepia", "COL-17", "Sepia, full strength",
                 i => i.Sepia(1f),
                 i => i.Clone(x => x.Sepia()), full),
+
+            // Both were missing from this list, and that is exactly how they stayed slow: nothing measured
+            // them. The lab showed saturation at 0.67 ms against the oracle's 0.18 at 640x480 — a per-pixel
+            // float loop while grayscale and sepia already used the matrix path. These two cases are the
+            // reason that cannot happen again silently.
+            new Case("saturation", "COL-3", "Saturation 1.6x",
+                i => i.Saturation(1.6f),
+                i => i.Clone(x => x.Saturate(1.6f)), full),
+
+            new Case("pixelate", "FLT-13", "Pixelate, block 12",
+                i => i.Pixelate(12),
+                i => i.Clone(x => x.Pixelate(12)), full),
         ];
     }
 }
