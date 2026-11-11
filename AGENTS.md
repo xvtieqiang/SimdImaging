@@ -146,21 +146,27 @@ size loses parallelism with no error and no visible symptom. `ForBands` has no f
 have already split the work. If an operator looks inexplicably slow on small images, check
 `RowParallel.LastWorkerCount` first — that is how the `Resize` nearest path was found running on one core.
 
-**新算子或改过实现的算子，必须同时进 `tests/SimdImaging.AotSmoke/Program.cs` 的哈希清单。** 那个清单是
-"AOT 输出 == JIT 输出"唯一实际覆盖的范围；2026-11-12 发现 `pixelate` 与 `rotate180` 两个改动最大的算子
-根本不在里面，门禁全绿却什么都没验到。加一个算子是一次三行的改动，漏掉是一次无声的保证失效。
+**Every operator whose implementation changes must be added to the `tests/SimdImaging.AotSmoke/Program.cs` hash
+list.** That list is the only thing that actually exercises "AOT output == JIT output"; on 2026-11-12 the two
+operators that had changed the most — `pixelate` and `rotate180` — were absent from it, so the gate was green and
+had verified nothing about them. Adding one entry is three lines; missing one is a guarantee that silently stops
+holding.
 
-**跨行依赖的算子不要切带。** `Dither`（误差扩散）、`FloodFill`、`AdaptiveThreshold`（局部均值窗口跨带）、
-`GuidedFilter`、扫描线 `Rasterize` 的输出依赖相邻行或前一步的累积状态，切带会改变字节。这类只能整体跑，
-或用「带 halo + 重叠区重算」的显式方案，且必须用逐字节对拍证明不变。2026-11-12 的并行审计按这条筛：
-56 个逐行串行方法里只动了 5 个几何算子（Copy / Crop / FlipH / FlipV / Rotate180），其余留清单。
+**Never band an operator whose rows depend on each other.** `Dither` (error diffusion), `FloodFill`,
+`AdaptiveThreshold` (a mean window wider than the band), `GuidedFilter` and scanline `Rasterize` all read state
+that crosses the band boundary, so splitting them changes bytes. They run whole, or they run with an explicit
+halo plus recomputed overlap — and then only a byte-for-byte comparison proves it. The 2026-11-12 parallel audit
+used exactly this filter: of 56 serial row loops it touched only the five pure geometry operators (Copy, Crop,
+FlipH, FlipV, Rotate180) and left the rest on a list.
 
-**小图慢不是算法问题，是并行粒度。** 640×480 上 `box-blur` 我方只跑到 **3.77 核**、对手 **8.95 核**
-（`cores 640x480` 实测，CPU 时间÷墙钟）。行带按 32 行切，480 行只有 15 带，每带还带 halo 重复计算。
-判断这类问题先看核数，再看代码——同一个算子 1080p 是 1.20×，640×480 是 0.77×，差的不是算式。
+**A slow small image is a band-granularity problem, not an algorithm problem.** At 640×480 `box-blur` ran on
+**3.77 cores** against the oracle's **8.95** (`cores 640x480`, CPU time ÷ wall time). Bands were pinned at 32 rows,
+so 480 rows gave 15 bands and every band paid the halo again. Check the core count before reading the code: the
+same operator is 1.20× at 1080p and 0.77× at 640×480 — that is not arithmetic.
 
-**同一个算子，两套协议的结论可能相反。** 640×480 的 `grayscale`：`perf`（同进程交错）是 0.91×，
-`cores`（子进程隔离、21 轮取最小）是 **0.24×**。引用前必须说清是哪套协议，否则数字没有意义。
+**Two protocols can disagree about the same operator.** At 640×480 `grayscale` is 0.91× under `perf`
+(same-process, interleaved) and **0.24×** under `cores` (subprocess-isolated, min of 21 rounds). Say which
+protocol a number came from, or the number means nothing.
 
 **NativeAOT re-verified (2026-11-07, both tiers, 31 hashes including `median.sobel`, `equalize` and `bilateral`).** **Originally verified (2026-11-05).** `run.sh` publishes twice — `-p:IlcInstructionSet=avx2` and the default
 SSE2 baseline — and both binaries produce byte-identical PNG/JPEG output **and** byte-identical geometry
