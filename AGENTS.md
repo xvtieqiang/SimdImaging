@@ -9,8 +9,7 @@ A managed .NET image **processing** layer over `Sdcb.SimdCodecs`: everything bet
 encoded file. Feature parity with ImageSharp 4.1.x and beyond; NativeAOT from the first commit; every vector
 kernel has a scalar twin that produces identical bytes.
 
-Not in scope: codecs (SimdCodecs owns them), text rendering, document/OCR pipelines (that is
-`Sdcb.SimdPaddleOCR`), GPU backends.
+Not in scope: codecs (SimdCodecs owns them), text rendering, GPU backends.
 
 ## Clean-room rules (non-negotiable)
 

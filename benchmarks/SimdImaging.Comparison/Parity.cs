@@ -117,6 +117,39 @@ internal static class Parity
         }
 
         report.Table(["场景", "SimdImaging 重跑", "ImageSharp 4.1.3 重跑"], reproRows);
+
+        // M3 exit criterion: quantization PSNR against the same parameters. Kept out of Cases.Build so
+        // the 13-scenario throughput table (and its verdict) stays unchanged.
+        report.Heading(3, "B4 量化对拍（M3 出口条件：同参数 Wu / 64 色 / 无抖动）");
+        report.Line("> 两边都用 Wu 量化器、64 色上限、关闭抖动；输入仍是同一份 256×192 字节。"
+                  + "算法实现不同导致的偏差照实列出，不调参数、不调黄金。");
+        report.Line();
+        try
+        {
+            using var qOurs = ours.Quantize(64, SimdImaging.Processing.Quantizer.Wu);
+            using var qTheirs = theirs.Clone(x => x.Quantize(
+                new SixLabors.ImageSharp.Processing.Processors.Quantization.WuQuantizer(
+                    new SixLabors.ImageSharp.Processing.Processors.Quantization.QuantizerOptions
+                    {
+                        MaxColors = 64,
+                        Dither = null,
+                    })));
+            var qa = Fixture.Bytes(qOurs);
+            var qb = Fixture.Bytes(qTheirs);
+            var qp = Metrics.Compare(qa, qb);
+            var qPsnr = double.IsPositiveInfinity(qp.PsnrRgb) ? "∞" :
+                double.IsNaN(qp.PsnrRgb) ? "—" : qp.PsnrRgb.ToString("F2", CultureInfo.InvariantCulture);
+            report.Table(["我方", "对手", "不同像素", "最大通道差", "平均差", "PSNR(dB)", "判定"],
+                [["Wu / 64 色 / 无抖动", "Wu / 64 色 / 无抖动",
+                  qp.DifferentPixels.ToString(CultureInfo.InvariantCulture),
+                  qp.MaxChannelDiff.ToString(CultureInfo.InvariantCulture),
+                  qp.MeanAbsDiff.ToString("F2", CultureInfo.InvariantCulture),
+                  qPsnr, Metrics.Grade(qp, (long)width * height)]]);
+        }
+        catch (Exception e)
+        {
+            report.Line($"**量化对拍中断**：`{e.GetType().Name}`: {e.Message}");
+        }
     }
 
     private static (string Result, double Milliseconds) Capture(Action action)

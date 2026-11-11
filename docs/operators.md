@@ -220,10 +220,10 @@
 | HDR       | 公开处理器集合中未见 PQ/HLG 语义级处理（待复核）                                                                                                                               | COL-27/28/29             | PQ/HLG 色调映射 + Ultra HDR gain map                                         |
 | 扩展性       | `PixelRowOperation` 行委托、`Filter` 组合、`IImageProcessor`                                                                                                      | `IImageOp` + 非泛型行委托      | 我们多"算子声明 halo 与源矩形"，因此可分块                                                |
 | AOT       | 4.1 起为像素格式与 ICO/CUR/QOI 加 AOT 种子；**实测 PNG+Rgba32 完整编解码链路可 NativeAOT publish（0 警告、运行正常）**，其余格式/像素格式组合待逐项核实 | 构建门禁 + 双基线档位断言 | 从第一个提交起零 trim/AOT 警告；参照实现此链路同样可用，此项不宣称领先 |
-| 内存        | `MemoryAllocator` 整图分配（4.1 起可配置受限）                                                                                                                         | PixelBuffer + 池 + 行带     | 稳态 0 分配与 8K 内存上限                                                         |
+| 内存        | `MemoryAllocator` 整图分配（4.1 起可配置受限）                                                                                                                         | PixelBuffer + 池 + 行带     | 目标稳态 0 分配；实测 7–39 KiB/op，8K 峰值内存 4 场景中 3 个达标（`gaussian-blur` 超 7.1%），见 `known-gaps.md` |
 | 许可        | Six Labors Split License 1.0（商用按条款购买）                                                                                                                      | MIT（M0 落 LICENSE）        | 选型事实，不是技术优势                                                              |
 
-**不覆盖项**（写进 `known-gaps.md`）：文字渲染与排版、IPTC 语义编辑、GPU 后端、EXIF 编辑器 UI、文档/OCR 垂直流水线（版面分析、去斜配方、文字识别——识别归 `Sdcb.SimdPaddleOCR`；我们只出旋转/阈值/透视这类原语）。
+**不覆盖项**（写进 `known-gaps.md`）：文字渲染与排版、IPTC 语义编辑、GPU 后端、EXIF 编辑器 UI。
 
 **继承自底层的格式缺口**：EXR、TGA、CgBI PNG、ANI 在 SimdCodecs 侧不存在，SimdImaging 无法凭空补——这是 codec 层的缺口，不在本项目范围。对标表里如实写"少"，不写"后续支持"。
 
@@ -243,7 +243,7 @@
 | 量化 | QNT-2 Wu（矩 + 方差最小化切分）、QNT-4 WebSafe、QNT-8 DitherToPalette、QNT-3 中位切分调色板（无 k-means 精修）、QNT-1 Octree（8 层 + 插入期剪枝）、QNT-7 ReduceColors（量化 + 可选抖动）、QNT-5 BuildPalette、QNT-6 MapToPalette                                                                                                                                                                                                                         |
 | 分析 | ANL-1 Histogram（每通道 n 桶）                                                                                                                                                                                                                                                                                        |
 
-共 112 / 112。几何与滤波的 resize/blur 已向量化（Rgba8 行读写 + 两遍卷积），点算子仍是标量参考实现。  
+共 112 / 112。几何与滤波的 resize/blur 已向量化（Rgba8 行读写 + 两遍卷积）；此后 `Median3x3` / `BokehBlur` / `Convolve2D` 等热点也 SIMD 化、多个重算子改行带并行。点算子走字节域 LUT 快路径（与标量孪生逐位一致），**未做 SIMD 向量化**。
 逐项状态见 [`known-gaps.md`](known-gaps.md)。
 
 ---

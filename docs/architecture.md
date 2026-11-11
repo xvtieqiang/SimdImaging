@@ -18,13 +18,14 @@
 2. **NativeAOT 一等公民。** 零反射、零动态代码、零 P/Invoke，`IsAotCompatible` 从第一个提交起就是 true。
 3. **确定性可审计。** 同一输入在同一台机器上，四个 SIMD 档位（AVX-512 / AVX2 / Vector128 / 标量）输出**逐字节相同**；不同并行度输出相同。库里不允许存在"看运气"的算子。
 
+> **实现状态（2026-11-11）**：这是设计契约，不是已兑现的现状。`src/` 全库 0 处 `Vector512`、机器 `avx512=False`，第四档从未被执行；当前是 AVX2 / V128 / 标量**三档实现 + 一档预留**。`known-gaps.md:169` 明令对外不得再宣称「四档逐字节一致」。
+
 ### 1.2 非目标（明确不做）
 
 | 不做 | 原因 |
 |---|---|
 | 任何格式的编解码 | SimdCodecs 已覆盖 12 个格式族，重复实现只会引入两套 bug |
 | 字体解析与文字排版 | 需要一个完整的 TrueType/CFF 解析器 + shaper（ImageSharp 靠 SixLabors.Fonts），是独立产品，单列 P2 卫星包 |
-| 文档 / OCR 垂直场景（版面分析、去斜流水线、文档二值化配方、文字识别） | 识别链路归 [`Sdcb.SimdPaddleOCR`](https://github.com/sdcb/SimdPaddleOCR)（纯托管 PP-OCRv6，输入交错像素、不做解码）。通用**原语**我们照给（旋转、自适应阈值、透视矫正），但**不做面向文档的流水线**。它也不做去斜与二值化，这块明确留白，需要时单独立项 |
 | GPU / OpenCL / Vulkan 后端 | 与 NativeAOT + 纯托管 + 确定性三条约束冲突，且不是当前瓶颈 |
 | 图像编辑器式的撤销/图层栈 | 应用层要的是流水线，不是画布 |
 | EXIF/IPTC 的语义编辑 UI | 只做透传与少量字段读写，解析归 `Sdcb.SimdCodecs.Exif` |
@@ -41,7 +42,7 @@
 | 2 | 稳态分配 | 池化 + 计划复用后 **0 B/op** | `GC.GetAllocatedBytesForCurrentThread` |
 | 3 | 峰值内存 | 8K 图 ≤ 2.5× 单帧 | `GC.GetTotalMemory` + WorkingSet |
 | 4 | 位深保真 | 10/16 bit 全链路不塌到 8 bit | 10-bit HEIF → 16-bit 处理 → 16-bit PNG，端点误差 0 |
-| 5 | 确定性 | 四档 SIMD 逐字节一致 | CI 矩阵强制 |
+| 5 | 确定性 | 四档 SIMD 逐字节一致（**设计目标**） | CI 目前只强制三档；AVX-512 档尚未实现，见 `known-gaps.md` |
 | 6 | 色彩 | ICC→ICC **与 4.1.3 对拍**，不只比"有没有" | ΔE2000 ≤ 1（矩阵/TRC），≤ 2（CLUT） |
 | 7 | AOT | 全库 NativeAOT + 零 trim 警告作为构建门禁；4.x 仍在补 AOT 种子 | publish + `warnaserror` |
 
@@ -202,17 +203,6 @@ encoder.AddFrame(raster, ...);                        // 不再复制
 **③ 元数据回流（不解析、只搬运）**
 
 `IDecodedImage.Metadata` → `Image.Metadata` → `SaveOptions.Metadata` → 编码器写回。Exif 的字段级读写由 `Sdcb.SimdCodecs.Exif` 负责。
-
-**④ 交给推理引擎（BGR24 / RGB24 / BGRA32 / RGBA32）**
-
-```csharp
-// Sdcb.SimdPaddleOCR 的输入契约就是交错像素 + stride，不做解码
-byte[] bgr = new byte[image.Width * image.Height * 3];
-if (!image[0].Pixels.TryCopyTo(bgr, image.Width * 3, PixelFormat.Bgr24))
-    throw new InvalidOperationException("目标缓冲不够大");
-```
-
-换算仍走 `PixelConverter`，我们不写第二套 swizzle。正因为下游要的是交错四通道，工作格式选 RGBA 才顺——这条通道不是附赠，是设计前提之一。
 
 ### 4.3 禁止事项（写进 AGENTS.md）
 
@@ -458,7 +448,7 @@ Save:
   PixelBuffer(=IMemoryOwner) ──► RasterImage.Wrap ──► encoder.WriteRows
 ```
 
-稳态分配 = 0。唯一允许的分配是：权重表首次构建、`PlanReport` 文本、以及用户显式调用的 `Clone/ToArray`。
+设计目标：稳态分配 = 0，唯一允许的分配是权重表首次构建、`PlanReport` 文本、以及用户显式调用的 `Clone/ToArray`。**2026-11-11 实测未达成**：流水线 7–39 KiB/op、Rgba16 单算子 0–15 KiB/op（见 `known-gaps.md` §「M2–M4 出口条件核验」）。
 
 ### 6.2 并行
 
@@ -631,7 +621,7 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 
 另外两个断言：`RuntimeFeature.IsDynamicCodeSupported == false` 时全路径可跑；publish 输出零 trim/AOT 警告（`-warnaserror`）。
 
-> 这条经验来自 SimdPaddleOCR 的 README：它在 x64 AOT 时要求显式设置 `IlcInstructionSet=avx2`，否则 AVX2 内核被裁、推理明显变慢且不报错。同类问题在我们这里表现为"测试通过但没测到东西"，比性能损失更难发现。
+> x64 AOT 的默认基线是 SSE2：ILC 会把 `Avx2.IsSupported` 折叠为 false 并裁掉 AVX2 内核，运行时变慢且不报错。在我们这里表现为"测试通过但没测到东西"，比性能损失更难发现。
 
 ---
 
@@ -705,14 +695,17 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 | 里程碑 | 内容 | 出口条件 |
 |---|---|---|
 | **M0 骨架（已完成）** | slnx、props、`Abstractions`（格式 / 池 / 缓冲 / 算子契约 / 选项）、`Image` + Load/Save/Encode、AOT 冒烟工程与脚本 | ✅ `Release` 构建 0 警告；两种基线的 AOT 产物与 JIT 逐字节一致，`dynamic-code=False` 已断言 |
-| **M1 几何（已完成）** | Crop / Pad / Flip / Rotate 90·180·任意角 / Affine / Perspective / Resize（5 种采样器）/ Premultiply / Unpremultiply / Composite；SIMD 内核与四档一致性、`ProcessingPlan`、PublicAPI 快照 | ✅ 黄金测试通过、四档逐字节一致；对 ImageSharp 的倍数见 `compare-4.1.3` |
-| **M2 色彩 + 滤波（功能完成）** | 35 个点算子 + LUT 字节域融合、Gaussian/Box/Median/Sobel/Unsharp、直方图与均衡、自适应二值化 | 模糊 ≥ 1.5×：**1080p 实测 1.61–1.86×，达标**；"点算子融合后分配 = 0"：**未逐条核**（实测 8–100 KiB） |
-| **M3 量化 + 绘制（功能完成）** | Octree/Wu/Palette/WebSafe、抖动、路径与形状、18 blend + 12 Porter-Duff、渐变、水印 | ❌ 未验：量化 PSNR 对 ImageSharp 同参数、抗锯齿覆盖率 |
-| **M4 HDR/ICC/高级（功能完成）** | 传递函数、色调映射、gain map、ICC 矩阵/TRC 与 LUT、CLAHE、双边、行带流式 | ❌ 未验：10-bit HEIF → 16-bit PNG 端点精确、8K 峰值内存 ≤ 2.5× |
+| **M1 几何（已完成）** | Crop / Pad / Flip / Rotate 90·180·任意角 / Affine / Perspective / Resize（5 种采样器）/ Premultiply / Unpremultiply / Composite；SIMD 内核与四档一致性、`ProcessingPlan`、PublicAPI 快照 | ✅ 黄金测试通过、三档逐字节一致（AVX-512 档预留）；对 ImageSharp 的倍数见 `compare-4.1.3` |
+| **M2 色彩 + 滤波（功能完成）** | 35 个点算子 + LUT 字节域融合、Gaussian/Box/Median/Sobel/Unsharp、直方图与均衡、自适应二值化 | 模糊 ≥ 1.5×：**1080p 实测 1.61–1.86×，达标**（11-07）；「点算子融合后分配 = 0」：**前提不成立**——§5.4 明写跨步骤融合未实现，11-11 流水线实测 7 / 39 / 8 KiB/op，见 `known-gaps.md` §「M2–M4 出口条件核验」 |
+| **M3 量化 + 绘制（功能完成）** | Octree/Wu/Palette/WebSafe、抖动、路径与形状、18 blend + 12 Porter-Duff、渐变、水印 | 量化 PSNR：**16.61 dB**（Wu / 64 色 / 无抖动，同参数对拍，11-11）；本行未给阈值，只能记数、不能判达标。抗锯齿覆盖率：**判据未定义**（无测法、无阈值，现有测试只有 `partial > 0` 存在性断言）→ 仍不可判定 |
+| **M4 HDR/ICC/高级（功能完成）** | 传递函数、色调映射、gain map、ICC 矩阵/TRC 与 LUT、CLAHE、双边、行带流式 | 8K 峰值内存：**4 场景 0.74 / 2.68 / 1.01 / 1.01× 单帧**（单帧 126.56 MiB，2.5× = 316.4 MiB），gaussian-blur 339.0 MiB **超 7.1%**；10-bit HEIF → 16-bit PNG 端点：**无语料、无该路径测试，未出数**（`Png_Rgba16_RoundTripsByteExact` 只证 16-bit PNG 往返，不等于 HEIF 端点） |
 | **M5 验收** | 12 场景基准报告、分配报告、AOT 报告、`known-gaps.md` 定稿 | §1.3 六条全部出数，输的条目写清原因 |
 
-> **状态口径**：M2–M4 的功能（算子、测试、公开 API）都已落地；上表"出口条件"是当初写进设计的验收标准，
-> 目前只有 M0/M1 与 M2 的模糊一项逐条核过。要宣称某个里程碑"完成"，先把它那一行的出口条件跑出数来。
+> **状态口径**：M2–M4 的功能（算子、测试、公开 API）都已落地；上表「出口条件」是当初写进设计的验收标准。
+> 2026-11-11 补测后：M2 模糊、M3 量化 PSNR（已出数但无阈值可判）、M4 的 8K 峰值内存有了实数
+> （见 `known-gaps.md` §「M2–M4 出口条件核验」），其中 8K `gaussian-blur` **未达标**；M2 的「融合后分配 = 0」
+> 因跨步骤融合未实现而**前提不成立**，M3 抗锯齿覆盖率（判据未定义）与 M4 的 HEIF 端点（无语料）仍无法出数。
+> 要宣称某个里程碑「完成」，先把它那一行的出口条件全部跑出数来。
 
 每个里程碑结束跑一次 `bash tests/SimdImaging.AotSmoke/run.sh`，不只是 M5。
 
@@ -741,7 +734,7 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 已定：
 
 - 包族与根命名空间 `SimdImaging`（NuGet 上 `simdimaging` 未占用，2026-11-05 核实）；门面不另立类型，静态工厂挂在 `Image` 上。
-- **工作格式 RGBA-only**。文档/OCR 场景不在范围，Gray 特化不立项（见 §5.1）。
+- **工作格式 RGBA-only**。Gray 特化不立项（见 §5.1）。
 - 对标基线 ImageSharp 4.1.3。
 
 待定：

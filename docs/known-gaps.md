@@ -10,7 +10,6 @@
 |---|---|
 | 任何格式的编解码 | 归 `Sdcb.SimdCodecs`；重复实现只会引入两套 bug |
 | 文字渲染与排版 | 需要完整的 TrueType/CFF 解析器 + shaper，是独立产品 |
-| 文档 / OCR 垂直流水线（版面分析、去斜配方、文字识别） | 识别链路归 `Sdcb.SimdPaddleOCR`；本项目只出旋转 / 阈值 / 透视这类原语 |
 | GPU 后端 | 与 NativeAOT + 纯托管 + 跨档位确定性三条约束冲突 |
 | 图层 / 撤销栈 | 应用层要的是流水线，不是画布 |
 | IPTC 语义编辑 | 只做元数据透传与少量字段；解析归 `Sdcb.SimdCodecs.Exif` |
@@ -362,3 +361,111 @@ LUT 都是安全的。**没有发现缺陷**，但在此之前这一点只是"�
 | 向量组内的偏移窗口忘了边界 | 平面化横向用 `plane[x+k .. x+k+7]` 一次加载 8 个像素，等价于假设组内 8 个 lane 偏移相同；只要组内有像素要 `clamp` 就读错样本。首尾各 `radius` 像素必须走标量孪生。漏掉它是 1.1% 样本不一致的根因，而当时还被误判成「FMA 收缩差异」 |
 | 只在一种尺寸/格式上验收 | 滤波改造全部只在 1080p `Rgba8` 上验证过；换到 `Rgba16` 复测才暴露 `Rotate90` 的通用分支没有并行、每像素一次 `Slice(8B).CopyTo`，比参照实现慢 **4×**（Rgba8 下却是快 3.9×）。这个缺陷与当轮改动无关，是之前就存在的。**结论必须跨尺寸与跨像素格式各跑一遍** |
 | 顺序扫描的排序当参数选择依据 | 二维 tile 的 12 组参数是顺序测的，漂移没被分摊；三个决赛配置再用同一循环轮转判一次才敢改库（`1×64` 1.00× → `4×128` 0.85×） |
+
+## M2–M4 出口条件核验（2026-11-11）
+
+`architecture.md` §11 里标「未验」的行，本轮把能跑的都跑了（M2 模糊沿用 11-07 已达标数，未重跑）。
+机器与 11-07 报告相同（`Windows 10.0.19045 | X64 | .NET 10.0.14 | avx512=False avx2=True v128=True`），
+对手 `SixLabors.ImageSharp` **4.1.3**，密钥只按路径引用。原始结果在
+`benchmarks/SimdImaging.Comparison/results/`（`.gitignore:26` 忽略，**仅本机可见**）；
+**下面表格里的数字已写入本文件，随仓库走**：
+
+| 模式 | 本地原始结果 |
+|---|---|
+| `peakmem 7680x4320` | `benchmarks/SimdImaging.Comparison/results/2026-11-11.peakmem.md` |
+| `parity`（含新增 B4 量化对拍） | `.../2026-11-11.parity.md` |
+| `perfpipe 1920x1080` | `.../2026-11-11.perfpipe.md` |
+| `perf16 1920x1080` | `.../2026-11-11.perf16.md` |
+
+### 逐条结论
+
+| 出口条件 | 实测 | 判定 |
+|---|---|---|
+| M2 模糊 ≥ 1.5× | 1080p **1.61–1.86×**（11-07） | ✅ 达标 |
+| M2 点算子融合后分配 = 0 | `perfpipe` 三条链 **7 / 39 / 8 KiB/op**；`perf16` 单算子 0–15 KiB/op | ❌ **前提不成立**：§5.4 明写跨步骤融合未实现。这不是「没测」，是功能不存在，不能用测数补救 |
+| M3 量化 PSNR 对同参数 | **16.61 dB**，49152/49152 像素不同，平均差 31.32，最大通道差 115（Wu / 64 色 / 无抖动，256×192） | ⚠ 已出数，判定「算法/语义不同」。§11 未给阈值，**不能据此判达标或落后** |
+| M3 抗锯齿覆盖率 | 无数值判据；`PathOpsTests` 只有 `partial.ShouldBeGreaterThan(0)` 这类存在性断言 | ❌ 判据未定义（无测法、无阈值），不可判定；M5 需先写死测法 |
+| M4 10-bit HEIF → 16-bit PNG 端点精确 | 仓库无 10-bit HEIF 语料、无该解码路径测试；现有 `Png_Rgba16_RoundTripsByteExact` 只证 16-bit PNG 往返字节精确 | ❌ 未出数。**不拿 PNG 往返冒充 HEIF 端点** |
+| M4 8K 峰值内存 ≤ 2.5× 单帧 | 单帧 7680×4320×4 B = **126.56 MiB**，2.5× = **316.4 MiB**。实测 `resize-bicubic` 94.2（0.74×）、`gaussian-blur` **339.0（2.68×）**、`grayscale` 127.9（1.01×）、`invert` 127.6（1.01×）MiB | ⚠ **3 / 4 达标**，`gaussian-blur` 超 22.6 MiB（7.1%）；对手同项 265.9 MiB |
+
+### 口径与限制
+
+- `peakmem` 是**独立子进程冷启动 + 算子执行期 `WorkingSet64` 峰值增量 + 3 次中位数**，只覆盖 4 个单算子，
+  **不是完整链路**；§1.3 第 3 条原测法写的是 `GC.GetTotalMemory` + WorkingSet，这里只用了后者。
+  所以上表不能宣称完全兑现 §1.3 第 3 条，只能说「这 4 个场景的数」。
+- 量化「同参数」只对齐**量化器族（Wu）+ 色数（64）+ 无抖动**；两边实现不同（我方 5-bit 三维矩 + 方差切分），
+  16.61 dB 反映的是算法差异，不是质量胜负。对拍入口建在 `Parity.cs` 的 B4，刻意不进 `Cases.Build`，
+  避免改变既有 13 场景吞吐表与 1.8224× 判定。
+- §1.3 第 2 条「稳态分配 0 B/op」本轮同样**未达成**：流水线 7–39 KiB/op、Rgba16 单算子 0–15 KiB/op。
+- 顺带出的数（不属 §11 出口条件，仅作证据）：`Rgba16` 端到端 **7 / 7 领先、几何平均 2.1003×**；
+  流水线 **1.1074×（2/3）**，`point-5` 0.61× 落后；`parity` B1 17 场景中 5 项逐字节一致、6 项 ≤1 LSB、
+  3 项视觉等价、3 项算法/语义不同；B2 对手对 `GaussianBlur(NaN)` 静默接受。
+
+⚠ **三项仍未关闭**：8K `gaussian-blur` 超阈值、抗锯齿覆盖率判据缺失、HEIF 端点无语料。
+这三项是验收欠账，不是功能缺失；但按 §11 口径，M2–M4 都还不能称完成。
+
+## ImageSharp 替换：迁移阻塞清单（2026-11-11）
+
+**用途口径**：本项目的目标是替换 ImageSharp，动机是其许可限制仍然存在（Split License 商用门槛 /
+4.x 构建期校验许可密钥，见 `architecture.md:50`、`:696`）。即「做出来是干什么的」=
+**给被这些限制卡住的 .NET 项目一个能换上去的处理层**。下面按迁移阻塞程度排序，只列事实与出处。
+
+### 前置决策：两条现有立场与 drop-in 直接冲突
+
+| 现有立场 | 出处 | 冲突点 |
+|---|---|---|
+| 「不为兼容其他项目改 API、不提供兼容模式/兼容参数」 | `known-gaps.md` 对标基线里「少」的部分 | 兼容外观、参数换算都属被明确排除的「兼容模式」 |
+| 「命名、参数、默认值按我们自己的设计」 | `operators.md:196` | 同名 API 语义对齐被排除 |
+
+**不先定这一条，后面 B1/B2 无从谈起**：要么推翻立场做 drop-in，要么接受「自主设计的替代品 +
+迁移差异表」，明确告诉用户要改代码。两者不能混着说。
+
+### B0 引用不了（环境前置）
+
+| 事实 | 出处 | 处置 |
+|---|---|---|
+| 只 `net10.0`；ImageSharp 4.x 是 `net8.0` | `Directory.Build.props:4`、`architecture.md:735` | 建议**不追**多目标（会牺牲 `Vector512` 与 AOT 约束），写成迁移准入门槛 |
+
+### B1 编译不过（API 形状）
+
+| 事实 | 出处 | 迁移影响 | 处置 |
+|---|---|---|---|
+| `Mutate` 无实现；设计稿写了 `image.Mutate(x => ...)`，公开 API 里没有 | `architecture.md:366`、`known-gaps.md:25`、`docs/public-api.txt` | ImageSharp 绝大多数惯用调用点要重写 | 兼容外观，内部映射到现有算子 + `ProcessingPlan.Apply`；验收用 `AotOracle/Program.cs:11` 那行对手代码能编译并产出可对拍结果 |
+| `Image` 无泛型 `Image<TPixel>`，只有三个 `WorkingFormat` | `architecture.md:230`、`docs/public-api.txt` | 依赖像素类型的泛型代码要重写 | **不追**（§5.1 是核心设计），列为迁移成本 |
+| `Save/Encode` 是静态方法且参数顺序不同（`Image.Save(image, path)` vs `image.Save(path)`） | `docs/public-api.txt:157`、`:226` | 每个保存点改 | 加实例方法薄封装，只加不改 |
+| `Resampler` 只有 5 种，4.1.3 公开 16 个 `KnownResamplers` 名称 | `src/SimdImaging.Processing/Geometry/Resampler.cs:5`、`known-gaps.md:161` | 用了 Mitchell / Lanczos5 / Spline36 等的代码编译不过 | 按 `operators.md:66` 的 16 种表逐项实现或**显式抛** `NotSupportedException`（不得静默回落） |
+
+### B2 能编译但结果不同 —— 最危险，会静默出偏差
+
+| 同名 API | 实测 | 出处 |
+|---|---|---|
+| `Brightness` | 加性 vs 乘性，PSNR **4.23 dB** | `known-gaps.md:162`、`results/2026-11-11.parity.md` |
+| `Resize` nearest | PSNR **12.34 dB** | 同上 parity B1 |
+| `HistogramEqualization` | PSNR **10.29 dB** | 同上 parity B1 |
+| `Sobel` / `Vignette` / `BokehBlur` / `AdaptiveThreshold` | 语义或参数不同，无对等倍数 | `known-gaps.md:190` |
+
+处置：把 `parity` 从 17 场景扩到**覆盖全部同名 API**，每项给 PSNR 与判定，全部列进迁移差异表；
+**不调黄金、不改产品语义**（AGENTS.md 输出契约）。验收 = 差异表里没有一项是「未测」。
+
+### B3 功能缺口（业务要改或另找方案）
+
+| 事实 | 出处 | 性质 |
+|---|---|---|
+| 文字渲染 / 排版不做（ImageSharp 靠 `SixLabors.Fonts`） | `architecture.md:731`、`known-gaps.md:160` | **有意不做，决策级**：水印文字、验证码、图上标注全缺；卫星包规模「比整个 Processing 还大」 |
+| `Save/Encode` 对 `FrameCount > 1` 抛 `NotSupportedException` | `known-gaps.md:151` | 未做：GIF/WebP 动图导出断 |
+| EXR / TGA / CgBI PNG / ANI 缺 | `known-gaps.md:159` | **不归本库**，属 SimdCodecs；迁移前核对输入格式清单，不承诺补 |
+| IPTC 语义编辑、图层/撤销栈、GPU | `known-gaps.md:13-16` | 有意不做 |
+
+### B4 对外口径（不属代码，但会误导迁移方）
+
+- ~~`README.md` 的分层图与额外关系说明~~：**已删（2026-11-11）**，开头只保留 `Sdcb.SimdCodecs` 依赖说明。
+- ~~`README.md:67` 宣称「四档 SIMD 逐字节一致」~~：**已修**，改为「三档实现 + 一档预留」。
+- ~~`README.md:68`、`:85` 写「稳态 0 分配」~~：**已修**，改为实测 7–39 KiB/op 并注明 `0 B/op` 目标未达成；README 不再写死测试数，避免与账本 589 漂移。
+
+### 替换后拿到什么（收益侧，也是「为什么值得迁」）
+
+MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、跨 SIMD 档位逐字节一致、
+13 场景 11/13 领先（1.8224×）、Rgba16 7/7 领先（2.1003×）、格式面多 HEIF / JPEG2000 / JBIG2 / PNM 全族。
+以及最根本的一条：**不需要那个许可**。
+
+⚠ 清单里 B2 是迁移事故的高发区——编译能过、图看着差不多、但数值不同。它比 B1 的编译错误贵得多。
