@@ -13,7 +13,7 @@ namespace SimdImaging.Abstractions;
 /// silent lie this library refuses.
 /// </para>
 /// </summary>
-public sealed class PixelBuffer : IDisposable, IMemoryOwner<byte>
+public sealed class WorkingBuffer : IDisposable, IMemoryOwner<byte>
 {
     private readonly Memory<byte> _memory;
     private readonly int _offset;
@@ -21,7 +21,7 @@ public sealed class PixelBuffer : IDisposable, IMemoryOwner<byte>
     private IMemoryOwner<byte>? _owner;
     private int _disposed;
 
-    private PixelBuffer(IMemoryOwner<byte>? owner, Memory<byte> memory, int offset,
+    private WorkingBuffer(IMemoryOwner<byte>? owner, Memory<byte> memory, int offset,
         int width, int height, int stride, WorkingFormat format)
     {
         _owner = owner;
@@ -69,7 +69,7 @@ public sealed class PixelBuffer : IDisposable, IMemoryOwner<byte>
     /// Contents are undefined; <c>Image.Create</c> clears them.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive, or the size overflows.</exception>
-    public static PixelBuffer Rent(int width, int height, WorkingFormat format,
+    public static WorkingBuffer Rent(int width, int height, WorkingFormat format,
         IPixelPool? pool = null, bool clear = false)
     {
         if (width <= 0)
@@ -82,7 +82,7 @@ public sealed class PixelBuffer : IDisposable, IMemoryOwner<byte>
         var owner = (pool ?? ArrayPixelPool.Shared).Rent(length);
         if (clear)
             owner.Memory.Span.Slice(0, length).Clear();
-        return new PixelBuffer(owner, owner.Memory, 0, width, height, stride, format);
+        return new WorkingBuffer(owner, owner.Memory, 0, width, height, stride, format);
     }
 
     /// <summary>
@@ -90,7 +90,7 @@ public sealed class PixelBuffer : IDisposable, IMemoryOwner<byte>
     /// <c>stride × height</c> bytes and disposes the owner when it is disposed.
     /// </summary>
     /// <exception cref="ArgumentException">The memory is too small for the requested layout.</exception>
-    public static PixelBuffer Wrap(IMemoryOwner<byte> owner, int width, int height, int stride, WorkingFormat format)
+    public static WorkingBuffer Wrap(IMemoryOwner<byte> owner, int width, int height, int stride, WorkingFormat format)
     {
         ArgumentNullException.ThrowIfNull(owner);
         var rowBytes = checked(width * format.BytesPerPixel());
@@ -98,7 +98,7 @@ public sealed class PixelBuffer : IDisposable, IMemoryOwner<byte>
             throw new ArgumentOutOfRangeException(nameof(stride), stride, $"Stride must be at least {rowBytes} bytes.");
         if ((long)stride * height > owner.Memory.Length)
             throw new ArgumentException($"Memory of {owner.Memory.Length} bytes is too small for {width}x{height} at stride {stride}.", nameof(owner));
-        return new PixelBuffer(owner, owner.Memory, 0, width, height, stride, format);
+        return new WorkingBuffer(owner, owner.Memory, 0, width, height, stride, format);
     }
 
     /// <summary>
@@ -127,7 +127,7 @@ public sealed class PixelBuffer : IDisposable, IMemoryOwner<byte>
     }
 
     /// <summary>Copies the buffer into a new, tightly packed buffer the caller owns.</summary>
-    public PixelBuffer Clone(IPixelPool? pool = null)
+    public WorkingBuffer Clone(IPixelPool? pool = null)
     {
         var copy = Rent(Width, Height, Format, pool);
         for (var y = 0; y < Height; y++)

@@ -46,7 +46,7 @@ internal static class PointLut
         return Vector128.ConvertToInt32(Vector128.Max(Vector128.Min(scaled, max), zero));
     }
 
-    internal static PixelBuffer ApplyRgba8(PixelView source, IPixelPool? pool, PointOps.RowTransform transform)
+    internal static WorkingBuffer ApplyRgba8(PixelView source, IPixelPool? pool, PointOps.RowTransform transform)
     {
         var lut = _lutBytes ??= new byte[4 * 256];
 
@@ -67,7 +67,7 @@ internal static class PointLut
             lut[768 + value] = oneResult[3];
         }
 
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         var view = destination.View;
         RowParallel.For(source.Width, source.Height, (start, end) =>
         {
@@ -100,7 +100,7 @@ internal static class PointLut
     /// end-to-end parity run hold that to the byte. Storing the nine products coefficient-major is the
     /// shape this replaced: it needed nine dependent scalar loads per pixel and measured 2× slower.</para>
     /// </summary>
-    internal static PixelBuffer ApplyMatrixRgba8(PixelView source, IPixelPool? pool, ReadOnlySpan<float> m)
+    internal static WorkingBuffer ApplyMatrixRgba8(PixelView source, IPixelPool? pool, ReadOnlySpan<float> m)
     {
         var records = _matrixRecords ??= new float[3 * 256 * 4];
         const float scale = 1f / 255f;
@@ -126,7 +126,7 @@ internal static class PointLut
         // Grayscale builds three identical matrix rows; the record lanes are then identical too, so the
         // general path already produces the same byte three times. That used to be a separate scalar
         // branch — it is now just the vector path, which is why it no longer needs special-casing.
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         var view = destination.View;
         RowParallel.For(source.Width, source.Height, (start, end) =>
         {

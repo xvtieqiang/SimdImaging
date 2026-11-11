@@ -95,13 +95,13 @@ public static class PaletteQuantizer
     }
 
     /// <summary>Maps every pixel to its nearest palette colour (squared sRGB distance), keeping alpha.</summary>
-    public static PixelBuffer Apply(PixelView source, ColorPalette palette, IPixelPool? pool = null)
+    public static WorkingBuffer Apply(PixelView source, ColorPalette palette, IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(palette);
 
         var lookup = BuildLookup(palette);
 
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         if (source.Format == WorkingFormat.Rgba8)
         {
             for (var y = 0; y < source.Height; y++)
@@ -205,7 +205,7 @@ public static class PaletteQuantizer
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="NotSupportedException">An ordered (Bayer) kernel: it assumes a uniform step, which an
     /// arbitrary palette does not have.</exception>
-    public static PixelBuffer Dither(PixelView source, ColorPalette palette,
+    public static WorkingBuffer Dither(PixelView source, ColorPalette palette,
         DitherKernel kernel = DitherKernel.FloydSteinberg, float maxError = 16f / 255f, IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(palette);
@@ -226,7 +226,7 @@ public static class PaletteQuantizer
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
 
         // One ring slot per row the kernel can reach: Stucki writes two rows down, so a single "next" buffer
         // is not enough.

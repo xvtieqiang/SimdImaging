@@ -29,7 +29,7 @@ public static class IccTransformOps
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="InvalidDataException">A profile is malformed or not an RGB matrix/TRC profile.</exception>
     /// <exception cref="NotSupportedException">A profile describes colour with a lookup table.</exception>
-    public static PixelBuffer Transform(PixelView source, ReadOnlySpan<byte> sourceProfile,
+    public static WorkingBuffer Transform(PixelView source, ReadOnlySpan<byte> sourceProfile,
         ReadOnlySpan<byte> destinationProfile = default, IPixelPool? pool = null)
     {
         var from = sourceProfile.IsEmpty ? null : Parse(sourceProfile);
@@ -39,7 +39,7 @@ public static class IccTransformOps
 
         var width = source.Width;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, source.Height, source.Format, pool);
         var row = new float[stride];
 
         for (var y = 0; y < source.Height; y++)

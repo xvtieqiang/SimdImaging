@@ -18,7 +18,7 @@ public static class BackgroundOps
     /// <param name="feather">Width of the band above the tolerance over which the replacement fades in.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">A distance is negative.</exception>
-    public static PixelBuffer ReplaceBackground(PixelView source, RgbaColor background, RgbaColor replacement,
+    public static WorkingBuffer ReplaceBackground(PixelView source, RgbaColor background, RgbaColor replacement,
         float tolerance = 0.1f, float feather = 0.05f, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(tolerance);
@@ -26,7 +26,7 @@ public static class BackgroundOps
 
         var width = source.Width;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, source.Height, source.Format, pool);
         var row = new float[stride];
 
         var backgroundR = background.R / 255f;

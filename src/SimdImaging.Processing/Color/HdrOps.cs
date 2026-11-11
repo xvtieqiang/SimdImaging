@@ -43,7 +43,7 @@ public static class HdrOps
     /// <param name="targetLuminance">Middle grey the auto exposure aims for.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">The white point or target is out of range.</exception>
-    public static PixelBuffer ToneMap(PixelView source, ToneMapCurve curve = ToneMapCurve.Aces, float exposure = 0f,
+    public static WorkingBuffer ToneMap(PixelView source, ToneMapCurve curve = ToneMapCurve.Aces, float exposure = 0f,
         float whitePoint = 1f, bool autoExposure = false, float targetLuminance = 0.18f, IPixelPool? pool = null)
     {
         if (!(whitePoint > 0f) || float.IsInfinity(whitePoint))
@@ -64,7 +64,7 @@ public static class HdrOps
         var scale = MathF.Pow(2f, stops);
         var width = source.Width;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, source.Height, source.Format, pool);
         var row = new float[stride];
 
         for (var y = 0; y < source.Height; y++)
@@ -96,8 +96,8 @@ public static class HdrOps
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentException">The images differ in size.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The headroom or weight is out of range.</exception>
-    public static PixelBuffer ApplyGainMap(PixelView source, PixelView gainMap, float headroom = 4f, float weight = 1f,
-        IPixelPool? pool = null)
+    public static WorkingBuffer ApplyGainMap(PixelView source, PixelView gainMap, float headroom = 4f,
+        float weight = 1f, IPixelPool? pool = null)
     {
         if (source.Width != gainMap.Width || source.Height != gainMap.Height)
             throw new ArgumentException($"Gain map is {gainMap.Width}x{gainMap.Height}, base is {source.Width}x{source.Height}.");
@@ -108,7 +108,7 @@ public static class HdrOps
 
         var width = source.Width;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, source.Height, WorkingFormat.Rgba32F, pool);
+        var destination = WorkingBuffer.Rent(width, source.Height, WorkingFormat.Rgba32F, pool);
 
         var row = new float[stride];
         var gainRow = new float[stride];

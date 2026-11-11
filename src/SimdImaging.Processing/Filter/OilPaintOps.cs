@@ -22,7 +22,7 @@ public static class OilPaintOps
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">The radius is not positive or <paramref name="levels"/> is
     /// outside 2..256.</exception>
-    public static PixelBuffer OilPaint(PixelView source, int radius = 2, int levels = 20, IPixelPool? pool = null)
+    public static WorkingBuffer OilPaint(PixelView source, int radius = 2, int levels = 20, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
         if (levels is < 2 or > 256)
@@ -33,7 +33,7 @@ public static class OilPaintOps
         var stride = width * 4;
         var window = radius * 2 + 1;
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
 
         // Bands are independent: a pixel's answer depends only on its own window, and the ring below is a cache,

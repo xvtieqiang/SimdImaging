@@ -23,10 +23,10 @@
 
 | 编号   | 算子               | 语义要点                                              | 实现策略（算法 + SIMD）                                                                                              | 确定性 | 阶段 |
 | ---- | ---------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --- | -- |
-| IO-1 | Load             | 路径/字节/流；嗅探与解码全交 SimdCodecs                        | 无内核。`Region` / `ScaleDenominator` / `Pool` 直接下推 `DecodeOptions`；结果经 `PixelConverter.ConvertRow` **一次**落到工作格式 | D0  | P0 |
+| IO-1 | Load             | 路径/字节/流；嗅探与解码全交 SimdCodecs                        | 无内核。`Region` / `ScaleDenominator` / `Pool` / `ApplyOrientation` 直接下推 `DecodeOptions`；`PreferNativeScale` 先用 `TryGetClosestSize` 协商档位；流入口整段缓冲后走字节路径；结果经 `PixelConverter.ConvertRow` **一次**落到工作格式 | D0  | P0 |
 | IO-2 | Save             | 目标格式协商：`GetClosestInputFormat` → 目标 `PixelFormat` | 无内核。tight 缓冲直接 `RasterImage.Wrap` 零拷贝；非 tight 显式复制并计数                                                        | D0  | P0 |
 | IO-3 | Transcode        | 同格式重写，只换元数据                                       | 字节搬运 + 元数据块替换，不解像素                                                                                           | D0  | P1 |
-| IO-4 | AutoOrient       | EXIF Orientation 1–8 → 8 种转置组合                    | 委托 GEO-9/10/11/12，一次查表                                                                                       | D0  | P0 |
+| IO-4 | AutoOrient       | EXIF Orientation 1–8 → 8 种转置组合                    | 委托 GEO-9/10/11/12，一次查表。`LoadOptions.ApplyOrientation` 能让解码器直接出正片，省掉这一趟 | D0  | P0 |
 | IO-5 | Frames           | 枚举/选取/丢弃帧，保留 `Duration`                           | 帧数组操作，无像素拷贝                                                                                                  | D0  | P1 |
 | IO-6 | AnimationCompose | GIF disposal 0–3 / WebP blend → 画布合成              | 逐帧 SourceOver，复用 CMP-3                                                                                       | D0  | P2 |
 | IO-7 | MetadataTransfer | Exif / XMP / ICC / cICP / mDCV / cLLI 透传与覆盖       | 无内核。写回走各格式 writer 的选项参数                                                                                      | D0  | P0 |
@@ -53,7 +53,7 @@
 | GEO-15 | Affine           | `Matrix3x2` + 采样器 + 边界模式                        | 通用逆矩阵；可选 2×2 超采样抗锯齿                                                                              | D1    | P1                                         |
 | GEO-16 | Projective       | 3×3 单应                                          | 按行递推 1/w（避免逐像素除法），再乘回                                                                            | D1    | P2                                         |
 | GEO-17 | Tile             | 平铺 / 镜像平铺                                       | 目标行按周期复制源行块，行宽整数倍时整块 `memcpy`                                                                    | D0    | P1                                         |
-| GEO-18 | CustomWarp       | 用户提供 `ISampler`                                 | 逐像素接口调用（非热路径）；另提供非泛型委托重载，AOT 安全                                                                  | D1    | P2                                         |
+| GEO-18 | CustomWarp       | 用户提供的坐标映射（委托）                                 | 逐像素委托调用（非热路径）。**接口式 `ISampler` 未提供**：委托就是 AOT 安全形式，再加接口只多一层虚调用（`known-gaps.md`）                                            | D1    | P2                                         |
 | GEO-19 | RoundCorners     | 圆角/圆形裁剪，带抗锯齿                                    | 解析覆盖率或 4×4 超采样生成 mask，乘 alpha；覆盖率按行 SIMD                                                         | D0    | P1                                         |
 | GEO-20 | Sample           | 单点/多点坐标采样（最近/双线性）                               | 抽出的公共采样器，供 GEO-13/15/16/18 复用                                                                    | D1    | P1                                         |
 
@@ -197,7 +197,7 @@
 
 | 能力族       | ImageSharp 4.1.x（代表）                                                                                                                                       | SimdImaging 侧            | 差异说明                                                                     |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------ |
-| 加载/保存/格式  | `Image.Load/Save`；JPEG/PNG/GIF/BMP/TGA/TIFF/WebP/PBM/QOI/ICO/CUR/EXR。4.0 加 ICO/CUR 解码、渐进式 JPEG 编码、JPEG COM 标记；4.1 加 ANI、CgBI PNG                           | IO-1/2                   | 格式面由 SimdCodecs 决定：多出 HEIF、JPEG2000、JBIG2、PNM 全族（PAM/PFM）；少 EXR、TGA、CgBI |
+| 加载/保存/格式  | `Image.Load/Save`；JPEG/PNG/GIF/BMP/TGA/TIFF/WebP/PBM/QOI/ICO/CUR/EXR。4.0 加 ICO/CUR 解码、渐进式 JPEG 编码、JPEG COM 标记；4.1 加 ANI、CgBI PNG                           | IO-1/2                   | 格式面由 SimdCodecs 决定：多出 JPEG2000、JBIG2、PNM 全族（PAM/PFM）；少 EXR、TGA、CgBI。HEIF 是独立包 `Sdcb.SimdCodecs.Heif`，需 `ImageCodecs.Register` 手动注册，本库不默认接入        |
 | 缩放        | `Resize` + `KnownResamplers`（4.1.3 公开 16 个名称）                                                                                                             | GEO-5                    | **本库仅 5 种已实现**（设计 16 种未齐），此项为功能缺口；另有 1/8 缩放解码下推 |
 | 裁剪/画布     | `Crop` `Pad` `EntropyCrop` `BackgroundColor` `ResizeMode`                                                                                                  | GEO-1/2/4/6/8 + COL-35   | 覆盖                                                                       |
 | 旋转/翻转     | `Rotate` `RotateFlip` `Flip` `AutoOrient`                                                                                                                  | GEO-9/10/11/12 + IO-4    | 覆盖                                                                       |
@@ -220,7 +220,7 @@
 | HDR       | 公开处理器集合中未见 PQ/HLG 语义级处理（待复核）                                                                                                                               | COL-27/28/29             | PQ/HLG 色调映射 + Ultra HDR gain map                                         |
 | 扩展性       | `PixelRowOperation` 行委托、`Filter` 组合、`IImageProcessor`                                                                                                      | `IImageOp` + 非泛型行委托      | 我们多"算子声明 halo 与源矩形"，因此可分块                                                |
 | AOT       | 4.1 起为像素格式与 ICO/CUR/QOI 加 AOT 种子；**实测 PNG+Rgba32 完整编解码链路可 NativeAOT publish（0 警告、运行正常）**，其余格式/像素格式组合待逐项核实 | 构建门禁 + 双基线档位断言 | 从第一个提交起零 trim/AOT 警告；参照实现此链路同样可用，此项不宣称领先 |
-| 内存        | `MemoryAllocator` 整图分配（4.1 起可配置受限）                                                                                                                         | PixelBuffer + 池 + 行带     | 目标稳态 0 分配；实测 7–39 KiB/op，8K 峰值内存 4 场景中 3 个达标（`gaussian-blur` 超 7.1%），见 `known-gaps.md` |
+| 内存        | `MemoryAllocator` 整图分配（4.1 起可配置受限）                                                                                                                         | WorkingBuffer + 池 + 行带     | 目标稳态 0 分配；实测 7–39 KiB/op，8K 峰值内存 4 场景中 3 个达标（`gaussian-blur` 超 7.1%），见 `known-gaps.md` |
 | 许可        | Six Labors Split License 1.0（商用按条款购买）                                                                                                                      | MIT（M0 落 LICENSE）        | 选型事实，不是技术优势                                                              |
 
 **不覆盖项**（写进 `known-gaps.md`）：文字渲染与排版、IPTC 语义编辑、GPU 后端、EXIF 编辑器 UI。

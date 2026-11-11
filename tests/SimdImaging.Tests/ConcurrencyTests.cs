@@ -111,7 +111,7 @@ public class ConcurrencyTests
     }
 
     /// <summary>SHA-256 of the output bytes — the same comparison the vector-vs-scalar suite uses.</summary>
-    private static string Hash(PixelBuffer buffer)
+    private static string Hash(WorkingBuffer buffer)
     {
         using (buffer)
             return Convert.ToHexString(SHA256.HashData(buffer.View.Span));

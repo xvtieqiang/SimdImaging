@@ -41,6 +41,12 @@ public sealed partial class Image
     /// <summary>
     /// Re-encodes a file, optionally replacing its metadata blocks on the way through. This is a decode and an
     /// encode: the compressed stream is not passed through, so quality settings apply.
+    /// <para>
+    /// The decode is full fidelity and as stored: no <see cref="LoadOptions"/> apply, so nothing is scaled or
+    /// turned. The Exif Orientation tag travels with the metadata, which is what a re-encode has to do — the
+    /// output displays the same way as the input. To bake the orientation in, load with
+    /// <see cref="LoadOptions.ApplyOrientation"/> and save that instead.
+    /// </para>
     /// </summary>
     /// <param name="sourcePath">The file to read.</param>
     /// <param name="destinationPath">The file to write; its extension picks the format.</param>

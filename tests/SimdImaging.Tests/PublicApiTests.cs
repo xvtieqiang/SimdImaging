@@ -135,47 +135,62 @@ public class PublicApiTests
             : string.Empty;
 
     private static string Parameters(MethodBase method) =>
-        string.Join(", ", method.GetParameters().Select(p => $"{Signature(p.ParameterType, () => Nullability.Create(p).ReadState)} {p.Name}"));
+        string.Join(", ", method.GetParameters()
+            .Select(p => $"{Signature(p.ParameterType, () => Nullability.Create(p))} {p.Name}"));
 
     private static string Returns(MethodInfo method) =>
-        Signature(method.ReturnType, () => Nullability.Create(method.ReturnParameter).ReadState);
+        Signature(method.ReturnType, () => Nullability.Create(method.ReturnParameter));
 
-    /// <summary>Annotates a reference type with <c>?</c> when it is nullable; a nullable value type carries its
-    /// own <c>?</c> through <see cref="Friendly"/>.</summary>
-    private static string Signature(Type type, Func<NullabilityState> state)
+    /// <summary>Annotates a type with <c>?</c> wherever the nullability metadata says nullable — at the top level
+    /// and inside generic arguments and array elements. Without the recursion a change from <c>Task&lt;Image?&gt;</c>
+    /// to <c>Task&lt;Image&gt;</c> would not appear in the snapshot at all, which makes it a gate that does not gate.
+    /// </summary>
+    private static string Signature(Type type, Func<NullabilityInfo?> nullability)
     {
-        var name = Friendly(type);
-
-        // A nullable value type already reads as T?, and a by-ref has no nullability of its own.
-        if (type.IsValueType || type.IsByRef)
-            return name;
-
+        NullabilityInfo? info;
         try
         {
-            return state() == NullabilityState.Nullable ? name + "?" : name;
+            info = nullability();
         }
         catch (InvalidOperationException)
         {
-            return name;
+            info = null;
         }
+
+        return Annotated(type, info);
     }
 
-    private static string Friendly(Type type)
+    /// <summary>A type name plus <c>?</c> when it is a nullable reference type. A nullable value type carries its
+    /// own <c>?</c> through <see cref="Friendly"/>, and a by-ref has no nullability of its own.</summary>
+    private static string Annotated(Type type, NullabilityInfo? nullability)
+    {
+        var name = Friendly(type, nullability);
+        if (type.IsValueType || type.IsByRef || nullability is null)
+            return name;
+
+        return nullability.ReadState == NullabilityState.Nullable ? name + "?" : name;
+    }
+
+    private static string Friendly(Type type, NullabilityInfo? nullability = null)
     {
         if (type.IsByRef)
-            return Friendly(type.GetElementType()!) + "&";
+            return Friendly(type.GetElementType()!, nullability?.ElementType) + "&";
 
         if (type.IsArray)
-            return Friendly(type.GetElementType()!) + "[]";
+            return Friendly(type.GetElementType()!, nullability?.ElementType) + "[]";
 
         if (type.IsGenericType)
         {
             var definition = type.GetGenericTypeDefinition();
+            var arguments = type.GetGenericArguments();
             if (definition == typeof(Nullable<>))
-                return Friendly(type.GetGenericArguments()[0]) + "?";
+                return Friendly(arguments[0], nullability?.GenericTypeArguments.ElementAtOrDefault(0)) + "?";
 
             var name = (definition.FullName ?? definition.Name).Split('`')[0];
-            return $"{name}<{string.Join(", ", type.GetGenericArguments().Select(Friendly))}>";
+            var formatted = arguments.Select((argument, index) =>
+                Annotated(argument, nullability?.GenericTypeArguments.ElementAtOrDefault(index)));
+
+            return $"{name}<{string.Join(", ", formatted)}>";
         }
 
         return type.FullName ?? type.Name;

@@ -135,7 +135,7 @@ public static class HistogramOps
     /// Equalizes each colour channel through its cumulative distribution (alpha untouched). A channel with a
     /// single occupied level is left as it is — scaling it would turn a flat grey image black.
     /// </summary>
-    public static PixelBuffer Equalize(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer Equalize(PixelView source, IPixelPool? pool = null)
     {
         var total = (long)source.Width * source.Height;
         var luts = new byte[3][];
@@ -151,7 +151,7 @@ public static class HistogramOps
             for (var channel = 0; channel < 3; channel++)
                 luts[channel] = BuildLut(histograms[channel], total);
 
-            var destinationFast = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+            var destinationFast = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
             var view = destinationFast.View;
             var lut0 = luts[0];
             var lut1 = luts[1];
@@ -182,7 +182,7 @@ public static class HistogramOps
             luts[channel] = BuildLut(histogram, total);
         }
 
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
 
         var rowFloats = new float[source.Width * 4];
         for (var y = 0; y < source.Height; y++)

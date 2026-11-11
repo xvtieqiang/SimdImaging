@@ -15,10 +15,10 @@ internal sealed record ChainStep(
     int HaloX,
     int HaloY,
     // Single-input body. Null when the step composites, in which case OverlayOp is the body instead.
-    Func<PixelView, IReadOnlyDictionary<string, double>, PixelBuffer>? Op,
+    Func<PixelView, IReadOnlyDictionary<string, double>, WorkingBuffer>? Op,
     // Composite body: backdrop view, a demo layer sized to match it, parameters. Full-frame, no resampling.
     // Views, not Images: the plan hands kernels a view, and Blend.Apply takes views directly.
-    Func<PixelView, PixelView, IReadOnlyDictionary<string, double>, PixelBuffer>? OverlayOp = null,
+    Func<PixelView, PixelView, IReadOnlyDictionary<string, double>, WorkingBuffer>? OverlayOp = null,
     // Which synthetic layer to generate when the recipe is composited ("mark" / "glow" / "alpha").
     string? OverlayDemo = null);
 

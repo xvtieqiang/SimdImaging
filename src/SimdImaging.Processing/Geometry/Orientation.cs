@@ -15,12 +15,12 @@ public static class Orientation
     /// <param name="anti">Mirror across the anti-diagonal instead: destination (x, y) reads
     /// <c>(width-1-y, height-1-x)</c>.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer Transpose(PixelView source, bool anti = false, IPixelPool? pool = null)
+    public static WorkingBuffer Transpose(PixelView source, bool anti = false, IPixelPool? pool = null)
     {
         var sourceWidth = source.Width;
         var sourceHeight = source.Height;
         var bytesPerPixel = source.Format.BytesPerPixel();
-        var destination = PixelBuffer.Rent(sourceHeight, sourceWidth, source.Format, pool);
+        var destination = WorkingBuffer.Rent(sourceHeight, sourceWidth, source.Format, pool);
 
         for (var y = 0; y < sourceHeight; y++)
         {
@@ -45,7 +45,7 @@ public static class Orientation
     /// <param name="source">The pixels.</param>
     /// <param name="orientation">The EXIF / TIFF orientation, 1..8.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer AutoOrient(PixelView source, ImageOrientation orientation, IPixelPool? pool = null)
+    public static WorkingBuffer AutoOrient(PixelView source, ImageOrientation orientation, IPixelPool? pool = null)
     {
         if (orientation == ImageOrientation.Normal)
             return Transforms.Copy(source, pool);
@@ -58,7 +58,7 @@ public static class Orientation
         var swapped = (int)orientation >= 5;
         var width = swapped ? sourceHeight : sourceWidth;
         var height = swapped ? sourceWidth : sourceHeight;
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
 
         for (var y = 0; y < height; y++)
         {
@@ -116,7 +116,7 @@ public static class Orientation
     /// <param name="quarterTurns">Clockwise quarter turns, taken modulo 4.</param>
     /// <param name="flipHorizontal">Mirror the result left-to-right.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer RotateFlip(PixelView source, int quarterTurns, bool flipHorizontal,
+    public static WorkingBuffer RotateFlip(PixelView source, int quarterTurns, bool flipHorizontal,
         IPixelPool? pool = null)
     {
         var turns = ((quarterTurns % 4) + 4) % 4;
@@ -127,7 +127,7 @@ public static class Orientation
         var swapped = turns % 2 == 1;
         var width = swapped ? sourceHeight : sourceWidth;
         var height = swapped ? sourceWidth : sourceHeight;
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
 
         for (var y = 0; y < height; y++)
         {

@@ -23,7 +23,7 @@ public class RowBandTests
         data.CopyTo(image.WritablePixels);
         var view = image[0].Pixels.View;
 
-        var cases = new (string Name, Func<PixelView, PixelBuffer> Run)[]
+        var cases = new (string Name, Func<PixelView, WorkingBuffer> Run)[]
         {
             ("Invert (LUT)", v => PointOps.Invert(v)),
             ("Brightness (LUT)", v => PointOps.Brightness(v, 0.17f)),

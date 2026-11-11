@@ -128,7 +128,7 @@ public static class Resample
     /// the point at which the working set would break the documented limit, so it throws instead of growing.</summary>
     private const long MaxScratchBytes = 512L << 20;
 
-    public static PixelBuffer Resize(PixelView source, int width, int height, Resampler resampler, IPixelPool? pool)
+    public static WorkingBuffer Resize(PixelView source, int width, int height, Resampler resampler, IPixelPool? pool)
     {
         if (width <= 0)
             throw new ArgumentOutOfRangeException(nameof(width), width, "Width must be positive.");
@@ -150,7 +150,7 @@ public static class Resample
         if (resampler == Resampler.Nearest && source.Format == WorkingFormat.Rgba8
             && TryNearestTap(weightsX, out var tapX) && TryNearestTap(weightsY, out var tapY))
         {
-            var nearest = PixelBuffer.Rent(width, height, source.Format, pool);
+            var nearest = WorkingBuffer.Rent(width, height, source.Format, pool);
             var nearestView = nearest.View;
             var startsX = weightsX.Starts;
             var startsY = weightsY.Starts;
@@ -222,7 +222,7 @@ public static class Resample
         }
 
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
 
         var budgetBytes = ScratchBudgetBytes;

@@ -70,7 +70,7 @@ public static class Canvas
     /// <param name="background">Colour for the padding.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
-    public static PixelBuffer Resize(PixelView source, int width, int height, Resampler resampler = Resampler.Bicubic,
+    public static WorkingBuffer Resize(PixelView source, int width, int height, Resampler resampler = Resampler.Bicubic,
         ResizeMode mode = ResizeMode.BoxPad, Anchor anchor = Anchor.Centre, RgbaColor background = default,
         IPixelPool? pool = null)
     {
@@ -108,7 +108,7 @@ public static class Canvas
     /// <param name="background">Colour for the padding.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
-    public static PixelBuffer ResizeCanvas(PixelView source, int width, int height, Anchor anchor = Anchor.Centre,
+    public static WorkingBuffer ResizeCanvas(PixelView source, int width, int height, Anchor anchor = Anchor.Centre,
         RgbaColor background = default, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
@@ -127,13 +127,14 @@ public static class Canvas
     /// <param name="mirror">Flip every other tile horizontally and vertically.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
-    public static PixelBuffer Tile(PixelView source, int width, int height, bool mirror = false, IPixelPool? pool = null)
+    public static WorkingBuffer Tile(PixelView source, int width, int height, bool mirror = false,
+        IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
 
         var bytesPerPixel = source.Format.BytesPerPixel();
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
 
         for (var y = 0; y < height; y++)
         {
@@ -167,7 +168,7 @@ public static class Canvas
     /// <param name="tolerance">Largest per-channel difference still considered "the same", 0..1.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="tolerance"/> is negative.</exception>
-    public static PixelBuffer Trim(PixelView source, float tolerance = 0f, IPixelPool? pool = null)
+    public static WorkingBuffer Trim(PixelView source, float tolerance = 0f, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(tolerance);
 
@@ -207,7 +208,7 @@ public static class Canvas
     /// <param name="radius">Corner radius in pixels; at half the short side the result is a circle.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="radius"/> is not positive.</exception>
-    public static PixelBuffer RoundCorners(PixelView source, float radius, IPixelPool? pool = null)
+    public static WorkingBuffer RoundCorners(PixelView source, float radius, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
 
@@ -222,11 +223,11 @@ public static class Canvas
     /// Composites the source into a new canvas at the given offset. The offset may be negative: that is what a
     /// crop is, and keeping one code path means pad and crop cannot disagree about rounding.
     /// </summary>
-    private static PixelBuffer Place(PixelView source, int width, int height, int offsetX, int offsetY,
+    private static WorkingBuffer Place(PixelView source, int width, int height, int offsetX, int offsetY,
         RgbaColor background, IPixelPool? pool)
     {
         var bytesPerPixel = source.Format.BytesPerPixel();
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
 
         Span<byte> pixel = stackalloc byte[16];
         Transforms.WriteColor(background, source.Format, pixel[..bytesPerPixel]);

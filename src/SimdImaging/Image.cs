@@ -73,7 +73,7 @@ public sealed partial class Image : IDisposable
     /// </summary>
     public static Image Create(int width, int height, WorkingFormat format, IPixelPool? pool = null)
     {
-        var buffer = PixelBuffer.Rent(width, height, format, pool, clear: true);
+        var buffer = WorkingBuffer.Rent(width, height, format, pool, clear: true);
         var info = new ImageInfo(width, height, 4, format.ToSampleFormat());
         return new Image([new ImageFrame(buffer, null)], info, format, ColorEncoding.AssumedSrgb, ImageMetadata.Empty);
     }
@@ -109,10 +109,10 @@ public sealed partial class Image : IDisposable
     }
 
     /// <summary>Turns an operator's output buffer into a new image with this image's metadata and colour signalling.</summary>
-    internal Image ReplaceBuffer(PixelBuffer buffer) => ReplaceBuffer(buffer, Metadata, Info.Orientation);
+    internal Image ReplaceBuffer(WorkingBuffer buffer) => ReplaceBuffer(buffer, Metadata, Info.Orientation);
 
     /// <summary>Same, with the metadata and orientation replaced — what a transcode or an auto-orient needs.</summary>
-    internal Image ReplaceBuffer(PixelBuffer buffer, ImageMetadata metadata, ImageOrientation orientation)
+    internal Image ReplaceBuffer(WorkingBuffer buffer, ImageMetadata metadata, ImageOrientation orientation)
     {
         // The buffer's own format, not the source's: an operator that returns a different working format
         // (colour-space conversion returns floats) must not be relabelled as the input's.

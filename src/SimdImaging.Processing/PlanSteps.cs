@@ -16,7 +16,7 @@ public static class PlanSteps
 {
     /// <summary>Adapts a point operator — one whose output pixel depends only on the same input pixel.</summary>
     /// <param name="operator">Runs the operator over a view and returns a new buffer the adapter disposes.</param>
-    public static OpKernel Point(Func<PixelView, PixelBuffer> @operator)
+    public static OpKernel Point(Func<PixelView, WorkingBuffer> @operator)
     {
         ArgumentNullException.ThrowIfNull(@operator);
 
@@ -45,7 +45,7 @@ public static class PlanSteps
     /// <param name="operator">Runs the operator over a view and returns a new buffer the adapter disposes.</param>
     /// <param name="haloX">Columns of context the operator reads.</param>
     /// <param name="haloY">Rows of context the operator reads.</param>
-    public static OpKernel Neighborhood(Func<PixelView, PixelBuffer> @operator, int haloX, int haloY)
+    public static OpKernel Neighborhood(Func<PixelView, WorkingBuffer> @operator, int haloX, int haloY)
     {
         ArgumentNullException.ThrowIfNull(@operator);
         ArgumentOutOfRangeException.ThrowIfNegative(haloX);
@@ -73,7 +73,7 @@ public static class PlanSteps
 
     /// <summary>Adapts an operator that needs the whole image (histogram, quantise, CLAHE).</summary>
     /// <param name="operator">Runs the operator over the full view.</param>
-    public static OpKernel Global(Func<PixelView, PixelBuffer> @operator)
+    public static OpKernel Global(Func<PixelView, WorkingBuffer> @operator)
     {
         ArgumentNullException.ThrowIfNull(@operator);
 

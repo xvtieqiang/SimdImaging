@@ -7,9 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Contracts only. Referenced from source during development; products consume the
-         Sdcb.SimdCodecs 2.0.x package once it ships. -->
-    <ProjectReference Include="..\..\..\SimdCodecs\src\Sdcb.SimdCodecs.Abstractions\Sdcb.SimdCodecs.Abstractions.csproj" />
+    <!-- Contracts only: PixelFormat / SampleFormat / ImageInfo. Version lives in
+         Directory.Packages.props and must match Sdcb.SimdCodecs exactly. -->
+    <PackageReference Include="Sdcb.SimdCodecs.Abstractions" />
   </ItemGroup>
 
 </Project>

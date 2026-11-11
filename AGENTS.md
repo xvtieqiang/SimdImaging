@@ -31,8 +31,12 @@ Not in scope: codecs (SimdCodecs owns them), text rendering, GPU backends.
   codecs, and Abstractions must stay dependency-light. Operators take `PixelView`, never `Image`, so
   Processing does not need the facade.
 - Dependency direction: `Abstractions ← Processing ← SimdImaging`. Never the reverse.
-- The codec layer is referenced **from source** (`SimdCodecs/`, git-ignored) while 2.0 is unreleased; shipped
-  packages will depend on `Sdcb.SimdCodecs` 2.0.x from NuGet.
+- The codec layer is a **NuGet dependency**, never a source checkout: `Sdcb.SimdCodecs` 2.0.x, version pinned
+  in `Directory.Packages.props` and kept equal to `Sdcb.SimdCodecs.Abstractions`. No `ProjectReference` into
+  another repository.
+- Our owned pixel buffer is **`WorkingBuffer`**, deliberately not `PixelBuffer`: `Sdcb.SimdCodecs.Abstractions`
+  2.0 ships a `PixelBuffer` of its own (native layout, codec side) and every file that touches pixels imports
+  both namespaces. The names differ, so no alias directives and no qualification noise.
 - No shipped package uses another's internals; shared code is source-shared under `src/Shared`.
 - **PublicAPI analyzers land in M1**, not M0: the surface still moves, and locking it now would only produce
   churn. Until then, public API changes are reviewed by diff.
@@ -94,7 +98,7 @@ transcode with metadata replacement, EXIF auto-orient, metadata transfer, multi-
 18 W3C blend modes,
 in-place fills, line/rect drawing,
 ellipse and polygon fills, and Bézier paths — coverage-antialiased fill (even-odd / non-zero) and stroke (miter / round / bevel joins, butt / round / square caps, dashes), plus path clipping.
-589 tests green. The resize passes and the Rgba8 premultiplied row read are vectorized (≈1.8–2.1× / ≈2.0–2.3×
+601 tests green. The resize passes and the Rgba8 premultiplied row read are vectorized (≈1.8–2.1× / ≈2.0–2.3×
 end to end, ranges and caveats in `benchmarks/README.md`). Since 2026-11-07 the hot paths also include
 byte-domain SIMD for `Median3x3` (16 lanes, 575 ms → 0.8 ms at 1080p), shifted-row accumulation for
 `BokehBlur` and `Convolve2D` (169/81 taps), and row-band parallelism behind `OilPaint`, `Bilateral`,

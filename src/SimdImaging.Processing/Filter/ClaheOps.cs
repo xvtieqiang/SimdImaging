@@ -24,7 +24,7 @@ public static class ClaheOps
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">A tile count is not positive or exceeds the image, or the
     /// clip limit is not positive.</exception>
-    public static PixelBuffer Clahe(PixelView source, int tilesX = 8, int tilesY = 8, float clipLimit = 3f,
+    public static WorkingBuffer Clahe(PixelView source, int tilesX = 8, int tilesY = 8, float clipLimit = 3f,
         IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tilesX);
@@ -75,7 +75,7 @@ public static class ClaheOps
 
         var luts = BuildLuts(histograms, tilesX, tilesY, width, height, clipLimit);
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
         var tileWidth = width / (float)tilesX;
         var tileHeight = height / (float)tilesY;

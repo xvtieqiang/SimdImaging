@@ -12,14 +12,14 @@ public static class Transforms
 {
     /// <summary>Copies a region out, row by row, keeping the working format.</summary>
     /// <exception cref="ArgumentException"><paramref name="region"/> does not lie inside the source.</exception>
-    public static PixelBuffer Crop(PixelView source, PixelRect region, IPixelPool? pool = null)
+    public static WorkingBuffer Crop(PixelView source, PixelRect region, IPixelPool? pool = null)
     {
         if (!region.FitsIn(source.Width, source.Height))
             throw new ArgumentException($"The region {region} does not fit in {source.Width}x{source.Height}.", nameof(region));
 
         var bytesPerPixel = source.Format.BytesPerPixel();
         var rowBytes = region.Width * bytesPerPixel;
-        var destination = PixelBuffer.Rent(region.Width, region.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(region.Width, region.Height, source.Format, pool);
         for (var y = 0; y < region.Height; y++)
         {
             source.Row(region.Y + y).Slice(region.X * bytesPerPixel, rowBytes)
@@ -30,19 +30,19 @@ public static class Transforms
     }
 
     /// <summary>Copies the whole view.</summary>
-    public static PixelBuffer Copy(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer Copy(PixelView source, IPixelPool? pool = null)
     {
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         for (var y = 0; y < source.Height; y++)
             source.Row(y).CopyTo(destination.View.Row(y));
         return destination;
     }
 
     /// <summary>Mirrors left-to-right.</summary>
-    public static PixelBuffer FlipHorizontal(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer FlipHorizontal(PixelView source, IPixelPool? pool = null)
     {
         var bytesPerPixel = source.Format.BytesPerPixel();
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
 
         // A 4-byte pixel is one uint: two million Slice/CopyTo calls become two million uint moves.
         if (source.Format == WorkingFormat.Rgba8)
@@ -73,9 +73,9 @@ public static class Transforms
     }
 
     /// <summary>Mirrors top-to-bottom.</summary>
-    public static PixelBuffer FlipVertical(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer FlipVertical(PixelView source, IPixelPool? pool = null)
     {
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         var rowBytes = source.Width * source.Format.BytesPerPixel();
         for (var y = 0; y < source.Height; y++)
             source.Row(source.Height - 1 - y).Slice(0, rowBytes).CopyTo(destination.View.Row(y));
@@ -109,10 +109,10 @@ public static class Transforms
         });
     }
 
-    public static PixelBuffer Rotate90(PixelView source, bool clockwise, IPixelPool? pool = null)
+    public static WorkingBuffer Rotate90(PixelView source, bool clockwise, IPixelPool? pool = null)
     {
         var bytesPerPixel = source.Format.BytesPerPixel();
-        var destination = PixelBuffer.Rent(source.Height, source.Width, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Height, source.Width, source.Format, pool);
 
         // One move per pixel, whatever the pixel width is: a rotate is a permutation, so it never needs to
         // look at a channel. Before this, only Rgba8 took the fast path and Rgba16 fell through to an
@@ -146,10 +146,10 @@ public static class Transforms
     }
 
     /// <summary>Rotates 180°.</summary>
-    public static PixelBuffer Rotate180(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer Rotate180(PixelView source, IPixelPool? pool = null)
     {
         var bytesPerPixel = source.Format.BytesPerPixel();
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
 
         if (source.Format == WorkingFormat.Rgba8)
         {
@@ -179,7 +179,7 @@ public static class Transforms
     }
 
     /// <summary>Grows the canvas and fills the new border with <paramref name="background"/>.</summary>
-    public static PixelBuffer Pad(PixelView source, int left, int top, int right, int bottom,
+    public static WorkingBuffer Pad(PixelView source, int left, int top, int right, int bottom,
         RgbaColor background, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(left);
@@ -190,7 +190,7 @@ public static class Transforms
         var width = checked(source.Width + left + right);
         var height = checked(source.Height + top + bottom);
         var bytesPerPixel = source.Format.BytesPerPixel();
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
 
         Span<byte> pixel = stackalloc byte[16];
         WriteColor(background, source.Format, pixel[..bytesPerPixel]);

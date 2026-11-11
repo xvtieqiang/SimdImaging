@@ -12,7 +12,7 @@ public static class Blend
 {
     /// <summary>Blends <paramref name="overlay"/> onto <paramref name="background"/> at (<paramref name="x"/>, <paramref name="y"/>).</summary>
     /// <exception cref="ArgumentException">The overlay does not fit at that position.</exception>
-    public static PixelBuffer Apply(PixelView background, PixelView overlay, int x, int y, BlendMode mode,
+    public static WorkingBuffer Apply(PixelView background, PixelView overlay, int x, int y, BlendMode mode,
         IPixelPool? pool = null)
     {
         if (x < 0 || y < 0 || x + overlay.Width > background.Width || y + overlay.Height > background.Height)

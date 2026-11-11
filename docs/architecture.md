@@ -1,7 +1,7 @@
 # SimdImaging 架构设计（v0.1 设计稿）
 
 > 状态：**设计稿，待确认后进入 M0**。本文只定义形状与契约，不含实现。
-> 底层依赖：`Sdcb.SimdCodecs` 2.0.x（已克隆到 `SimdCodecs/`，仅作设计与对标参考，产品依赖走 NuGet）。
+> 底层依赖：`Sdcb.SimdCodecs` 2.0.x，**NuGet 包**，版本锁在 `Directory.Packages.props`。仓库不持有、也不构建任何外部源码。
 > 算子清单见 [`operators.md`](operators.md)。
 
 ---
@@ -41,7 +41,7 @@
 | 1 | 端到端吞吐 | 12 个固定场景 ≥ 4.1.3，其中 resize/模糊/合成 ≥ 1.5× | 同进程 A/B，MP/s |
 | 2 | 稳态分配 | 池化 + 计划复用后 **0 B/op** | `GC.GetAllocatedBytesForCurrentThread` |
 | 3 | 峰值内存 | 8K 图 ≤ 2.5× 单帧 | `GC.GetTotalMemory` + WorkingSet |
-| 4 | 位深保真 | 10/16 bit 全链路不塌到 8 bit | 10-bit HEIF → 16-bit 处理 → 16-bit PNG，端点误差 0 |
+| 4 | 位深保真 | 10/16 bit 全链路不塌到 8 bit | 16-bit PNG / TIFF 往返端点误差 0。原本的 10-bit HEIF 端点**测不了**：HEIF 是独立包且需手动注册，本库不接入（`known-gaps.md`） |
 | 5 | 确定性 | 四档 SIMD 逐字节一致（**设计目标**） | CI 目前只强制三档；AVX-512 档尚未实现，见 `known-gaps.md` |
 | 6 | 色彩 | ICC→ICC **与 4.1.3 对拍**，不只比"有没有" | ΔE2000 ≤ 1（矩阵/TRC），≤ 2（CLUT） |
 | 7 | AOT | 全库 NativeAOT + 零 trim 警告作为构建门禁；4.x 仍在补 AOT 种子 | publish + `warnaserror` |
@@ -54,23 +54,23 @@
 
 ## 2. 底层能力盘点（事实，非推断）
 
-读的是 `SimdCodecs/` 的 `main` 分支（HEAD `715dd99`，2026-11-05；版本族 2.0）。
+读的是已发布的 `Sdcb.SimdCodecs` **2.0.0** 包（源码提交 `3b43931`，2026-11-09；版本族 2.0）。下表"位置"列写包名与类型，**不再指向本地源码路径**——仓库里没有那份检出。
 
 ### 2.1 已有的
 
 | 能力 | 位置 | 对我们的意义 |
 |---|---|---|
-| 12 个格式族（JPEG/PNG/TIFF/WebP/GIF/BMP/ICO/QOI/PNM/JP2/JBIG2/HEIF）+ EXIF / ICC / 增益图等辅助包 + 门面 | `src/Sdcb.SimdCodecs*` | 全部编解码外包，我们一行都不写 |
+| 12 个格式族（JPEG/PNG/TIFF/WebP/GIF/BMP/ICO/QOI/PNM/JP2/JBIG2/HEIF）+ EXIF / ICC / 增益图等辅助包 + 门面 | 包 `Sdcb.SimdCodecs*` | 全部编解码外包，我们一行都不写。门面引用 12 族里的 11 个；HEIF 是独立包、需手动注册，本库不接入 |
 | `IDecodedImage`：原始通道数、8/16/float、真实位深、非预乘 | `Abstractions/IDecodedImage.cs` | 保真层的唯一入口 |
 | `PixelConverter`：16 种 `PixelFormat` 任意互转，全部有 SIMD 内核 + 标量孪生 | `Abstractions/PixelConverter.cs` | **我们绝不复刻**，边界上一次转换到位 |
 | `RasterImage.Wrap(..., IMemoryOwner<byte>)` | `Abstractions/RasterImage.cs` | 池化 buffer 可以**零拷贝**交给编码器 |
-| `DecodeOptions`：`Region`、`ScaleDenominator`(1/2–1/8)、`Pool`、`CancellationToken` | `Abstractions/DecodeOptions.cs` | 区域/缩放解码可**下推**到 codec |
+| `DecodeOptions`：`Region`、`ScaleDenominator`（任意 2 的幂）、`ApplyOrientation`、`Pool`、`CancellationToken` | `Abstractions/DecodeOptions.cs` | 区域/缩放/方向解码可**下推**到 codec |
 | `TryGetClosestSize`、`TryDecodeThumbnail`、`IPlanarImageDecoder` | 同上 | 缩略图、YCbCr 直通 |
-| `ImageDecoder` 会话 + 多帧 + 时长 | `src/Sdcb.SimdCodecs/ImageDecoder.cs` | 动图/多页的帧模型 |
+| `ImageDecoder` 会话 + 多帧 + 时长 | `Sdcb.SimdCodecs` / `ImageDecoder.cs` | 动图/多页的帧模型 |
 | `ColorEncoding`（H.273 primaries/transfer/matrix） | `Abstractions/ColorEncoding.cs` | 只**标记**，从不重算像素 |
 | `ImageMetadata`（Exif 原始块、XMP、ICC） | `Abstractions/ImageMetadata.cs` | 透传 |
-| `Sdcb.SimdCodecs.Exif`：解析 + 写回 | `src/Sdcb.SimdCodecs.Exif` | 方向、GPS、拍摄参数 |
-| `Sdcb.SimdCodecs.Color.Icc`：**只有 profile 字节**（sRGB v4） | `src/Sdcb.SimdCodecs.Color.Icc` | ICC **变换**是空白，归我们 |
+| `Sdcb.SimdCodecs.Exif`：解析 + 写回 | 包 `Sdcb.SimdCodecs.Exif` | 方向、GPS、拍摄参数 |
+| `Sdcb.SimdCodecs.Color.Icc`：**只有 profile 字节**（sRGB v4） | 包 `Sdcb.SimdCodecs.Color.Icc` | ICC **变换**是空白，归我们 |
 
 ### 2.2 没有的（= SimdImaging 的存在理由）
 
@@ -97,7 +97,7 @@ AGENTS.md 写明：JPEG 编解码、WebP 解码、PNG 编解码**已调到世界
   ├─ SimdImaging                    门面：Load / Save / Mutate / Clone / Plan
   │    ├─ SimdImaging.Drawing       P1 起：形状 / 路径 / 渐变 / 抗锯齿
   │    ├─ SimdImaging.Processing    112 个算子 + 全部 SIMD 内核
-  │    └─ SimdImaging.Abstractions  Image / PixelBuffer / IImageOp
+  │    └─ SimdImaging.Abstractions  Image / WorkingBuffer / IImageOp
   │
   ├─ 边界：一次 PixelConverter + RasterImage
   │
@@ -122,7 +122,7 @@ src/
     Kernels/    # 向量内核 + 标量孪生
     Simd/       # 档位探测与分派
     Memory/     # 池、行带、块
-  SimdImaging.Abstractions/         # 契约：PixelBuffer / PixelView / IPixelPool / IImageOp / 选项
+  SimdImaging.Abstractions/         # 契约：WorkingBuffer / PixelView / IPixelPool / IImageOp / 选项
   SimdImaging.Processing/           # M1 起：算子（Geometry/Color/Filters/Composite/Quantize/Analysis）
   SimdImaging.Drawing/              # P1 起：形状/路径；描边与路径填充 P2
   SimdImaging/                      # Image / ImageFrame / Load / Save / Encode（M0 已实现）
@@ -179,8 +179,8 @@ benchmarks/
 **① 解码 → 处理（单次转换，不产生中间 RGBA8）**
 
 ```csharp
-SimdCodecs.TryDecode(bytes, out IDecodedImage decoded, options, ct);
-// 16-bit PNG / 10-bit HEIF 直接落到 Rgba16，精度不经过 8 位
+ImageCodecs.TryDecode(bytes, out IDecodedImage decoded, options, ct);
+// 16-bit PNG / 16-bit TIFF 直接落到 Rgba16，精度不经过 8 位
 Image image = Image.FromDecoded(decoded, WorkingFormat.Rgba16, pool);
 // 内部：PixelConverter.ConvertRow(decoded.Pixels, decoded.Channels, decoded.SampleFormat,
 //                                 dst, PixelFormat.Rgba64, w * h)
@@ -191,8 +191,8 @@ Image image = Image.FromDecoded(decoded, WorkingFormat.Rgba16, pool);
 **② 处理 → 编码（池化内存直接交给 codec）**
 
 ```csharp
-// PixelBuffer 实现 IMemoryOwner<byte>，且默认 tight（stride == w*4*bpp）
-var owner = image[0].Pixels;                          // PixelBuffer : IMemoryOwner<byte>
+// WorkingBuffer 实现 IMemoryOwner<byte>，且默认 tight（stride == w*4*bpp）
+var owner = image[0].Pixels;                          // WorkingBuffer : IMemoryOwner<byte>
 var raster = RasterImage.Wrap(w, h, 4, SampleFormat.UInt8, owner);
 encoder.AddFrame(raster, ...);                        // 不再复制
 // 注意：Wrap 接管所有权 —— 之后不要再 Dispose owner，否则双重归还池。
@@ -241,10 +241,10 @@ public interface IPixelPool
     IMemoryOwner<byte> Rent(int length);   // 释放 owner 即归还：一个 owner 一条释放路径
 }
 
-public sealed class PixelBuffer : IDisposable, IMemoryOwner<byte>
+public sealed class WorkingBuffer : IDisposable, IMemoryOwner<byte>
 {
-    public static PixelBuffer Rent(int width, int height, WorkingFormat format, IPixelPool? pool = null);
-    public static PixelBuffer Wrap(IMemoryOwner<byte> owner, int width, int height, int stride, WorkingFormat format);
+    public static WorkingBuffer Rent(int width, int height, WorkingFormat format, IPixelPool? pool = null);
+    public static WorkingBuffer Wrap(IMemoryOwner<byte> owner, int width, int height, int stride, WorkingFormat format);
 
     public int Width { get; }
     public int Height { get; }
@@ -252,7 +252,7 @@ public sealed class PixelBuffer : IDisposable, IMemoryOwner<byte>
     public WorkingFormat Format { get; }
     public bool IsTight { get; }        // Stride == Width * BytesPerPixel
     public PixelView View { get; }      // 只读/读写视图，零拷贝
-    public PixelBuffer ToTight();       // 必要时才复制
+    public WorkingBuffer ToTight();      // 必要时才复制
     public bool TryCopyTo(Span<byte> destination, int stride, PixelFormat format); // 布局/位深转换，走 PixelConverter
     Memory<byte> IMemoryOwner<byte>.Memory { get; }  // 仅 tight 时可用；非 tight 抛
 }
@@ -276,7 +276,8 @@ public readonly struct PixelView   // 算子唯一认识的形态
 设计要点：
 
 - **按行给 stride，不按整块连续假设。** 所有内核签名都是 `(src, srcStride, dst, dstStride, widthPx)`，天然支持子视图与分块。
-- **`PixelBuffer` 直接实现 `IMemoryOwner<byte>`**，这是零拷贝交给 `RasterImage.Wrap` 的开关。
+- **`WorkingBuffer` 直接实现 `IMemoryOwner<byte>`**，这是零拷贝交给 `RasterImage.Wrap` 的开关。
+- **类型名叫 `WorkingBuffer`，不叫 `PixelBuffer`**：`Sdcb.SimdCodecs.Abstractions` 2.0 自带一个 `PixelBuffer`（codec 侧，native layout，按 `PixelFormat` 而非 `WorkingFormat`），而每个碰像素的文件都同时 `using` 两个命名空间。2026-11-11 从其 2.0.0 包切换时改名，而不是在每个文件写 `using` 别名——别名的代价是每个新文件都要记得加，改名只付一次。
 - 池：M0 只有 `ArrayPixelPool`（默认，`ArrayPool<byte>.Shared` 分桶）。`NativePixelPool`（`NativeMemory.AlignedAlloc`，64B 对齐）与 `NullPixelPool` 到 M1 再加——先让接口稳定，再补实现。测试里用一个计数池断言租/还各一次。
 - 池参数：`MaxRetainedBytes`（默认 256 MB）、`ClearOnReturn`（默认 false）、`PreferNativeAbove`（默认 8 MB）。
 
@@ -299,7 +300,7 @@ public sealed partial class Image : IDisposable
 
 public sealed class ImageFrame : IDisposable
 {
-    public PixelBuffer Pixels { get; }
+    public WorkingBuffer Pixels { get; }
     public TimeSpan? Duration { get; }
 }
 ```
@@ -397,7 +398,13 @@ public sealed partial class Image : IDisposable
 {
     public static Image Load(ReadOnlySpan<byte> data, LoadOptions? options = null, CancellationToken ct = default);
     public static Image Load(string path, LoadOptions? options = null, CancellationToken ct = default);
+    public static Image Load(Stream stream, LoadOptions? options = null, CancellationToken ct = default);
     public static bool TryLoad(ReadOnlySpan<byte> data, out Image? image, LoadOptions? options = null, CancellationToken ct = default);
+    public static bool TryLoad(Stream stream, out Image? image, LoadOptions? options = null, CancellationToken ct = default);
+    public static Task<Image> LoadAsync(Stream stream, LoadOptions? options = null, CancellationToken ct = default);
+    public static Task<Image> LoadAsync(string path, LoadOptions? options = null, CancellationToken ct = default);
+    public static Task<Image?> TryLoadAsync(Stream stream, LoadOptions? options = null, CancellationToken ct = default);
+    public static Task<Image?> TryLoadAsync(string path, LoadOptions? options = null, CancellationToken ct = default);
     public static void Save(Image image, string path, SaveOptions? options = null, CancellationToken ct = default);
     public static byte[] Encode(Image image, ImageFormat format, SaveOptions? options = null, CancellationToken ct = default);
 }
@@ -405,16 +412,16 @@ public sealed partial class Image : IDisposable
 public sealed record LoadOptions
 {
     public WorkingFormat? Format { get; init; }        // null：按源位深自动选 Rgba8 / Rgba16 / Rgba32F
-    public bool ApplyOrientation { get; init; }         // EXIF 方向，默认 false（与 SimdCodecs 一致：报告但不应用）
+    public bool ApplyOrientation { get; init; }         // 下推 DecodeOptions.ApplyOrientation；默认 false：报告标签、不动像素
     public PixelRect? Region { get; init; }             // 下推给 DecodeOptions
-    public int? ScaleDenominator { get; init; }         // 1/2、1/4、1/8；不支持则 NotSupportedException，不偷偷整幅解码
-    public bool PreferNativeScale { get; init; }        // true：用 TryGetClosestSize 协商最接近的
+    public int? ScaleDenominator { get; init; }         // 2 的幂；输出恒为 ⌈w/d⌉，原生没有该档时解到原生档再 box 过滤
+    public bool PreferNativeScale { get; init; }        // true：只取 codec 原生档，跳过 box 过滤（结果可能比请求的大）
     public IPixelPool? Pool { get; init; }
     public long MaxPixels { get; init; } = 1L << 28;    // 268 MPix 上限，防 OOM
 }
 ```
 
-`ScaleDenominator` 的语义严格照抄 SimdCodecs：**做不到就抛 `NotSupportedException`**，绝不静默整幅解码再缩放（那会让 1/8 快 8 倍的承诺变成谎话）。
+`ScaleDenominator` 的语义照抄 SimdCodecs 2.0：**任何 2 的幂都接受**，输出恒为 `⌈w/d⌉ × ⌈h/d⌉`；codec 能原生缩的档位（JPEG ≤8、JPEG 2000 到其分解级数）就按那一档解，差值由 `BoxDownscaler` 做掉——精确，但多一趟整图过滤。`PreferNativeScale` 是这趟过滤的开关：打开就拿 `TryGetClosestSize` 协商出的原生档，输出可能比 `⌈w/d⌉` 大，但少一趟。原生只有 1 的 codec 不参与协商——拿了等于整幅解码，每个维度都更差。
 
 ### 5.6 错误与取消契约
 
@@ -439,13 +446,13 @@ public sealed record LoadOptions
 
 ```
 Load:
-  decoded (codec 池)  ──PixelConverter 一次──►  PixelBuffer (SimdImaging 池, tight)
+  decoded (codec 池)  ──PixelConverter 一次──►  WorkingBuffer (SimdImaging 池, tight)
 处理:
   A ──op──► B ──op──► A ──op──► B     (ping-pong，2 张 scratch)
 输出:
   B 直接成为 Image 的帧 buffer（不复制）
 Save:
-  PixelBuffer(=IMemoryOwner) ──► RasterImage.Wrap ──► encoder.WriteRows
+  WorkingBuffer(=IMemoryOwner) ──► RasterImage.Wrap ──► encoder.WriteRows
 ```
 
 设计目标：稳态分配 = 0，唯一允许的分配是权重表首次构建、`PlanReport` 文本、以及用户显式调用的 `Clone/ToArray`。**2026-11-11 实测未达成**：流水线 7–39 KiB/op、Rgba16 单算子 0–15 KiB/op（见 `known-gaps.md` §「M2–M4 出口条件核验」）。
@@ -698,13 +705,13 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 | **M1 几何（已完成）** | Crop / Pad / Flip / Rotate 90·180·任意角 / Affine / Perspective / Resize（5 种采样器）/ Premultiply / Unpremultiply / Composite；SIMD 内核与四档一致性、`ProcessingPlan`、PublicAPI 快照 | ✅ 黄金测试通过、三档逐字节一致（AVX-512 档预留）；对 ImageSharp 的倍数见 `compare-4.1.3` |
 | **M2 色彩 + 滤波（功能完成）** | 35 个点算子 + LUT 字节域融合、Gaussian/Box/Median/Sobel/Unsharp、直方图与均衡、自适应二值化 | 模糊 ≥ 1.5×：**1080p 实测 1.61–1.86×，达标**（11-07）；「点算子融合后分配 = 0」：**前提不成立**——§5.4 明写跨步骤融合未实现，11-11 流水线实测 7 / 39 / 8 KiB/op，见 `known-gaps.md` §「M2–M4 出口条件核验」 |
 | **M3 量化 + 绘制（功能完成）** | Octree/Wu/Palette/WebSafe、抖动、路径与形状、18 blend + 12 Porter-Duff、渐变、水印 | 量化 PSNR：**16.61 dB**（Wu / 64 色 / 无抖动，同参数对拍，11-11）；本行未给阈值，只能记数、不能判达标。抗锯齿覆盖率：**判据未定义**（无测法、无阈值，现有测试只有 `partial > 0` 存在性断言）→ 仍不可判定 |
-| **M4 HDR/ICC/高级（功能完成）** | 传递函数、色调映射、gain map、ICC 矩阵/TRC 与 LUT、CLAHE、双边、行带流式 | 8K 峰值内存：**4 场景 0.74 / 2.68 / 1.01 / 1.01× 单帧**（单帧 126.56 MiB，2.5× = 316.4 MiB），gaussian-blur 339.0 MiB **超 7.1%**；10-bit HEIF → 16-bit PNG 端点：**无语料、无该路径测试，未出数**（`Png_Rgba16_RoundTripsByteExact` 只证 16-bit PNG 往返，不等于 HEIF 端点） |
+| **M4 HDR/ICC/高级（功能完成）** | 传递函数、色调映射、gain map、ICC 矩阵/TRC 与 LUT、CLAHE、双边、行带流式 | 8K 峰值内存：**4 场景 0.74 / 2.68 / 1.01 / 1.01× 单帧**（单帧 126.56 MiB，2.5× = 316.4 MiB），gaussian-blur 339.0 MiB **超 7.1%**；10-bit HEIF → 16-bit PNG 端点：**测不了**——HEIF 未接入、也无可编解码语料，未出数（`Png_Rgba16_RoundTripsByteExact` 只证 16-bit PNG 往返，不等于 HEIF 端点） |
 | **M5 验收** | 12 场景基准报告、分配报告、AOT 报告、`known-gaps.md` 定稿 | §1.3 六条全部出数，输的条目写清原因 |
 
 > **状态口径**：M2–M4 的功能（算子、测试、公开 API）都已落地；上表「出口条件」是当初写进设计的验收标准。
 > 2026-11-11 补测后：M2 模糊、M3 量化 PSNR（已出数但无阈值可判）、M4 的 8K 峰值内存有了实数
 > （见 `known-gaps.md` §「M2–M4 出口条件核验」），其中 8K `gaussian-blur` **未达标**；M2 的「融合后分配 = 0」
-> 因跨步骤融合未实现而**前提不成立**，M3 抗锯齿覆盖率（判据未定义）与 M4 的 HEIF 端点（无语料）仍无法出数。
+> 因跨步骤融合未实现而**前提不成立**，M3 抗锯齿覆盖率（判据未定义）与 M4 的 HEIF 端点（HEIF 未接入，见 `known-gaps.md`）仍无法出数。
 > 要宣称某个里程碑「完成」，先把它那一行的出口条件全部跑出数来。
 
 每个里程碑结束跑一次 `bash tests/SimdImaging.AotSmoke/run.sh`，不只是 M5。

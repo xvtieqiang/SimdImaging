@@ -19,7 +19,7 @@ public static class Mapping
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
     /// <exception cref="ArgumentException"><paramref name="forward"/> is singular.</exception>
-    public static PixelBuffer Transform(PixelView source, AffineMatrix forward, int width, int height,
+    public static WorkingBuffer Transform(PixelView source, AffineMatrix forward, int width, int height,
         RgbaColor background, IPixelPool? pool = null)
     {
         if (width <= 0)
@@ -29,7 +29,7 @@ public static class Mapping
         if (!forward.TryInvert(out var inverse))
             throw new ArgumentException("The transform is singular and cannot be inverted.", nameof(forward));
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var row = new float[width * 4];
         var (br, bg, bb, ba) = (background.R / 255f, background.G / 255f, background.B / 255f, background.A / 255f);
 
@@ -141,7 +141,7 @@ public static class Mapping
     /// <param name="background">Colour outside the source.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentException">The homography is not eight values or is singular.</exception>
-    public static PixelBuffer Perspective(PixelView source, ReadOnlySpan<float> forward, int width, int height,
+    public static WorkingBuffer Perspective(PixelView source, ReadOnlySpan<float> forward, int width, int height,
         RgbaColor background, IPixelPool? pool = null)
     {
         if (forward.Length != 8)
@@ -173,7 +173,7 @@ public static class Mapping
         id *= scale; ie *= scale; @if *= scale;
         ig *= scale; ih *= scale; ii *= scale;
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var row = new float[width * 4];
         var (br, bg, bb, ba) = (background.R / 255f, background.G / 255f, background.B / 255f, background.A / 255f);
 

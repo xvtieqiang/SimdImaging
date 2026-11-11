@@ -11,7 +11,8 @@ public sealed partial class Image
     /// <summary>Reads and decodes an image file.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="path"/> is null.</exception>
     /// <exception cref="InvalidDataException">The bytes are not a recognised, decodable image.</exception>
-    /// <exception cref="NotSupportedException">The codec cannot honour <see cref="LoadOptions.ScaleDenominator"/>.</exception>
+    /// <exception cref="ArgumentException"><see cref="LoadOptions.Region"/> does not lie inside the image, or it is
+    /// combined with <see cref="LoadOptions.PreferNativeScale"/>.</exception>
     /// <exception cref="InvalidOperationException">The output would exceed <see cref="LoadOptions.MaxPixels"/>.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     public static Image Load(string path, LoadOptions? options = null, CancellationToken cancellationToken = default)
@@ -22,8 +23,8 @@ public sealed partial class Image
 
     /// <summary>Decodes an image held in memory.</summary>
     /// <exception cref="InvalidDataException">The bytes are not a recognised, decodable image.</exception>
-    /// <exception cref="NotSupportedException">The codec cannot honour <see cref="LoadOptions.ScaleDenominator"/>, or the
-    /// file has more than one frame (multi-frame lands with the frame reader).</exception>
+    /// <exception cref="ArgumentException"><see cref="LoadOptions.Region"/> does not lie inside the image, or it is
+    /// combined with <see cref="LoadOptions.PreferNativeScale"/>.</exception>
     /// <exception cref="InvalidOperationException">The output would exceed <see cref="LoadOptions.MaxPixels"/>.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     public static Image Load(ReadOnlySpan<byte> data, LoadOptions? options = null, CancellationToken cancellationToken = default)
@@ -32,16 +33,38 @@ public sealed partial class Image
             throw new InvalidDataException("Empty input.");
         options ??= LoadOptions.Default;
 
-        if (!SimdCodecs.TryReadInfo(data, out var info))
+        if (!ImageCodecs.TryReadInfo(data, out var info))
             throw new InvalidDataException("The stream is not a recognised image format.");
+
+        var scaleDenominator = options.ScaleDenominator ?? 1;
+        if (options.PreferNativeScale && scaleDenominator > 1)
+        {
+            // A region is expressed in the pixels of the scale it is given at. Negotiating a different scale would
+            // silently reinterpret those coordinates, so the two do not combine.
+            if (options.Region is not null)
+                throw new ArgumentException(
+                    "PreferNativeScale changes the reduction, which would reinterpret Region's coordinates. " +
+                    "Use one or the other.", nameof(options));
+
+            // Which reduction the codec can do without a second pass. A native 1 means "this codec does not scale
+            // natively at all": taking it would decode the full image, worse on every axis than the box filter.
+            var targetWidth = (info.Width + scaleDenominator - 1) / scaleDenominator;
+            var targetHeight = (info.Height + scaleDenominator - 1) / scaleDenominator;
+            if (ImageCodecs.TryGetClosestSize(data, targetWidth, targetHeight, out _, out _, out var native)
+                && native > 1 && native != scaleDenominator)
+                scaleDenominator = native;
+        }
 
         var decodeOptions = new DecodeOptions
         {
             Region = options.Region,
-            ScaleDenominator = options.ScaleDenominator ?? 1,
+            ScaleDenominator = scaleDenominator,
+            ApplyOrientation = options.ApplyOrientation,
         };
 
-        var (outputWidth, outputHeight) = decodeOptions.GetOutputSize(info.Width, info.Height);
+        // GetOutputSize(in ImageInfo) rather than the width/height overload: with ApplyOrientation it is the one
+        // that knows orientations 5..8 exchange the axes.
+        var (outputWidth, outputHeight) = decodeOptions.GetOutputSize(info);
         var outputPixels = (long)outputWidth * outputHeight;
         if (outputPixels > options.MaxPixels)
             throw new InvalidOperationException(
@@ -52,13 +75,13 @@ public sealed partial class Image
         if (info.FrameCount > 1)
             return LoadFrames(data.ToArray(), options, decodeOptions, info, cancellationToken);
 
-        if (!SimdCodecs.TryDecode(data, out var decoded, decodeOptions, cancellationToken))
+        if (!ImageCodecs.TryDecode(data, out var decoded, decodeOptions, cancellationToken))
             throw new InvalidDataException("The header was recognised but the pixel data could not be decoded.");
 
         using (decoded)
         {
             var format = options.Format ?? WorkingFormatExtensions.FromSampleFormat(decoded.SampleFormat);
-            var buffer = PixelBuffer.Rent(decoded.Width, decoded.Height, format, options.Pool);
+            var buffer = WorkingBuffer.Rent(decoded.Width, decoded.Height, format, options.Pool);
             try
             {
                 CopyDecoded(decoded, buffer.View);
@@ -66,7 +89,9 @@ public sealed partial class Image
                 {
                     Format = info.Format,
                     BitDepth = info.BitDepth,
-                    Orientation = info.Orientation,
+                    // The tag describes the stored pixels; once the codec has applied it the pixels are upright,
+                    // and reporting the file's value would make the next save turn them again.
+                    Orientation = options.ApplyOrientation ? ImageOrientation.Normal : info.Orientation,
                     FrameCount = 1,
                     ColorEncoding = decoded.ColorEncoding,
                     Resolution = info.Resolution,
@@ -83,12 +108,47 @@ public sealed partial class Image
     }
 
     /// <summary>
+    /// Decodes an image read from a stream, starting at its current position. The stream is left open — the caller
+    /// owns it. Everything downstream works on bytes, so the rest of the stream is buffered first.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
+    /// <exception cref="InvalidDataException">The bytes are not a recognised, decodable image.</exception>
+    /// <exception cref="ArgumentException"><see cref="LoadOptions.Region"/> does not lie inside the image, or it is
+    /// combined with <see cref="LoadOptions.PreferNativeScale"/>.</exception>
+    /// <exception cref="InvalidOperationException">The output would exceed <see cref="LoadOptions.MaxPixels"/>.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static Image Load(Stream stream, LoadOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return Load(ReadToEnd(stream, cancellationToken), options, cancellationToken);
+    }
+
+    /// <summary>Buffers what is left of <paramref name="stream"/>. Reads in chunks instead of calling
+    /// <see cref="Stream.CopyTo(Stream)"/>, whose synchronous overload cannot observe the token: a 100 MB read that
+    /// ignores cancellation is the kind of promise this library does not make.</summary>
+    private static byte[] ReadToEnd(Stream stream, CancellationToken cancellationToken)
+    {
+        var capacity = stream.CanSeek && stream.Length > stream.Position
+            ? (int)Math.Min(stream.Length - stream.Position, int.MaxValue)
+            : 0;
+
+        using var copy = new MemoryStream(capacity);
+        var chunk = new byte[64 * 1024];
+        for (var read = stream.Read(chunk); read > 0; read = stream.Read(chunk))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            copy.Write(chunk, 0, read);
+        }
+
+        return copy.ToArray();
+    }
+
+    /// <summary>
     /// Decodes every frame of an animation or a multi-page document. The codec hands back composited canvases,
     /// so frame <c>i</c> is what a viewer shows at that point — this method only converts and stores them.
     /// </summary>
     private static Image LoadFrames(ReadOnlyMemory<byte> data, LoadOptions options, DecodeOptions decodeOptions,
-        ImageInfo info, CancellationToken cancellationToken)
-    {
+        ImageInfo info, CancellationToken cancellationToken)    {
         using var session = ImageDecoder.Open(data);
         var count = session.FrameCount;
         var frames = new ImageFrame[count];
@@ -110,7 +170,7 @@ public sealed partial class Image
                     throw new InvalidOperationException(
                         $"Frame {i} decodes to {decoded.Width}x{decoded.Height}, above the {options.MaxPixels} pixel limit.");
 
-                var buffer = PixelBuffer.Rent(decoded.Width, decoded.Height, format.Value, options.Pool);
+                var buffer = WorkingBuffer.Rent(decoded.Width, decoded.Height, format.Value, options.Pool);
                 try
                 {
                     CopyDecoded(decoded, buffer.View);
@@ -140,7 +200,8 @@ public sealed partial class Image
         {
             Format = info.Format,
             BitDepth = info.BitDepth,
-            Orientation = info.Orientation,
+            // Same rule as the still path: applied by the frame decoder, so the pixels are upright already.
+            Orientation = options.ApplyOrientation ? ImageOrientation.Normal : info.Orientation,
             FrameCount = count,
             ColorEncoding = encoding,
             Resolution = info.Resolution,
@@ -167,8 +228,109 @@ public sealed partial class Image
         }
     }
 
-    /// <summary>Encodes the image and writes it to <paramref name="path"/>. The format comes from the extension.</summary>
-    /// <exception cref="NotSupportedException">The extension names no format this build can write, or the image has
+    /// <summary>Like <see cref="Load(Stream, LoadOptions?, CancellationToken)"/>, but returns false instead of
+    /// throwing when the bytes are not a decodable image. The stream is left open either way.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
+    public static bool TryLoad(Stream stream, out Image? image, LoadOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            image = Load(stream, options, cancellationToken);
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            image = null;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Decodes an image read from a stream, awaiting the read. Only the read is asynchronous: the decode itself is
+    /// CPU-bound and runs synchronously on the continuation. The stream is left open.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
+    /// <exception cref="InvalidDataException">The bytes are not a recognised, decodable image.</exception>
+    /// <exception cref="ArgumentException"><see cref="LoadOptions.Region"/> does not lie inside the image, or it is
+    /// combined with <see cref="LoadOptions.PreferNativeScale"/>.</exception>
+    /// <exception cref="InvalidOperationException">The output would exceed <see cref="LoadOptions.MaxPixels"/>.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static async Task<Image> LoadAsync(Stream stream, LoadOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var data = await ReadToEndAsync(stream, cancellationToken).ConfigureAwait(false);
+        return Load(data, options, cancellationToken);
+    }
+
+    /// <summary>Reads and decodes an image file, awaiting the read (see
+    /// <see cref="LoadAsync(Stream, LoadOptions?, CancellationToken)"/> for what is and is not asynchronous).</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is null.</exception>
+    /// <exception cref="InvalidDataException">The bytes are not a recognised, decodable image.</exception>
+    /// <exception cref="ArgumentException"><see cref="LoadOptions.Region"/> does not lie inside the image, or it is
+    /// combined with <see cref="LoadOptions.PreferNativeScale"/>.</exception>
+    /// <exception cref="InvalidOperationException">The output would exceed <see cref="LoadOptions.MaxPixels"/>.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static async Task<Image> LoadAsync(string path, LoadOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        var data = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        return Load(data, options, cancellationToken);
+    }
+
+    /// <summary>Like <see cref="LoadAsync(Stream, LoadOptions?, CancellationToken)"/>, but returns null instead of
+    /// throwing when the bytes are not a decodable image. The stream is left open either way.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
+    public static async Task<Image?> TryLoadAsync(Stream stream, LoadOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await LoadAsync(stream, options, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Like <see cref="LoadAsync(string, LoadOptions?, CancellationToken)"/>, but returns null instead of
+    /// throwing when the file is not a decodable image.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is null.</exception>
+    public static async Task<Image?> TryLoadAsync(string path, LoadOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await LoadAsync(path, options, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The asynchronous twin of the chunked read in <see cref="ReadToEnd(Stream, CancellationToken)"/>:
+    /// same capacity guess, same 64 KB chunks, but the loop yields to the caller between reads.</summary>
+    private static async Task<byte[]> ReadToEndAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var capacity = stream.CanSeek && stream.Length > stream.Position
+            ? (int)Math.Min(stream.Length - stream.Position, int.MaxValue)
+            : 0;
+
+        using var copy = new MemoryStream(capacity);
+        var chunk = new byte[64 * 1024];
+        for (var read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false);
+             read > 0;
+             read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false))
+            copy.Write(chunk, 0, read);
+
+        return copy.ToArray();
+    }
+
+    /// <summary>Encodes the image and writes it to <paramref name="path"/>. The format comes from the extension.</summary>    /// <exception cref="NotSupportedException">The extension names no format this build can write, or the image has
     /// more than one frame — writing frame 0 of an animation would silently drop the rest.</exception>
     public static void Save(Image image, string path, SaveOptions? options = null, CancellationToken cancellationToken = default)
     {
@@ -206,7 +368,7 @@ public sealed partial class Image
 
         var frame = image[0];
         var view = frame.Pixels.View;
-        return SimdCodecs.Encode(view.Span, image.Width, image.Height, pixelFormat, format,
+        return ImageCodecs.Encode(view.Span, image.Width, image.Height, pixelFormat, format,
             stride: view.Stride,
             options: encodeOptions,
             metadata: options.Metadata ?? image.Metadata,

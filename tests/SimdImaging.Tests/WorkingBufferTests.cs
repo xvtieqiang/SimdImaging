@@ -51,7 +51,7 @@ public class PixelBufferTests
     public void NonTightBuffer_IsNotExposedAsContiguous()
     {
         var memory = new byte[2 * 12];             // 2 rows of 2 Rgba8 pixels, 4 bytes of padding each
-        using var buffer = PixelBuffer.Wrap(new ArrayOwner(memory), 2, 2, stride: 12, WorkingFormat.Rgba8);
+        using var buffer = WorkingBuffer.Wrap(new ArrayOwner(memory), 2, 2, stride: 12, WorkingFormat.Rgba8);
 
         buffer.IsTight.ShouldBeFalse();
         Should.Throw<InvalidOperationException>(() => { _ = ((IMemoryOwner<byte>)buffer).Memory; });
@@ -74,7 +74,7 @@ public class PixelBufferTests
     [Fact]
     public void Rent_IsTightAndSizedInBytes()
     {
-        using var buffer = PixelBuffer.Rent(3, 2, WorkingFormat.Rgba16);
+        using var buffer = WorkingBuffer.Rent(3, 2, WorkingFormat.Rgba16);
 
         buffer.Stride.ShouldBe(3 * 8);
         buffer.IsTight.ShouldBeTrue();

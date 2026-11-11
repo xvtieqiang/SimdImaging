@@ -20,7 +20,7 @@ public static class EntropyCrop
     /// 0..1.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="threshold"/> is outside 0..1.</exception>
-    public static PixelBuffer Crop(PixelView source, float threshold = 0.25f, IPixelPool? pool = null)
+    public static WorkingBuffer Crop(PixelView source, float threshold = 0.25f, IPixelPool? pool = null)
     {
         if (!(threshold >= 0f) || threshold > 1f)
             throw new ArgumentOutOfRangeException(nameof(threshold), threshold, "Threshold must be in [0, 1].");

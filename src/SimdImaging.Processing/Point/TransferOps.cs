@@ -37,21 +37,21 @@ public static class TransferOps
     /// <param name="source">The pixels.</param>
     /// <param name="curve">The transfer curve the samples are encoded with.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer Linearize(PixelView source, TransferCurve curve = TransferCurve.Srgb,
+    public static WorkingBuffer Linearize(PixelView source, TransferCurve curve = TransferCurve.Srgb,
         IPixelPool? pool = null) => Apply(source, curve, toLinear: true, pool);
 
     /// <summary>Encodes linear light into the given transfer curve.</summary>
     /// <param name="source">The pixels.</param>
     /// <param name="curve">The transfer curve to encode with.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer Delinearize(PixelView source, TransferCurve curve = TransferCurve.Srgb,
+    public static WorkingBuffer Delinearize(PixelView source, TransferCurve curve = TransferCurve.Srgb,
         IPixelPool? pool = null) => Apply(source, curve, toLinear: false, pool);
 
-    private static PixelBuffer Apply(PixelView source, TransferCurve curve, bool toLinear, IPixelPool? pool)
+    private static WorkingBuffer Apply(PixelView source, TransferCurve curve, bool toLinear, IPixelPool? pool)
     {
         var width = source.Width;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, source.Height, source.Format, pool);
 
         if (curve == TransferCurve.Linear)
         {

@@ -43,8 +43,14 @@ using var image = Image.Load("photo.jpg");                 // 位深跟随源：
 byte[] png = Image.Encode(image, ImageFormat.Png);
 Image.Save(image, "out.png");
 
-// 原生缩放解码（JPEG 可到 1/8），做不到就抛，不偷偷整幅解码
+// 缩放解码：输出恒为 ⌈w/d⌉；codec 原生没有这一档时，先解到它的原生档再 box 过滤（精确，多一趟）
 using var small = Image.Load(bytes, new LoadOptions { ScaleDenominator = 4 });
+
+// 只求快：直接取 codec 原生能给的那一档，跳过过滤（1/16 的 JPEG 拿到 1/8，图更大但少一趟）
+using var quick = Image.Load(bytes, new LoadOptions { ScaleDenominator = 16, PreferNativeScale = true });
+
+// EXIF 方向：默认只报告标签、不动像素；开了由解码器直接出正片（5..8 交换宽高，标签复位）
+using var upright = Image.Load(bytes, new LoadOptions { ApplyOrientation = true });
 ```
 
 ## 与 ImageSharp 4.1.x 的定位差异
@@ -57,7 +63,7 @@ using var small = Image.Load(bytes, new LoadOptions { ScaleDenominator = 4 });
 | 位深 | 由像素类型决定 | 全链路 `Rgba16`，16 位不被 8 位中间层吞掉 |
 | 确定性 | 无跨 SIMD 档位承诺 | **三档**（AVX2 / V128 / 标量）逐字节一致；AVX-512 档位预留，尚未实现 |
 | 内存 | 整图 `MemoryAllocator` | 池化 + ping-pong + 行带；实测 7–39 KiB/op，`0 B/op` 目标未达成 |
-| 格式面 | 多 EXR / TGA / CgBI PNG / ANI | 多 HEIF / JPEG 2000 / JBIG2 / PNM 全族 / Ultra HDR |
+| 格式面 | 多 EXR / TGA / CgBI PNG / ANI | 多 JPEG 2000 / JBIG2 / PNM 全族 / Ultra HDR；HEIF/HEIC 需自行引用 `Sdcb.SimdCodecs.Heif` 并注册 |
 
 格式面的差异由底层 `Sdcb.SimdCodecs` 决定，不是应用层的取舍。
 
@@ -73,7 +79,7 @@ using var small = Image.Load(bytes, new LoadOptions { ScaleDenominator = 4 });
 ## 一句话设计
 
 - **三个工作格式**：`Rgba8` / `Rgba16` / `Rgba32F`。布局翻译只在边界发生一次，由 SimdCodecs 的 `PixelConverter` 完成。
-- **两个缓冲，来回倒**：`PixelBuffer`（实现 `IMemoryOwner<byte>`，可零拷贝交给编码器）+ 池；稳态分配实测 7–39 KiB/op（§1.3 的 `0 B/op` 目标未达成）。
+- **两个缓冲，来回倒**：`WorkingBuffer`（实现 `IMemoryOwner<byte>`，可零拷贝交给编码器）+ 池；稳态分配实测 7–39 KiB/op（§1.3 的 `0 B/op` 目标未达成）。
 - **计划先于执行**（设计目标）：点算子融合成一张 LUT、预乘只做一次、`Region`/`ScaleDenominator` 下推给解码器。**跨步骤融合目前未实现**——`Execute` 仍按步骤整图循环、每步一张整图 ping-pong（见 `architecture.md` §5.4 与 `known-gaps.md`）。
 - **确定性**：整数路径跨平台逐字节；浮点路径固定运算序 + 单次舍入 FMA，跨档位逐字节。
 
@@ -82,11 +88,11 @@ using var small = Image.Load(bytes, new LoadOptions { ScaleDenominator = 4 });
 ```
 docs/                        设计与算子清单
 src/
-  SimdImaging.Abstractions/  工作格式 / 池 / PixelBuffer / PixelView / 算子契约 / 选项
+  SimdImaging.Abstractions/  工作格式 / 池 / WorkingBuffer / PixelView / 算子契约 / 选项
   SimdImaging/               Image / ImageFrame / Load / Save / Encode
 tests/
   SimdImaging.Tests/         全量单元测试（PNG 8/16 位逐字节往返、JPEG、区域解码、池、释放、档位一致性等）
   SimdImaging.AotSmoke/      NativeAOT vs JIT 逐字节比对；不在 slnx 里
 ```
 
-构建期通过 `ProjectReference` 引用**仓库外同级**的 `SimdCodecs/` 源码检出（由 `.gitignore:13` 忽略，不属于本仓库）；`Sdcb.SimdCodecs` 2.0 发布后改为 NuGet 包依赖。
+编解码层是 **NuGet 依赖**：`Sdcb.SimdCodecs` **2.0.0**，版本锁在 `Directory.Packages.props`（与 `Sdcb.SimdCodecs.Abstractions` 同版本、同步升级）。仓库不包含、也不引用任何外部源码检出。

@@ -73,7 +73,8 @@ public static class ColorBlindnessOps
     /// <param name="correct">Daltonise: keep the simulation's error but move it where the viewer can see it.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="severity"/> is outside 0..1.</exception>
-    public static PixelBuffer ColorBlindness(PixelView source, ColorVisionDeficiency kind = ColorVisionDeficiency.Protanopia,
+    public static WorkingBuffer ColorBlindness(PixelView source,
+        ColorVisionDeficiency kind = ColorVisionDeficiency.Protanopia,
         float severity = 1f, bool correct = false, IPixelPool? pool = null)
     {
         if (!(severity >= 0f) || severity > 1f)
@@ -81,7 +82,7 @@ public static class ColorBlindnessOps
 
         var width = source.Width;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, source.Height, source.Format, pool);
         var row = new float[stride];
 
         // Both the simulation and the daltonisation are 3×3 on RGB, so the LMS round trip is folded once into

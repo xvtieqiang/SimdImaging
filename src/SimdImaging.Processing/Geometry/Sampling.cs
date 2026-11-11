@@ -59,7 +59,7 @@ public static class Sampling
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
     /// <exception cref="NullReferenceException"><paramref name="map"/> is null.</exception>
-    public static PixelBuffer Warp(PixelView source, int width, int height, PixelWarp map,
+    public static WorkingBuffer Warp(PixelView source, int width, int height, PixelWarp map,
         Resampler resampler = Resampler.Bilinear, RgbaColor background = default, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
@@ -67,7 +67,7 @@ public static class Sampling
         ArgumentNullException.ThrowIfNull(map);
 
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var row = new float[stride];
 
         for (var y = 0; y < height; y++)

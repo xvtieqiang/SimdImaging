@@ -9,9 +9,8 @@
   <ItemGroup>
     <ProjectReference Include="..\SimdImaging.Abstractions\SimdImaging.Abstractions.csproj" />
     <ProjectReference Include="..\SimdImaging.Processing\SimdImaging.Processing.csproj" />
-    <!-- Codec layer. Referenced from source during development; the shipped package will depend on
-         Sdcb.SimdCodecs 2.0.x from NuGet. -->
-    <ProjectReference Include="..\..\..\SimdCodecs\src\Sdcb.SimdCodecs\Sdcb.SimdCodecs.csproj" />
+    <!-- Codec layer. Pinned to 2.0.x; the version lives in Directory.Packages.props. -->
+    <PackageReference Include="Sdcb.SimdCodecs" />
   </ItemGroup>
 
 </Project>

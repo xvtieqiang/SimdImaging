@@ -22,7 +22,7 @@ public static class ThresholdOps
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">The radius is not positive or the offset is outside
     /// <c>[0, 1)</c>.</exception>
-    public static PixelBuffer AdaptiveThreshold(PixelView source, int radius = 8, float offset = 0.05f,
+    public static WorkingBuffer AdaptiveThreshold(PixelView source, int radius = 8, float offset = 0.05f,
         IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
@@ -34,7 +34,7 @@ public static class ThresholdOps
         var stride = width * 4;
         var window = radius * 2 + 1;
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var luma = new float[window * width];
         var columnSums = new double[width];
         var prefix = new double[width + 1];

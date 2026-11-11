@@ -2,7 +2,7 @@
 
 > **文档口径（2026-11-07 清理）**：本目录只保留四份——`architecture.md`（设计）、`operators.md`（算子表）、`known-gaps.md`（本账本）、`compare-4.1.3-2026-11-07.md`（对外结果）；`audit-2026-11-07.md` 是最近一轮独立复审。11-07 之前的全部过程文档（11 份 + 2 份一次性调研）已打包进 `_archive-before-2026-11-07.tar.gz`，**正文里指向它们的链接现在会失效**，需要时从压缩包取。
 
-有意不做、暂未做、以及对标里"少"的部分。仿 SimdCodecs 的同名文档：这里只写事实与原因，不写"后续支持"。
+有意不做、做到什么程度、以及对标里"少"的部分。仿 SimdCodecs 的同名文档：这里只写事实与原因，不写"后续支持"。
 
 ## 有意不做
 
@@ -14,11 +14,11 @@
 | 图层 / 撤销栈 | 应用层要的是流水线，不是画布 |
 | IPTC 语义编辑 | 只做元数据透传与少量字段；解析归 `Sdcb.SimdCodecs.Exif` |
 
-## 暂未做（M0 实际状态）
+## 逐项现状（M0 起，已做 / 未做混排）
 
 | 项 | 现状 |
 |---|---|
-| 多帧 / 动画 | `Load` 遇到 `FrameCount > 1` 直接抛 `NotSupportedException`，不静默只解第一帧 |
+| 多帧 / 动画 | 已实现：`Load` 见 `FrameCount > 1` 走会话逐帧解码（`LoadFrames`），保留每帧 `Duration`；保存仍只写单帧，对多帧抛 `NotSupportedException`（见「实现边界」） |
 | 处理算子 | 已实现 112 个（全量）；实现边界见下方「实现边界」 |
 | SIMD 内核 | Rgba8 行读写、resize/blur 两遍卷积已向量化；点算子走「字节 LUT + 值主序矩阵记录 + 寄存器内钳制打包」，与标量孪生逐位一致（有端到端对比测试）。全部逐位一致，有测试兜底 |
 | `ProcessingPlan` | 已实现：同尺寸步骤按行带执行，`PlanSteps` 把现有算子适配成步骤；`Mutate` 未提供（算子返回新图，原地绘制归 DrawOps） |
@@ -150,6 +150,8 @@
 | 多帧保存 | `Save` / `Encode` 对 `FrameCount > 1` 抛 `NotSupportedException`，而不是只写第 0 帧。要导出动画得先 `KeepFrames` 选一帧 |
 | 多帧解码路径 | 静图仍走零拷贝 span 路径；多帧需要会话持有数据，会先 `ToArray()` 复制一次 |
 | IO-8 Thumbnail | 没有 DCT 域下推（JPEG 1/8 缩放），缩略图来自解码器内置预览或整图缩放 |
+| IO-1 `PreferNativeScale` | 输出**可能大于**请求的 `⌈w/d⌉`：它取 codec 原生档，跳过 `BoxDownscaler` 那趟整图过滤。512² JPEG 要 1/16（32×32）会拿到 1/8（64×64）。这是选项的定义不是缺陷——要精确尺寸就别开；调 `.Width` 拿实际结果。与 `Region` 互斥（同开抛 `ArgumentException`），因为两者对"档位"的假设冲突 |
+| HEIF / HEIC | **未接入**：`Sdcb.SimdCodecs.Heif` 是独立包，且要求启动时 `ImageCodecs.Register(HeifImageDecoder.Registration)`。本库既不加包也不注册，`Image.Load` 拿到 HEIC 会抛 `InvalidDataException("not a recognised image format")`。要用就自己引用那个包并注册——同时 HEVC 专利义务落在调用方 |
 
 ## 对标基线里"少"的部分
 
@@ -179,7 +181,7 @@
 | 项 | 事实 |
 |---|---|
 | 宣称 | 同尺寸步骤按行带一次执行，步骤之间不产生中间图 |
-| 实际 | `PlanSteps.Point/Neighborhood/Global` 都是「切片 → 调完整算子 → 拷行」的**适配器**，每个 band 每个步骤会租一整带 `PixelBuffer`、在 band worker 内部**再开一次嵌套并行**、再拷一遍 |
+| 实际 | `PlanSteps.Point/Neighborhood/Global` 都是「切片 → 调完整算子 → 拷行」的**适配器**，每个 band 每个步骤会租一整带 `WorkingBuffer`、在 band worker 内部**再开一次嵌套并行**、再拷一遍 |
 | 代价 | 3 个点算子单独跑 5.1 ms，走 plan 变 14.5 ms（**+2.8×**）；gaussian 17.1 ms → 67.3 ms（**+3.9×**） |
 | 对标的后果 | 流水线 A/B 是 **0 / 3**（唯一那个"赢"是参照实现首个用例的预热假象），与 12 个单算子的 12/12 完全相反 |
 | 已修 | `Execute` 的 band 循环由串行 `for` 改为 `RowParallel.ForBands`，并在 `PlanSteps` 内抑制嵌套并行让算子内联。流水线 A/B 从 **0/3 翻到 3/3**（几何平均 0.3793 → 1.9954×） |
@@ -385,7 +387,7 @@ LUT 都是安全的。**没有发现缺陷**，但在此之前这一点只是"�
 | M2 点算子融合后分配 = 0 | `perfpipe` 三条链 **7 / 39 / 8 KiB/op**；`perf16` 单算子 0–15 KiB/op | ❌ **前提不成立**：§5.4 明写跨步骤融合未实现。这不是「没测」，是功能不存在，不能用测数补救 |
 | M3 量化 PSNR 对同参数 | **16.61 dB**，49152/49152 像素不同，平均差 31.32，最大通道差 115（Wu / 64 色 / 无抖动，256×192） | ⚠ 已出数，判定「算法/语义不同」。§11 未给阈值，**不能据此判达标或落后** |
 | M3 抗锯齿覆盖率 | 无数值判据；`PathOpsTests` 只有 `partial.ShouldBeGreaterThan(0)` 这类存在性断言 | ❌ 判据未定义（无测法、无阈值），不可判定；M5 需先写死测法 |
-| M4 10-bit HEIF → 16-bit PNG 端点精确 | 仓库无 10-bit HEIF 语料、无该解码路径测试；现有 `Png_Rgba16_RoundTripsByteExact` 只证 16-bit PNG 往返字节精确 | ❌ 未出数。**不拿 PNG 往返冒充 HEIF 端点** |
+| M4 10-bit HEIF → 16-bit PNG 端点精确 | **这条测不了**：HEIF 解码器是独立包 `Sdcb.SimdCodecs.Heif`，要启动时 `ImageCodecs.Register` 注册，本库不接入（见「实现边界」）；仓库也没有 10-bit HEIF 语料。现有 `Png_Rgba16_RoundTripsByteExact` 只证 16-bit PNG 往返字节精确 | ❌ 未出数，且**当前架构下无法出数**。不拿 PNG 往返冒充 HEIF 端点 |
 | M4 8K 峰值内存 ≤ 2.5× 单帧 | 单帧 7680×4320×4 B = **126.56 MiB**，2.5× = **316.4 MiB**。实测 `resize-bicubic` 94.2（0.74×）、`gaussian-blur` **339.0（2.68×）**、`grayscale` 127.9（1.01×）、`invert` 127.6（1.01×）MiB | ⚠ **3 / 4 达标**，`gaussian-blur` 超 22.6 MiB（7.1%）；对手同项 265.9 MiB |
 
 ### 口径与限制
@@ -465,7 +467,7 @@ LUT 都是安全的。**没有发现缺陷**，但在此之前这一点只是"�
 ### 替换后拿到什么（收益侧，也是「为什么值得迁」）
 
 MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、跨 SIMD 档位逐字节一致、
-13 场景 11/13 领先（1.8224×）、Rgba16 7/7 领先（2.1003×）、格式面多 HEIF / JPEG2000 / JBIG2 / PNM 全族。
+13 场景 11/13 领先（1.8224×）、Rgba16 7/7 领先（2.1003×）、格式面多 JPEG2000 / JBIG2 / PNM 全族。
 以及最根本的一条：**不需要那个许可**。
 
 ⚠ 清单里 B2 是迁移事故的高发区——编译能过、图看着差不多、但数值不同。它比 B1 的编译错误贵得多。

@@ -9,9 +9,9 @@ namespace SimdImaging.Processing;
 public static class AlphaOps
 {
     /// <summary>Multiplies colour by alpha.</summary>
-    public static PixelBuffer Premultiply(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer Premultiply(PixelView source, IPixelPool? pool = null)
     {
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         var row = new float[source.Width * 4];
         for (var y = 0; y < source.Height; y++)
         {
@@ -31,9 +31,9 @@ public static class AlphaOps
     }
 
     /// <summary>Divides colour by alpha; a zero alpha yields zero colour.</summary>
-    public static PixelBuffer Unpremultiply(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer Unpremultiply(PixelView source, IPixelPool? pool = null)
     {
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         var row = new float[source.Width * 4];
         for (var y = 0; y < source.Height; y++)
         {
@@ -54,7 +54,8 @@ public static class AlphaOps
     }
 
     /// <summary>Source-over composition — the common case.</summary>
-    public static PixelBuffer Composite(PixelView background, PixelView overlay, int x, int y, IPixelPool? pool = null) =>
+    public static WorkingBuffer Composite(PixelView background, PixelView overlay, int x, int y,
+        IPixelPool? pool = null) =>
         Composite(background, overlay, x, y, PorterDuff.SourceOver, pool);
 
     /// <summary>
@@ -63,7 +64,7 @@ public static class AlphaOps
     /// way out, so colour and alpha can never disagree.
     /// </summary>
     /// <exception cref="ArgumentException">The overlay does not fit at that position.</exception>
-    public static PixelBuffer Composite(PixelView background, PixelView overlay, int x, int y, PorterDuff mode,
+    public static WorkingBuffer Composite(PixelView background, PixelView overlay, int x, int y, PorterDuff mode,
         IPixelPool? pool = null)
     {
         if (x < 0 || y < 0 || x + overlay.Width > background.Width || y + overlay.Height > background.Height)

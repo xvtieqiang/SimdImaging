@@ -57,7 +57,7 @@ public static class FilterOps
 
     /// <summary>A box blur of the given radius; the kernel is <c>1/(2r+1)</c> over 2r+1 taps.</summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="radius"/> is negative.</exception>
-    public static PixelBuffer BoxBlur(PixelView source, int radius, IPixelPool? pool = null)
+    public static WorkingBuffer BoxBlur(PixelView source, int radius, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(radius);
         if (radius == 0)
@@ -73,7 +73,7 @@ public static class FilterOps
     /// approximation this is the real kernel at any sigma.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="sigma"/> is not finite and positive.</exception>
-    public static PixelBuffer GaussianBlur(PixelView source, float sigma, IPixelPool? pool = null)
+    public static WorkingBuffer GaussianBlur(PixelView source, float sigma, IPixelPool? pool = null)
     {
         if (!(sigma > 0f) || float.IsInfinity(sigma))
             throw new ArgumentOutOfRangeException(nameof(sigma), sigma, "Sigma must be finite and greater than 0.");
@@ -101,7 +101,7 @@ public static class FilterOps
     /// vertical pass reads a row only after clamping it against the image — so the output is identical to the
     /// whole-image pass, edge replication included.
     /// </summary>
-    private static PixelBuffer Separable(PixelView source, float[] kernel, IPixelPool? pool)
+    private static WorkingBuffer Separable(PixelView source, float[] kernel, IPixelPool? pool)
     {
         var radius = kernel.Length / 2;
         var width = source.Width;
@@ -109,7 +109,7 @@ public static class FilterOps
         var stride = width * 4;
 
         var bandRows = BandRowsOverride > 0 ? BandRowsOverride : Math.Max(128, radius * 8);
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
         var bandCount = (height + bandRows - 1) / bandRows;
 
@@ -345,13 +345,13 @@ public static class FilterOps
     /// A 3×3 median per channel (alpha included). Edges replicate. The median is an order statistic, so this
     /// works on straight alpha: premultiplying would change the ordering the median is defined on.
     /// </summary>
-    public static PixelBuffer Median3x3(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer Median3x3(PixelView source, IPixelPool? pool = null)
     {
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
 
         // Rgba8 gets a byte-domain kernel: four pixels (16 samples) per compare-exchange instead of one
@@ -567,14 +567,14 @@ public static class FilterOps
     /// <c>min(1, √(gx² + gy²) / 4)</c>: the Sobel kernel sums to 4 per axis, so dividing by 4 keeps a full
     /// black/white edge inside [0,1] instead of clipping every strong edge to white.
     /// </summary>
-    public static PixelBuffer Sobel(PixelView source, bool bt709 = false, IPixelPool? pool = null)
+    public static WorkingBuffer Sobel(PixelView source, bool bt709 = false, IPixelPool? pool = null)
     {
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
         var (lr, lg, lb) = bt709 ? (0.2126f, 0.7152f, 0.0722f) : (0.299f, 0.587f, 0.114f);
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var luma = new float[3 * width];
         var view = destination.View;
 
@@ -648,20 +648,22 @@ public static class FilterOps
     }
 
     /// <summary>3×3 erosion (per-channel minimum). Shrinks bright regions and opaque coverage.</summary>
-    public static PixelBuffer Erode3x3(PixelView source, IPixelPool? pool = null) => Morph3x3(source, minimum: true, pool);
+    public static WorkingBuffer Erode3x3(PixelView source, IPixelPool? pool = null) =>
+        Morph3x3(source, minimum: true, pool);
 
     /// <summary>3×3 dilation (per-channel maximum).</summary>
-    public static PixelBuffer Dilate3x3(PixelView source, IPixelPool? pool = null) => Morph3x3(source, minimum: false, pool);
+    public static WorkingBuffer Dilate3x3(PixelView source, IPixelPool? pool = null) =>
+        Morph3x3(source, minimum: false, pool);
 
     /// <summary>Erosion then dilation: removes small bright specks.</summary>
-    public static PixelBuffer Open3x3(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer Open3x3(PixelView source, IPixelPool? pool = null)
     {
         using var eroded = Morph3x3(source, minimum: true, null);
         return Morph3x3(eroded.View, minimum: false, pool);
     }
 
     /// <summary>Dilation then erosion: fills small dark holes.</summary>
-    public static PixelBuffer Close3x3(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer Close3x3(PixelView source, IPixelPool? pool = null)
     {
         using var dilated = Morph3x3(source, minimum: false, null);
         return Morph3x3(dilated.View, minimum: true, pool);
@@ -671,13 +673,13 @@ public static class FilterOps
     /// Separable 3×3 minimum/maximum. Vertical neighbours are produced by a rolling buffer of three
     /// horizontal rows, so memory is <c>3 × row</c> instead of a full float image.
     /// </summary>
-    private static PixelBuffer Morph3x3(PixelView source, bool minimum, IPixelPool? pool)
+    private static WorkingBuffer Morph3x3(PixelView source, bool minimum, IPixelPool? pool)
     {
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         // One contiguous block, three row offsets into it: a jagged float[3][] would add a pointer chase
         // per tap and three allocations per call for no benefit.
         var rows = new float[3 * stride];
@@ -744,7 +746,7 @@ public static class FilterOps
     /// <param name="sigmaRange">Colour sigma, in [0,1] sample units.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">The radius or a sigma is not positive.</exception>
-    public static PixelBuffer Bilateral(PixelView source, int radius = 2, float sigmaSpace = 0f,
+    public static WorkingBuffer Bilateral(PixelView source, int radius = 2, float sigmaSpace = 0f,
         float sigmaRange = 0.1f, IPixelPool? pool = null)
     {
         if (radius <= 0)
@@ -779,7 +781,7 @@ public static class FilterOps
             range[i] = MathF.Exp(-distanceSquared / (2f * sigmaRange * sigmaRange));
         }
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
 
         // Same shape as OilPaint: the ring of source rows is a cache, so each band keeps its own and the
@@ -870,7 +872,7 @@ public static class FilterOps
     /// <param name="bias">Added after the convolution, in sample units (0.5 = half range).</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentException">The kernel is not nine values.</exception>
-    public static PixelBuffer Convolve3x3(PixelView source, ReadOnlySpan<float> kernel, float bias = 0f,
+    public static WorkingBuffer Convolve3x3(PixelView source, ReadOnlySpan<float> kernel, float bias = 0f,
         IPixelPool? pool = null)
     {
         if (kernel.Length != 9)
@@ -881,7 +883,7 @@ public static class FilterOps
         var height = source.Height;
         var stride = width * 4;
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var rows = new float[3 * stride];       // three rows in one block; see Morph3x3
         var output = new float[stride];
         var computed = -1;
@@ -929,7 +931,7 @@ public static class FilterOps
     /// <param name="source">The pixels.</param>
     /// <param name="strength">Multiplier on the kernel; 1 is the classic relief.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer Emboss(PixelView source, float strength = 1f, IPixelPool? pool = null)
+    public static WorkingBuffer Emboss(PixelView source, float strength = 1f, IPixelPool? pool = null)
     {
         // Sum zero (flat areas go to the bias) with a diagonal gradient.
         Span<float> kernel = stackalloc float[9]
@@ -951,13 +953,14 @@ public static class FilterOps
     /// <param name="sigma">Blur sigma used to build the mask.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="sigma"/> is not finite and positive.</exception>
-    public static PixelBuffer Sharpen(PixelView source, float amount = 0.5f, float sigma = 1f, IPixelPool? pool = null)
+    public static WorkingBuffer Sharpen(PixelView source, float amount = 0.5f, float sigma = 1f,
+        IPixelPool? pool = null)
     {
         using var blurred = GaussianBlur(source, sigma, null);
 
         var width = source.Width;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(source.Height > 0 ? width : width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Height > 0 ? width : width, source.Height, source.Format, pool);
         var sourceRow = new float[stride];
         var blurredRow = new float[stride];
         var output = new float[stride];
@@ -991,7 +994,7 @@ public static class FilterOps
     /// <param name="sigma">Sigma of the Gaussian shell.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="sigma"/> is not finite and positive.</exception>
-    public static PixelBuffer GaussianSharpen(PixelView source, float amount = 0.5f, float sigma = 1f,
+    public static WorkingBuffer GaussianSharpen(PixelView source, float amount = 0.5f, float sigma = 1f,
         IPixelPool? pool = null)
     {
         if (!(sigma > 0f) || float.IsInfinity(sigma))
@@ -1031,14 +1034,14 @@ public static class FilterOps
     /// pixel rather than filtered: a negative lobe would otherwise make coverage go negative and clamp to a
     /// translucent halo.
     /// </summary>
-    private static PixelBuffer Convolve2D(PixelView source, float[] kernel, int radius, IPixelPool? pool)
+    private static WorkingBuffer Convolve2D(PixelView source, float[] kernel, int radius, IPixelPool? pool)
     {
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
         var side = radius * 2 + 1;
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
 
         // Row bands, each with its own ring of source rows. This is the shared path behind GaussianSharpen,
@@ -1165,7 +1168,7 @@ public static class FilterOps
     /// <param name="angleDegrees">0 = horizontal, 90 = vertical.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> is not positive.</exception>
-    public static PixelBuffer MotionBlur(PixelView source, int length = 9, float angleDegrees = 0f,
+    public static WorkingBuffer MotionBlur(PixelView source, int length = 9, float angleDegrees = 0f,
         IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
@@ -1192,7 +1195,7 @@ public static class FilterOps
     /// aperture produces. Unlike a box blur the corners of the bounding square are excluded.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="radius"/> is not positive.</exception>
-    public static PixelBuffer BokehBlur(PixelView source, int radius = 4, IPixelPool? pool = null)
+    public static WorkingBuffer BokehBlur(PixelView source, int radius = 4, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
 
@@ -1219,7 +1222,7 @@ public static class FilterOps
     /// <param name="blockSize">Edge length of a block, in pixels; 1 is a copy.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="blockSize"/> is not positive.</exception>
-    public static PixelBuffer Pixelate(PixelView source, int blockSize, IPixelPool? pool = null)
+    public static WorkingBuffer Pixelate(PixelView source, int blockSize, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(blockSize);
         if (blockSize == 1)
@@ -1230,7 +1233,7 @@ public static class FilterOps
         var stride = width * 4;
         var columns = (width + blockSize - 1) / blockSize;
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
 
         // Two things made this 6x slower than the oracle (14.56 ms against 2.26 ms at 1080p):
@@ -1313,7 +1316,7 @@ public static class FilterOps
     /// <param name="strength">How far the corners are darkened, 0..1.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">The radius or strength is outside 0..1.</exception>
-    public static PixelBuffer Vignette(PixelView source, float radius = 0.75f, float strength = 1f,
+    public static WorkingBuffer Vignette(PixelView source, float radius = 0.75f, float strength = 1f,
         IPixelPool? pool = null)
     {
         if (!(radius > 0f) || radius > 1f)
@@ -1329,7 +1332,7 @@ public static class FilterOps
         var halfDiagonal = MathF.Sqrt(centreX * centreX + centreY * centreY);
         var span = MathF.Max(1f - radius, 1e-6f);
 
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var row = new float[stride];
 
         for (var y = 0; y < height; y++)
@@ -1367,7 +1370,7 @@ public static class FilterOps
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">The threshold is outside 0..1, sigma is not positive, or
     /// the amount is negative.</exception>
-    public static PixelBuffer Glow(PixelView source, float threshold = 0.7f, float sigma = 8f, float amount = 0.6f,
+    public static WorkingBuffer Glow(PixelView source, float threshold = 0.7f, float sigma = 8f, float amount = 0.6f,
         IPixelPool? pool = null)
     {
         if (!(threshold >= 0f) || threshold > 1f)
@@ -1378,7 +1381,7 @@ public static class FilterOps
 
         var width = source.Width;
         var stride = width * 4;
-        using var highlights = PixelBuffer.Rent(width, source.Height, source.Format, null);
+        using var highlights = WorkingBuffer.Rent(width, source.Height, source.Format, null);
         var row = new float[stride];
 
         for (var y = 0; y < source.Height; y++)
@@ -1406,7 +1409,7 @@ public static class FilterOps
 
         using var halo = GaussianBlur(highlights.View, sigma, null);
 
-        var destination = PixelBuffer.Rent(width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, source.Height, source.Format, pool);
         var glowRow = new float[stride];
 
         for (var y = 0; y < source.Height; y++)
@@ -1429,7 +1432,8 @@ public static class FilterOps
     }
 
     /// <summary>Uniform average over a set of integer offsets, in premultiplied space, edges replicated.</summary>
-    private static PixelBuffer AverageOffsets(PixelView source, ReadOnlySpan<(int Dx, int Dy)> offsets, IPixelPool? pool)
+    private static WorkingBuffer AverageOffsets(PixelView source, ReadOnlySpan<(int Dx, int Dy)> offsets,
+        IPixelPool? pool)
     {
         var width = source.Width;
         var height = source.Height;
@@ -1448,7 +1452,7 @@ public static class FilterOps
         }
 
         var window = maxDy * 2 + 1;
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
 
         // Same treatment as Convolve2D: the ring is a row cache, so each band keeps its own and the per-pixel

@@ -181,6 +181,117 @@ public class ImageIoTests
         Should.Throw<NotSupportedException>(() =>
             Image.Save(image, Path.Combine(Path.GetTempPath(), "x.not-a-format")));
     }
+
+    [Fact]
+    public void Load_ScaleDenominator_ProducesTheExactReduction()
+    {
+        using var image = TestImages.Gradient(512, 512, WorkingFormat.Rgba8);
+        var jpeg = Image.Encode(image, ImageFormat.Jpeg);
+
+        using var scaled = Image.Load(jpeg, new LoadOptions { ScaleDenominator = 16 });
+
+        scaled.Width.ShouldBe(32);
+        scaled.Height.ShouldBe(32);
+    }
+
+    [Fact]
+    public void Load_PreferNativeScale_TakesTheCodecsOwnReduction()
+    {
+        using var image = TestImages.Gradient(512, 512, WorkingFormat.Rgba8);
+        var jpeg = Image.Encode(image, ImageFormat.Jpeg);
+
+        // JPEG scales natively to 1/8 at most, so 1/16 (32x32) negotiates to 1/8: 64x64, without the box filter.
+        using var native = Image.Load(jpeg, new LoadOptions { ScaleDenominator = 16, PreferNativeScale = true });
+
+        native.Width.ShouldBe(64);
+        native.Height.ShouldBe(64);
+    }
+
+    [Fact]
+    public void Load_PreferNativeScale_RejectsARegion()
+    {
+        using var image = TestImages.Gradient(64, 64, WorkingFormat.Rgba8);
+        var png = Image.Encode(image, ImageFormat.Png);
+
+        // A region is expressed at the requested scale; negotiating another one would reinterpret its coordinates.
+        Should.Throw<ArgumentException>(() => Image.Load(png, new LoadOptions
+        {
+            ScaleDenominator = 4,
+            PreferNativeScale = true,
+            Region = new PixelRect(0, 0, 8, 8),
+        }));
+    }
+
+    [Fact]
+    public void Load_Stream_BuffersTheRestAndLeavesTheStreamOpen()
+    {
+        using var image = TestImages.Gradient(9, 5, WorkingFormat.Rgba8);
+        var png = Image.Encode(image, ImageFormat.Png);
+
+        using var seekable = new MemoryStream(png);
+        using var fromMemory = Image.Load(seekable);
+        fromMemory.WritablePixels.ToArray().ShouldBe(image.WritablePixels.ToArray());
+        seekable.CanRead.ShouldBeTrue();          // the caller still owns it
+        seekable.Position.ShouldBe(png.Length);   // and it was consumed to the end
+
+        using var opaque = new NonSeekableStream(png);
+        using var fromStream = Image.Load(opaque);
+        fromStream.WritablePixels.ToArray().ShouldBe(image.WritablePixels.ToArray());
+    }
+
+    [Fact]
+    public void TryLoad_Stream_ReturnsFalseInsteadOfThrowing()
+    {
+        using var image = TestImages.Gradient(4, 4, WorkingFormat.Rgba8);
+        var png = Image.Encode(image, ImageFormat.Png);
+
+        using var good = new MemoryStream(png);
+        Image.TryLoad(good, out var loaded).ShouldBeTrue();
+        loaded.ShouldNotBeNull();
+        loaded!.Dispose();
+
+        using var bad = new MemoryStream([1, 2, 3, 4, 5, 6, 7, 8]);
+        Image.TryLoad(bad, out var none).ShouldBeFalse();
+        none.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task LoadAsync_MatchesTheSynchronousResult()
+    {
+        using var image = TestImages.Gradient(7, 4, WorkingFormat.Rgba8);
+        var png = Image.Encode(image, ImageFormat.Png);
+        var expected = image.WritablePixels.ToArray();
+        var path = Path.Combine(Path.GetTempPath(), $"simd-async-{Guid.NewGuid():N}.png");
+        File.WriteAllBytes(path, png);
+        try
+        {
+            using var fromStream = await Image.LoadAsync(new MemoryStream(png));
+            fromStream.WritablePixels.ToArray().ShouldBe(expected);
+
+            using var fromPath = await Image.LoadAsync(path);
+            fromPath.WritablePixels.ToArray().ShouldBe(expected);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task TryLoadAsync_ReturnsNullInsteadOfThrowing()
+    {
+        using var bad = new MemoryStream([1, 2, 3, 4, 5]);
+
+        (await Image.TryLoadAsync(bad)).ShouldBeNull();
+    }
+
+    [Fact]
+    public void LoadOptions_ScaleDenominatorMustBeAPowerOfTwo()
+    {
+        Should.Throw<ArgumentOutOfRangeException>(() => new LoadOptions { ScaleDenominator = 3 });
+        Should.Throw<ArgumentOutOfRangeException>(() => new LoadOptions { ScaleDenominator = 0 });
+        new LoadOptions { ScaleDenominator = 8 }.ScaleDenominator.ShouldBe(8);
+    }
 }
 
 internal sealed class CountingPool : IPixelPool
@@ -212,4 +323,39 @@ internal sealed class CountingPool : IPixelPool
             }
         }
     }
+}
+
+/// <summary>A stream that only offers <see cref="Read"/>: no length, no position, no seeking — what an HTTP
+/// response body looks like, and the case the byte-array fast paths cannot help with.</summary>
+internal sealed class NonSeekableStream(byte[] data) : Stream
+{
+    private readonly MemoryStream _inner = new(data, writable: false);
+
+    public override bool CanRead => true;
+
+    public override bool CanSeek => false;
+
+    public override bool CanWrite => false;
+
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+
+    public override int Read(Span<byte> buffer) => _inner.Read(buffer);
+
+    public override void Flush()
+    {
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

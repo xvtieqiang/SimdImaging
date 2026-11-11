@@ -75,6 +75,49 @@ public class MetadataOpsTests
     }
 
     [Fact]
+    public void Load_ApplyOrientation_TurnsThePixelsDuringTheDecode()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"simd-load-orient-{Guid.NewGuid():N}.jpg");
+        var resaved = Path.Combine(Path.GetTempPath(), $"simd-load-orient-2-{Guid.NewGuid():N}.jpg");
+        try
+        {
+            using (var source = Indexed(3, 2))
+            using (var stamped = source.WithMetadata(new ImageMetadata { Exif = ExifWithOrientation(6) }))
+            {
+                Image.Save(stamped, path);
+            }
+
+            var bytes = File.ReadAllBytes(path);
+
+            using var stored = Image.Load(bytes);
+            stored.Info.Orientation.ShouldBe(ImageOrientation.Rotate90);
+            stored.Width.ShouldBe(3);
+            stored.Height.ShouldBe(2);
+
+            using var shown = Image.Load(bytes, new LoadOptions { ApplyOrientation = true });
+            using var viaOperator = stored.AutoOrient();
+
+            shown.Info.Orientation.ShouldBe(ImageOrientation.Normal);
+            shown.Width.ShouldBe(2);
+            shown.Height.ShouldBe(3);
+            // Applying the tag inside the decode and turning afterwards are the same bytes: the pushdown is lossless.
+            shown.WritablePixels.ToArray().ShouldBe(viaOperator.WritablePixels.ToArray());
+
+            // And the tag is gone from the metadata, so a save does not turn the picture a second time.
+            Image.Save(shown, resaved);
+            using var reloaded = Image.Load(resaved);
+            reloaded.Info.Orientation.ShouldBe(ImageOrientation.Normal);
+            reloaded.Width.ShouldBe(2);
+            reloaded.Height.ShouldBe(3);
+        }
+        finally
+        {
+            File.Delete(path);
+            File.Delete(resaved);
+        }
+    }
+
+    [Fact]
     public void AutoOrient_LeavesANormalImageAlone()
     {
         using var source = Indexed(4, 3);

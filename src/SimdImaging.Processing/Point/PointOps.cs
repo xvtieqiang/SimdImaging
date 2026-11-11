@@ -11,7 +11,7 @@ namespace SimdImaging.Processing;
 public static class PointOps
 {
     /// <summary>Inverts the colour channels; alpha is preserved.</summary>
-    public static PixelBuffer Invert(PixelView source, IPixelPool? pool = null) =>
+    public static WorkingBuffer Invert(PixelView source, IPixelPool? pool = null) =>
         ApplyLut(source, pool, static (row, width) =>
         {
             for (var i = 0; i < width * 4; i += 4)
@@ -23,7 +23,7 @@ public static class PointOps
         });
 
     /// <summary>Adds <paramref name="amount"/> to the colour channels, in sample units (0.5 = half range).</summary>
-    public static PixelBuffer Brightness(PixelView source, float amount, IPixelPool? pool = null)
+    public static WorkingBuffer Brightness(PixelView source, float amount, IPixelPool? pool = null)
     {
         // NaN/+Inf used to pass straight through the float transform and silently produce a black image.
         // Untrusted/caller-mistake values must fail loudly, never degrade to a plausible-looking result.
@@ -43,7 +43,7 @@ public static class PointOps
 
     /// <summary>Multiplies the colour channels: 1 is identity, above 1 brightens, below 1 darkens.</summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="factor"/> is negative.</exception>
-    public static PixelBuffer Lightness(PixelView source, float factor, IPixelPool? pool = null)
+    public static WorkingBuffer Lightness(PixelView source, float factor, IPixelPool? pool = null)
     {
         RequireFinite(factor, nameof(factor));
         ArgumentOutOfRangeException.ThrowIfNegative(factor);
@@ -59,7 +59,7 @@ public static class PointOps
     }
 
     /// <summary>Scales the colour channels around mid-grey: <c>(v - 0.5)·amount + 0.5</c>.</summary>
-    public static PixelBuffer Contrast(PixelView source, float amount, IPixelPool? pool = null)
+    public static WorkingBuffer Contrast(PixelView source, float amount, IPixelPool? pool = null)
     {
         RequireFinite(amount, nameof(amount));
         return ApplyLut(source, pool, (row, width) =>
@@ -78,7 +78,7 @@ public static class PointOps
     /// <param name="amount">0..1 (and beyond, to oversaturate).</param>
     /// <param name="bt709">True uses BT.709 luma weights, false BT.601.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer Saturation(PixelView source, float amount, bool bt709 = false, IPixelPool? pool = null)
+    public static WorkingBuffer Saturation(PixelView source, float amount, bool bt709 = false, IPixelPool? pool = null)
     {
         RequireFinite(amount, nameof(amount));
         var (lr, lg, lb) = bt709 ? (0.2126f, 0.7152f, 0.0722f) : (0.299f, 0.587f, 0.114f);
@@ -95,7 +95,7 @@ public static class PointOps
     }
 
     /// <summary>Replaces colour with its luma (BT.601 or BT.709); alpha is preserved.</summary>
-    public static PixelBuffer Grayscale(PixelView source, bool bt709 = false, IPixelPool? pool = null)
+    public static WorkingBuffer Grayscale(PixelView source, bool bt709 = false, IPixelPool? pool = null)
     {
         var (lr, lg, lb) = bt709 ? (0.2126f, 0.7152f, 0.0722f) : (0.299f, 0.587f, 0.114f);
         Span<float> matrix = stackalloc float[12]
@@ -109,7 +109,7 @@ public static class PointOps
 
     /// <summary>Applies the sRGB-style power curve <c>v^(1/gamma)</c> to the colour channels.</summary>
     /// <param name="gamma">Greater than 0. 1 is identity, 2.2 approximates a display gamma decode.</param>
-    public static PixelBuffer Gamma(PixelView source, float gamma, IPixelPool? pool = null)
+    public static WorkingBuffer Gamma(PixelView source, float gamma, IPixelPool? pool = null)
     {
         if (!(gamma > 0f) || float.IsInfinity(gamma))
             throw new ArgumentOutOfRangeException(nameof(gamma), gamma, "Gamma must be finite and greater than 0.");
@@ -143,14 +143,14 @@ public static class PointOps
     /// For channel-independent operators on Rgba8, precompute the 256-entry byte LUT instead of doing
     /// eight float conversions per pixel. The scalar twin is the reference and must match exactly.
     /// </summary>
-    private static PixelBuffer ApplyLut(PixelView source, IPixelPool? pool, RowTransform transform) =>
+    private static WorkingBuffer ApplyLut(PixelView source, IPixelPool? pool, RowTransform transform) =>
         source.Format == WorkingFormat.Rgba8 && !ForceScalarPoint
             ? PointLut.ApplyRgba8(source, pool, transform)
             : Apply(source, pool, transform);
 
-    private static PixelBuffer Apply(PixelView source, IPixelPool? pool, RowTransform transform)
+    private static WorkingBuffer Apply(PixelView source, IPixelPool? pool, RowTransform transform)
     {
-        var destination = PixelBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         RowParallel.For(source.Width, source.Height, (start, end) =>
         {
             // One scratch row per worker: FloatScratch is thread-local, so bands never share a buffer.
@@ -175,7 +175,7 @@ public static class PointOps
 
     /// <summary>Reduces each colour channel to <paramref name="levels"/> evenly spaced values.</summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="levels"/> is less than 2.</exception>
-    public static PixelBuffer Posterize(PixelView source, int levels, IPixelPool? pool = null)
+    public static WorkingBuffer Posterize(PixelView source, int levels, IPixelPool? pool = null)
     {
         if (levels < 2)
             throw new ArgumentOutOfRangeException(nameof(levels), levels, "Posterize needs at least 2 levels.");
@@ -193,7 +193,8 @@ public static class PointOps
     }
 
     /// <summary>Black or white by luma against <paramref name="threshold"/> (0..1); alpha is preserved.</summary>
-    public static PixelBuffer Threshold(PixelView source, float threshold, bool bt709 = false, IPixelPool? pool = null)
+    public static WorkingBuffer Threshold(PixelView source, float threshold, bool bt709 = false,
+        IPixelPool? pool = null)
     {
         if (!(threshold >= 0f) || threshold > 1f)
             throw new ArgumentOutOfRangeException(nameof(threshold), threshold, "Threshold must be within 0..1.");
@@ -217,7 +218,7 @@ public static class PointOps
     /// Values are straight samples in [0,1] for integer formats.
     /// </summary>
     /// <exception cref="ArgumentException">The matrix is not 12 floats.</exception>
-    public static PixelBuffer ColorMatrix(PixelView source, ReadOnlySpan<float> matrix, IPixelPool? pool = null)
+    public static WorkingBuffer ColorMatrix(PixelView source, ReadOnlySpan<float> matrix, IPixelPool? pool = null)
     {
         if (matrix.Length != 12)
             throw new ArgumentException("A colour matrix needs 12 floats (3 rows × 4 columns).", nameof(matrix));
@@ -227,7 +228,7 @@ public static class PointOps
         return ColorMatrixCore(source, matrix, pool);
     }
 
-    private static PixelBuffer ColorMatrixCore(PixelView source, ReadOnlySpan<float> matrix, IPixelPool? pool)
+    private static WorkingBuffer ColorMatrixCore(PixelView source, ReadOnlySpan<float> matrix, IPixelPool? pool)
     {
         if (source.Format == WorkingFormat.Rgba8 && !ForceScalarPoint)
             return PointLut.ApplyMatrixRgba8(source, pool, matrix);
@@ -249,7 +250,7 @@ public static class PointOps
     }
 
     /// <summary>Rotates hue by <paramref name="degrees"/> using the standard RGB axis rotation.</summary>
-    public static PixelBuffer HueRotate(PixelView source, float degrees, IPixelPool? pool = null)
+    public static WorkingBuffer HueRotate(PixelView source, float degrees, IPixelPool? pool = null)
     {
         RequireFinite(degrees, nameof(degrees));
         var radians = degrees * MathF.PI / 180f;
@@ -267,7 +268,7 @@ public static class PointOps
     }
 
     /// <summary>Blends towards a sepia tone; <paramref name="amount"/> 0 is identity, 1 is full sepia.</summary>
-    public static PixelBuffer Sepia(PixelView source, float amount = 1f, IPixelPool? pool = null)
+    public static WorkingBuffer Sepia(PixelView source, float amount = 1f, IPixelPool? pool = null)
     {
         RequireFinite(amount, nameof(amount));
         var a = Math.Clamp(amount, 0f, 1f);
@@ -289,7 +290,7 @@ public static class PointOps
     /// lookup, so the power function runs per table slot rather than per pixel.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The input range is empty or gamma is not positive.</exception>
-    public static PixelBuffer Levels(PixelView source, float inputBlack, float inputWhite, float gamma,
+    public static WorkingBuffer Levels(PixelView source, float inputBlack, float inputWhite, float gamma,
         float outputBlack = 0f, float outputWhite = 1f, IPixelPool? pool = null)
     {
         RequireFinite(inputBlack, nameof(inputBlack));
@@ -332,7 +333,7 @@ public static class PointOps
 
     /// <summary>Clamps the colour channels into [<paramref name="low"/>, <paramref name="high"/>]; alpha untouched.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The range is inverted or outside 0..1.</exception>
-    public static PixelBuffer Clamp(PixelView source, float low, float high, IPixelPool? pool = null)
+    public static WorkingBuffer Clamp(PixelView source, float low, float high, IPixelPool? pool = null)
     {
         RequireFinite(low, nameof(low));
         RequireFinite(high, nameof(high));
@@ -351,7 +352,7 @@ public static class PointOps
     }
 
     /// <summary>Makes every pixel fully transparent or fully opaque by its alpha, without changing colour.</summary>
-    public static PixelBuffer AlphaThreshold(PixelView source, float threshold = 0.5f, IPixelPool? pool = null)
+    public static WorkingBuffer AlphaThreshold(PixelView source, float threshold = 0.5f, IPixelPool? pool = null)
     {
         if (!(threshold >= 0f) || threshold > 1f)
             throw new ArgumentOutOfRangeException(nameof(threshold), threshold, "Threshold must be within 0..1.");
@@ -364,7 +365,7 @@ public static class PointOps
     }
 
     /// <summary>Stretches each colour channel's min..max to the full range; a flat channel is left alone.</summary>
-    public static PixelBuffer Normalize(PixelView source, IPixelPool? pool = null)
+    public static WorkingBuffer Normalize(PixelView source, IPixelPool? pool = null)
     {
         var row = new float[source.Width * 4];
         Span<float> minimum = [1f, 1f, 1f];
@@ -413,7 +414,7 @@ public static class PointOps
     /// <param name="amount">-1..1; 0 is identity, positive boosts, negative mutes.</param>
     /// <param name="bt709">True uses BT.709 luma weights.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer Vibrance(PixelView source, float amount, bool bt709 = false, IPixelPool? pool = null)
+    public static WorkingBuffer Vibrance(PixelView source, float amount, bool bt709 = false, IPixelPool? pool = null)
     {
         RequireFinite(amount, nameof(amount));
         var (lr, lg, lb) = bt709 ? (0.2126f, 0.7152f, 0.0722f) : (0.299f, 0.587f, 0.114f);
@@ -442,7 +443,7 @@ public static class PointOps
     /// <param name="source">The pixels.</param>
     /// <param name="amount">-1..1; 0 is identity.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer Temperature(PixelView source, float amount, IPixelPool? pool = null)
+    public static WorkingBuffer Temperature(PixelView source, float amount, IPixelPool? pool = null)
     {
         RequireFinite(amount, nameof(amount));
         var clamped = Math.Clamp(amount, -1f, 1f);
@@ -464,7 +465,7 @@ public static class PointOps
     /// <param name="tint">The target colour.</param>
     /// <param name="amount">0..1 blend weight.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer Tint(PixelView source, RgbaColor tint, float amount = 0.5f, IPixelPool? pool = null)
+    public static WorkingBuffer Tint(PixelView source, RgbaColor tint, float amount = 0.5f, IPixelPool? pool = null)
     {
         RequireFinite(amount, nameof(amount));
         var weight = Math.Clamp(amount, 0f, 1f);
@@ -486,7 +487,7 @@ public static class PointOps
     /// pixel's luma — <c>(1-l)²</c>, <c>1 - s - h</c>, <c>l²</c> — so the three ranges sum to 1 and no
     /// brightness is created or lost.
     /// </summary>
-    public static PixelBuffer ColorBalance(PixelView source, ColorBalanceShifts shadows, ColorBalanceShifts midtones,
+    public static WorkingBuffer ColorBalance(PixelView source, ColorBalanceShifts shadows, ColorBalanceShifts midtones,
         ColorBalanceShifts highlights, bool bt709 = false, IPixelPool? pool = null)
     {
         var (lr, lg, lb) = bt709 ? (0.2126f, 0.7152f, 0.0722f) : (0.299f, 0.587f, 0.114f);
@@ -508,7 +509,7 @@ public static class PointOps
 
     /// <summary>Reorders the colour channels; 0 = R, 1 = G, 2 = B. Alpha is untouched.</summary>
     /// <exception cref="ArgumentOutOfRangeException">A source index is outside 0..2.</exception>
-    public static PixelBuffer ChannelSwap(PixelView source, int redSource, int greenSource, int blueSource,
+    public static WorkingBuffer ChannelSwap(PixelView source, int redSource, int greenSource, int blueSource,
         IPixelPool? pool = null)
     {
         if ((uint)redSource > 2 || (uint)greenSource > 2 || (uint)blueSource > 2)
@@ -530,7 +531,7 @@ public static class PointOps
     }
 
     /// <summary>Pure black or white by luma; a hard threshold with no in-between values.</summary>
-    public static PixelBuffer BlackWhite(PixelView source, float threshold = 0.5f, bool bt709 = false,
+    public static WorkingBuffer BlackWhite(PixelView source, float threshold = 0.5f, bool bt709 = false,
         IPixelPool? pool = null)
     {
         RequireFinite(threshold, nameof(threshold));
@@ -553,7 +554,7 @@ public static class PointOps
 
     /// <summary>Multiplies alpha by <paramref name="opacity"/>; colour is untouched.</summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="opacity"/> is outside 0..1.</exception>
-    public static PixelBuffer Opacity(PixelView source, float opacity, IPixelPool? pool = null)
+    public static WorkingBuffer Opacity(PixelView source, float opacity, IPixelPool? pool = null)
     {
         if (!(opacity >= 0f) || opacity > 1f)
             throw new ArgumentOutOfRangeException(nameof(opacity), opacity, "Opacity must be within 0..1.");
@@ -573,7 +574,7 @@ public static class PointOps
     /// <param name="points">At least two points, sorted by X; the ends are extended flat.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentException">Fewer than two points, or X is not strictly increasing.</exception>
-    public static PixelBuffer Curves(PixelView source, ReadOnlySpan<CurvePoint> points, IPixelPool? pool = null)
+    public static WorkingBuffer Curves(PixelView source, ReadOnlySpan<CurvePoint> points, IPixelPool? pool = null)
     {
         if (points.Length < 2)
             throw new ArgumentException("Curves needs at least two control points.", nameof(points));

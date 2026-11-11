@@ -28,7 +28,7 @@ public static class GuidedFilterOps
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">The radius or band size is not positive, or the epsilon is
     /// not finite and positive.</exception>
-    public static PixelBuffer GuidedFilter(PixelView source, int radius = 4, float epsilon = 1e-4f,
+    public static WorkingBuffer GuidedFilter(PixelView source, int radius = 4, float epsilon = 1e-4f,
         int bandRows = 128, IPixelPool? pool = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);

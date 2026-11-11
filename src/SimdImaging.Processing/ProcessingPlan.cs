@@ -113,7 +113,7 @@ public sealed class ProcessingPlan
     /// so the live set is two full images regardless of step count. That is deliberate — it is what makes
     /// <paramref name="observe"/> able to see every intermediate. A fused executor would drop that ability.</para>
     /// </summary>
-    public PixelBuffer Execute(PixelView source, IPixelPool? pool = null, PlanObserver? observe = null)
+    public WorkingBuffer Execute(PixelView source, IPixelPool? pool = null, PlanObserver? observe = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(BandRows);
         if (_steps.Count == 0)
@@ -122,14 +122,14 @@ public sealed class ProcessingPlan
         var width = source.Width;
         var height = source.Height;
         var current = source;
-        PixelBuffer? owned = null;
+        WorkingBuffer? owned = null;
 
         try
         {
             for (var i = 0; i < _steps.Count; i++)
             {
                 var step = _steps[i];
-                var destination = PixelBuffer.Rent(width, height, current.Format, pool);
+                var destination = WorkingBuffer.Rent(width, height, current.Format, pool);
                 var whole = new PixelRect(0, 0, width, height);
 
                 if (step.Category == OpCategory.Global)

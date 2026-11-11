@@ -153,7 +153,7 @@ public sealed partial class Image
         using (decoded)
         {
             var format = WorkingFormatExtensions.FromSampleFormat(decoded.SampleFormat);
-            var buffer = PixelBuffer.Rent(decoded.Width, decoded.Height, format, null);
+            var buffer = WorkingBuffer.Rent(decoded.Width, decoded.Height, format, null);
             try
             {
                 CopyDecoded(decoded, buffer.View);

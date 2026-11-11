@@ -21,7 +21,7 @@ public class PointLutTests
         data.CopyTo(image.WritablePixels);
         var view = image[0].Pixels.View;
 
-        var cases = new (string Name, Func<PixelView, PixelBuffer> Run)[]
+        var cases = new (string Name, Func<PixelView, WorkingBuffer> Run)[]
         {
             ("Invert", v => PointOps.Invert(v)),
             ("Brightness", v => PointOps.Brightness(v, 0.23f)),
@@ -86,7 +86,7 @@ public class PointLutTests
         data.CopyTo(image.WritablePixels);
         var view = image[0].Pixels.View;
 
-        var cases = new (string Name, Func<PixelView, PixelBuffer> Run)[]
+        var cases = new (string Name, Func<PixelView, WorkingBuffer> Run)[]
         {
             ("Sepia", v => PointOps.Sepia(v)),
             ("HueRotate", v => PointOps.HueRotate(v, 63f)),

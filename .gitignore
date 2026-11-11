@@ -8,10 +8,6 @@ BenchmarkDotNet.Artifacts/
 *.nupkg
 *.snupkg
 
-# Local read-only checkout of the codec layer (own git repo). Products depend on the NuGet
-# package; this folder exists only to build against unreleased 2.x during development.
-SimdCodecs/
-
 # AOT smoke run artifacts
 tests/SimdImaging.AotSmoke/out-*/
 tests/SimdImaging.AotSmoke/*.txt

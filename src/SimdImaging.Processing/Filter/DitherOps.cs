@@ -168,7 +168,7 @@ public static class DitherOps
     /// <param name="kernel">The dither, or <see cref="DitherKernel.None"/> to round.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="bits"/> is outside 1..8.</exception>
-    public static PixelBuffer Dither(PixelView source, int bits, DitherKernel kernel = DitherKernel.FloydSteinberg,
+    public static WorkingBuffer Dither(PixelView source, int bits, DitherKernel kernel = DitherKernel.FloydSteinberg,
         IPixelPool? pool = null)
     {
         if (bits is < 1 or > 8)
@@ -178,7 +178,7 @@ public static class DitherOps
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
 
         if (bits == 8 || kernel == DitherKernel.None)
         {
@@ -194,7 +194,7 @@ public static class DitherOps
         return Diffuse(source, destination, levels, width, height, stride, kernel);
     }
 
-    private static PixelBuffer Reduce(PixelView source, PixelBuffer destination, int levels, int width, int stride)
+    private static WorkingBuffer Reduce(PixelView source, WorkingBuffer destination, int levels, int width, int stride)
     {
         var row = new float[stride];
         for (var y = 0; y < source.Height; y++)
@@ -222,7 +222,7 @@ public static class DitherOps
         return level / (float)levels;
     }
 
-    private static PixelBuffer Ordered(PixelView source, PixelBuffer destination, int levels, int width, int stride,
+    private static WorkingBuffer Ordered(PixelView source, WorkingBuffer destination, int levels, int width, int stride,
         int size)
     {
         var matrix = DitherTaps.BayerMatrix(size);
@@ -259,7 +259,7 @@ public static class DitherOps
         return level / (float)levels;
     }
 
-    private static PixelBuffer Diffuse(PixelView source, PixelBuffer destination, int levels, int width, int height,
+    private static WorkingBuffer Diffuse(PixelView source, WorkingBuffer destination, int levels, int width, int height,
         int stride, DitherKernel kernel)
     {
         var taps = DitherTaps.For(kernel);

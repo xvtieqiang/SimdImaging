@@ -27,7 +27,7 @@ public static class NoiseOps
     /// <param name="seed">Sequence seed; the same seed always yields the same image.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="amount"/> is negative or above 1.</exception>
-    public static PixelBuffer Noise(PixelView source, float amount = 0.05f, NoiseKind kind = NoiseKind.Gaussian,
+    public static WorkingBuffer Noise(PixelView source, float amount = 0.05f, NoiseKind kind = NoiseKind.Gaussian,
         uint seed = 1, IPixelPool? pool = null)
     {
         if (!(amount >= 0f) || amount > 1f)
@@ -35,7 +35,7 @@ public static class NoiseOps
 
         var width = source.Width;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, source.Height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, source.Height, source.Format, pool);
         var random = new Rng(seed);
         var row = new float[stride];
 

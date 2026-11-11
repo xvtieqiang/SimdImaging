@@ -31,13 +31,13 @@ public static class ColorConversionOps
     /// <param name="white">Reference white for XYZ, xyY, Lab, Lch, Luv, Lchuv and Hunter Lab.</param>
     /// <param name="adaptation">How XYZ moves from D65 to <paramref name="white"/>.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer Convert(PixelView source, ColorSpace target, YCbCrStandard ycbcr = YCbCrStandard.Bt709,
+    public static WorkingBuffer Convert(PixelView source, ColorSpace target, YCbCrStandard ycbcr = YCbCrStandard.Bt709,
         bool limitedRange = false, WhitePoint white = WhitePoint.D65,
         ChromaticAdaptation adaptation = ChromaticAdaptation.Bradford, IPixelPool? pool = null)
     {
         var width = source.Width;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, source.Height, WorkingFormat.Rgba32F, pool);
+        var destination = WorkingBuffer.Rent(width, source.Height, WorkingFormat.Rgba32F, pool);
         var row = new float[stride];
 
         for (var y = 0; y < source.Height; y++)
@@ -73,14 +73,14 @@ public static class ColorConversionOps
     /// <param name="bandRows">Rows per band; the chroma rows for a band plus its neighbours are held in
     /// memory.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    public static PixelBuffer ChromaResample(PixelView source, ChromaSubsampling mode,
+    public static WorkingBuffer ChromaResample(PixelView source, ChromaSubsampling mode,
         YCbCrStandard ycbcr = YCbCrStandard.Bt601, bool limitedRange = false, int bandRows = 128,
         IPixelPool? pool = null)
     {
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
-        var destination = PixelBuffer.Rent(width, height, source.Format, pool);
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         if (mode == ChromaSubsampling.Yuv444)
         {
             for (var y = 0; y < height; y++)
