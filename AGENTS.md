@@ -41,6 +41,13 @@ Not in scope: codecs (SimdCodecs owns them), text rendering, GPU backends.
 - **PublicAPI analyzers land in M1**, not M0: the surface still moves, and locking it now would only produce
   churn. Until then, public API changes are reviewed by diff.
 
+## Language
+
+- **English**: code, code comments, XML docs, this file, commit messages.
+- **Chinese**: `README.md`, `docs/*.md` except this file, the lab's UI and its README.
+- Chinese prose keeps identifiers, API names and measured units in English (`RowParallel.Degree`,
+  `Avx2.PermuteVar8x32`, `1.20×`) — that is quoting a term, not mixing languages.
+
 ## Build and test
 
 ```bash
