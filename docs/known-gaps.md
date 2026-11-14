@@ -26,6 +26,161 @@
 | `NativePixelPool` / `NullPixelPool` | 只有 `ArrayPixelPool` |
 | 公开 API 门禁 | 不接 RS0016 分析器，改用 `docs/public-api.txt` 快照：`PublicApiTests` 反射出全部公开签名（含可空标注）逐行比对，改动必须显式重新生成并 review diff |
 | 分块 / 行带执行 | 行带执行已实现（`ProcessingPlan`）；二维 tile 未做，几何与全局算子仍整图执行 |
+| 公开参考向量包 | 已实现（M6，2026-11-14）：`tests/Fixtures/vectors/` 固定输入 / 期望 / SHA-256 + 独立高精度生成脚本；初始 3 条 `warp-identity-*`，`VectorTests` 独立重算哈希。新增向量允许，为过测试改已有 `expected` 禁止 |
+| 像素差异工具 | 已实现（M6）：`src/Shared/PixelDiff.cs` 单一源码共享，测试项目与 Comparison 工程链接复用，不造第二把尺子；补首个不匹配位置、每通道误差、Top N、SHA-256、P6 差异热图，分级沿用 `Metrics.Grade` |
+| SIMD 档位自动化 | 已实现（M6）：`benchmarks/simd-tiers.sh` 三档 JIT 全量测试 + 算子输出 body SHA-256 逐档比对。修正了 §7.5 设计稿的 `--filter "FullyQualifiedName~Kernel"` —— 它实际只匹配名字里恰好带 Kernel 的用例，不匹配 scalar-twin 测试，现改为跑全量 |
+| 性能回退门禁 | **M15 起真的会判**：`benchmarks/baselines/windows-10.0.19045-x64-16-m15.json` 存了 29 个场景，其中 **15 个** `thresholdPercent=15`（2026-11-14 两次重录，最近一次随 DT 分块；`comparable-baselines=1`、校验最差 +1.9%）。只比对 `machine` + `binarySha256` + `protocol` 全同的运行，否则打印 "not comparable" 并跳过。`--self-test` 把阈值压到 0 并**要求失败**（29 条全报超），证明比较逻辑有牙。仍未覆盖的是 short/noisy 场景（ICC / gainmap / RL / seam / bilateral / stroke / gaussian / dt / crop / lanczos）：同 binary 两跑差 6–26%，分层编译与调度噪声主导，设门槛只会做出随机失败的绿灯 |
+| CC0 语料 | 已实现（M6）：`tests/Fixtures/corpus.tsv` 2 条 Wikimedia Commons `Category:CC-Zero` 真实照片，URL + 实测 SHA-256（2026-11-14 下载校验）；`.cache/` git-ignored 不入库；离线由 `SyntheticCorpus.cs` 的 9 类确定性合成图兜底。实验台 3 张 Unsplash 演示图仍非测试夹具 |
+| AOT smoke 覆盖 | M6 补 `warp` / `samplepixel` 两条 hash 与 `REQUIRED` 必需项检查，防止「绿的 gate 什么都没验」；全量 31+ 条目核对留 M15 |
+
+## M8 采样三链统一（完成，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| 唯一权重生成器 | 已落地：`Geometry/TapPlan.cs` 的 `TapPlanBuilder.Parameters` / `FillAt` / `ForPoint` 逐字复刻 `WeightTable.BuildCore:54-105` 数学；`Resize.cs BuildCore` 已改为消费它，实测三档既有算子输出字节零变化 |
+| 分层冲突 | 已解：`TransferCurve` 在 `SimdImaging.Processing`，`SampleOptions` 在 Abstractions，不能反向引用；新增 Abstractions 镜像 `SampleTransferCurve`（`Srgb=0`），Processing 层 `SampleTransfer` 映射数学。`SimdImaging.Processing.TransferCurve` 六行快照全不动 |
+| `Curve` 字段 | 已落地：`SampleOptions.Curve`（默认 sRGB）；`SampleTransfer.ToLinear/FromLinear` 是 per-sample 数学，**不钳 [0,1]**，负值 / NaN / Inf 原样保留；`TransferOps.Apply/BuildTable/Lookup` 整图 LUT 管线未复用（`Lookup:97` 钳位） |
+| 统一重建核心 | 已落地（新路径）：`SamplingCore.SampleWithOptions`（含 tap-plan 注入核心重载）走 `TapPlan` 的 5 核 + 域变换 + 预乘 + 冻结累加序 + `OutOfGamut.Clamp/Throw`；`Sampling.WarpWithOptions` / `Image.WarpWithOptions` 与第二波 `Mapping.TransformWithOptions` / `PerspectiveWithOptions` / `Resample.ResizeWithOptions` / `Image.{Resize,Rotate,Affine,Perspective}WithOptions` 六组新重载。旧 `Sampling.Sample` / `SampleRaw` / `Warp` / `Mapping.Transform` / `Mapping.Perspective` / `Resample.Resize` 路径**一行未改**（`ImageGeometryOps.Rotate` 的画布计算提取为 `RotationCanvas` 纯代码移动） |
+| **Mapping 接入 TapPlan：分支 B** | 等价扫描（`MappingTapPlanEquivalenceTests`，10 矩阵 × 3 格式 × 全像素）结论：Rgba8/Rgba16 与 legacy **逐字节一致**；Rgba32F 在 33 例中 2 例差 1 ULP（shear / strong-far-band）。根因已定位（`Diagnose_DumpsBothWeightPathsForTheShearCase` 可复现）：权重位模式、乘积、读点与累加顺序全部一致，但 JIT 把 legacy 一次性表达式 `Σw·c` 融合成 FMA 链（乘积无限精度）而循环累加 `r += tr*w` 每项先舍入——实现细节级不对称，跨 JIT 版本不可依赖。**legacy `Mapping` 逐字冻结；仅 `…WithOptions` 走 `MappingTapSampler`**。扫描中发现并修复了符号零分歧（首 tap 直接播种累加器，`(-0)·1` 与 legacy 同号） |
+| **零值张力** | `SampleOptions` 是 record struct：全零 == `default` == 该链历史契约（Mapping/Resize 历史 = 预乘）。因此「全零字段的字面统一契约（Straight/Clamp/Encoded/Preserve）不可表达」——需要统一语义时至少设一个非零字段（如 `Edge=Background`），`Alpha` 在统一路径内按字面解释（0=Straight）。显式 `Alpha=Premultiplied`（非零）进入统一路径的 per-tap 预乘管线，与历史 read-premultiplied 数值可能差 1 ULP（量化格式吸收） |
+| `ResizeWithOptions` | 非 default 走逐点统一路径：scale-aware `TapPlanBuilder.Parameters`（下采样展宽与 `WeightTable` 同约定）+ `SamplingCore` tap-plan 注入核心 → 5 核 / LinearLight / Premultiplied / `Edge=Background`（越界 tap 换背景、**权重不重归一化**）/ OutOfGamut 全部支持。逐点路径无行带 scratch 与向量层（语义优先，吞吐留 M15）；`default` 转发冻结的 `Resample.Resize` |
+| 零既有字节变化证据 | 剥离 AotSmoke 新增 5 行（`warp.linear` / `warp.premul` / `resize.options` / `rotate.options` / `perspective.options`）后，既有算子 body SHA-256 仍为 `44390203…6763`（实测）；三档新 body SHA `7a7e74fe…` 一致；668 tests green（M8 第二波后）；AOT 三路 `diff` 无差 |
+| 快照 | 两次显式重生成 + 逐行 review：M8 合计新增 `SampleOptions.Curve`、`SampleTransferCurve`、`SampleOptions` 类型行、`Sampling.WarpWithOptions`、`Sampling.SampleRaw`、`Image.WarpWithOptions`，第二波 `Image.{Resize,Rotate,Affine,Perspective}WithOptions` + `Mapping.{Transform,Perspective}WithOptions` + `Resample.ResizeWithOptions`；**0 删除 0 改写** |
+| 参考向量 | `sample-options-encoded-midpoint`（encoded 中点 = 128）、`warp.tap.bilinear-phase`（0.37 相位 TapPlan 权重 → 94，独立 f32 推导）、`resize.background-edge`（1×1→2×2 背景场 → 143×4，独立推导）；三条均有执行断言（`GeometryOptionsContractTests.Vectors_ExecuteByteExactly` / `SampleOptionsContractTests`）；M6 三条 `warp-identity-*` 未改动 |
+| **仍未做** | `ColorConversionOps.Sample:191-196` 第 4 插值器明确排除；HDR 背景语义（`RgbaColor` 为 8-bit）仍为已知边界，留 M13；WithOptions 的向量/吞吐优化留 M15 |
+
+## M9 EWA / 自适应抗锯齿（完成，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| 入口形态 | Wall 拍板「仅解析变换」：`SampleAaMode{None=0, Elliptical=1}` 只在 Rotate/Affine/Perspective 的 WithOptions 入口生效（affine Jacobian = 逆矩阵 2×2 常量；perspective = 逐像素解析 `∂sx/∂px=(ia·w−N·ig)/w²`，double 序冻结）；`WarpWithOptions` 传非 None **显式抛**（map 是用户 lambda，无解析导数；AGENTS.md:95 禁静默回退）；`Nearest+Elliptical` 显式抛（点采样无核可适配） |
+| 足迹数学 | `Q=JJᵀ`、`R=Q⁻¹`、`w=exp(-0.5·dᵀRd)`、2σ 包围盒（半径 `2·sqrt(λmax(Q))`）按 tap 预算截断（`dᵀRd≤4`）、double 归一化后由累加器一次 f32 截断（TapPlanBuilder 纪律）；权重缓冲按 `(maxTaps+1)²` 租（半整数相位会多出一行一列，2026-11-14 修）。**2026-11-14 勘误**：此前的 `Q=MᵀM` + `k²` 把缩小变成了锐化（2× 缩小 σ≈0.35 px），已按 Heckbert 足迹定义改正；legacy 路径不受影响（剥离 6 条 M8/M9 smoke 行后 body SHA 仍为 `44390203…6763`） |
+| 退化显式处理 | `\|det J\|<1e-6`、`detQ` 非有限或非正、或轴比>64（初始值，待测 `ewa.aa.*`）→ `EwaStatus.DegenerateIsotropic` 返回给调用方 + 回退 `TapPlanBuilder.ForPoint` 各向同性（`DegenerateJacobian_…` 测试断言回退输出逐字节等于各向同性路径）；绝不静默换语义。NaN/Inf 在 `Build` 入口用 `!(detQ > 0)` / `!(Math.Abs(det) >= ε)` 直接拒绝（比较式取反，NaN 也落入退化分支） |
+| SIMD 决策 | **M9 不引入 EWA 的 SIMD 层**（偏离原计划的「SIMD 权重累加 + scalar twin」）：M8 等价扫描证明「legacy 表达式 FMA 融合 vs 循环累加不融合」的形状不对称会造成 1 ULP 分歧；EWA 是新路径无 legacy 对照，纯标量循环形状（Resize 标量尾三档一致的事实）跨档确定。SIMD twin 顺延 M15，known-gaps M7 的「M9 引入 EWA 权重 SIMD 时补 twin」承诺**不触发**（M9 未引入 SIMD） |
+| 质量判据 | `EwaPrecisionTests`：16×16 里一条单像素白线 0.25× 缩小，EWA 四行都必须保留线的能量（每行 1–120、列能量 20–140），legacy 双线性在同相位丢失该线（≤1）——证明「缩小真的在模糊」而不是点采样；`(maxTaps+1)²` 缓冲边界单独一条；`ewa.identity`=96 / `ewa.minify`=128 两条独立推导向量逐字节执行一致；2D 权重走 `DoubleScratch` per-call Rent/Return（零稳态分配纪律） |
+| **待测登记** | `ewa.aa.tier.1..3` 分档边界、`ewa.aa.tap.budget` 上界、高斯 k 曲线——全部待摩尔纹语料（SyntheticCorpus high-frequency / thin-diagonal-lines + cc0-architecture）扫描回填（探针 P4）；回填前分档值是初始值不是调优结论 |
+
+## M10 执行架构：真正融合（完成，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| 入口形态 | `ProcessingPlan.ExecuteWithOptions(source, options[, out report], pool, observe)` + `Image.ApplyWithOptions(plan, options, pool, observe)`；旧 `Execute` / `Apply` 保持原签名，等价于默认 `ExecuteOptions`（融合开、无诊断、无上限、不取消）。用 `…WithOptions` 而不是给旧方法加重载：`Execute(view, null)` 在 `IPixelPool?` 与 `ExecuteOptions?` 之间会变成二义调用 |
+| 融合语义 | 连续 `Point`/`Neighborhood`/`Separable` 步骤为一段；`Global`/`Composite` 是整图段边界。段内按 band 窗口递归：`R_k = Σ_{j>k} halo_j`，第 k 步写 `band ± R_k`、读上一步写过的同一矩形；所有视图（含输出）都 Slice 到同一 `winTop` 原点，rect 是「全局行 − winTop」。每 worker 两张窗口 ping-pong，`count == 1` 不融合。输出与逐步骤路径**逐字节相同**，由 `FusedExecutorEquivalenceTests` 的 18 例覆盖（含 bandRows 1/2/7/64、degree 1/2/4、Rgba16/Rgba32F） |
+| `Composite` 改判 | 旧 `Execute` 只把 `Global` 当整图，`Composite` 走 band 循环——而 `PlanSteps.Global` 适配的合成 kernel 会写整幅目标，多 worker 并发写同一目标属竞态。`Composite` 现在与 `Global` 一样整图执行；全仓此前没有任何 `Composite` 步骤，字节与行为不变 |
+| 回退与报告 | `PlanObserver` 存在 → 强制逐步骤（`ObserverPresent`）；`AllowFusion = false` → `AllowFusionDisabled`；链中有整图步骤 → `CategoryBoundary`；空链 → `EmptyPlan`。`PlanReport` 只在 `Diagnostics = true` 时构造（段/回退原因/worker 数/band 数/池租借/ticks），诊断关闭时不建对象、不读 `Stopwatch`。`Segments[i].FirstStep` 始终是**原始**步骤下标（折叠后的执行步会映射回去） |
+| LUT 折叠 | `ProcessingPlan.AddPointLut(name, 1024 字节表)`：连续表步骤按 `T_AB[c][v] = T_B[c][T_A[c][v]]` 折叠成一张、单遍执行。构造性恒等（逐步执行本来就在字节域量化），`PointLutCompositionTests` 用真实点算子取表验证。**Rgba8 only**：其它格式在 kernel 入口抛 `NotSupportedException` |
+| 内存模型 | 融合段 = 1 张整图输出 + 每 worker 2 张 band 窗口；逐步骤 = 每步 1 张整图（活动集 2 张）。`MaxWorkingBytes` 用前者估算并在执行前抛 `InvalidOperationException`（消息含预算与估算值），估算不是测量。窗口按 worker 租、按「全局最大 windowRows」租（band 0 更短），kernel 在 worker 抛时输出与窗口都在 `finally` 释放 |
+| 仍未做 | 批处理并发（`MaxConcurrentImages` / `ImageBatchRunner` 没有调用方，未引入）；几何算子进 Plan（`Add` 仍拒绝）；Rgba16/Rgba32F 的 LUT 折叠；融合段的 SIMD；`IImageOp` 仍零实现（`PlanStep` 不引用它）。**halo 必须等于算子真实支撑**：给小时融合与逐步骤本来就会给出不同字节，这不是等价性测试的覆盖范围 |
+| ✅ 已判定（未达标） | 「点算子融合后分配 = 0」（M2 出口条件）：2026-11-15 在融合路径上重测，稳态仍 ≈4.3 KiB/op（`AddPointLut` LUT 折叠、§1.3 字面尺）/ ≈6.0 KiB/op（进程级），**未达标但已出数**。见 §「M2『点算子融合后分配』重测与判定」 |
+
+## M11 高级照片算法 I（完成，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| 入口形态 | `NonLocalMeansOps.NonLocalMeans` + `Image.NonLocalMeans`；`LocalLaplacianOps.LocalLaplacian` + `Image.LocalLaplacian`。NLM 是 `OpCategory.Neighborhood`（halo = `searchRadius + patchRadius`），可切带、可融合；LL 是 `Global`（整幅金字塔），必为融合段边界，`PlanReport.FallbackReason = CategoryBoundary` 有断言 |
+| NLM 契约 | 精确、无剪枝：候选 dy→dx 升序，double 累加，`(float)(acc/sumW)` 一次截断；`w = exp(−max(d²_norm − 2σ², 0)/h²)`，`d²_norm` 已按 code range 平方归一（否则同一 `h` 在不同位深表示不同强度）；straight alpha，alpha 参与距离与平均（与 `Bilateral` 同一条取舍）。Rgba8 用 int32 整数距离（可结合 ⇒ AVX2 与标量同值，有孪生测试）；Rgba16 用 long（int32 在 65535² 就溢出）；Rgba32F 用 double 冻结序 |
+| NLM 成本 | 1080p Rgba8 实测：默认 **S=3/P=1 5.8 s**，质量档 **S=5/P=2 16.1 s**（本机 best-of-1 一次预热）。默认值按实测从计划的 S=5/P=2 下调——计划里「SIMD 后 0.7–1.2 s」的估计低了 13×。SIMD 化 SSD 后 **exp 是地板**（每候选一次 `Math.Exp`，~2.5e8 次/1080p），整数 d² 的 memo 对噪声图命中率低，未做；剪枝不做（会改变结果） |
+| NLM 的 halo 前提 | 可切带依赖四条同时成立：整幅宽视图、对**自己收到的视图** clamp、无整图统计、行环按 `start−(S+P)` 播种。第四条照 `Bilateral` 的 `computed = start - 1` 写必错，`3×3 图 + S=5` 的用例专门守它 |
+| LL 契约 | Paris remap（`α=β=1` 为恒等）；**按层选样**（第 l 层用输入 G 金字塔第 l 层的强度挑最近样本，用全分辨率选样会让粗层选错、出阶梯）；**基带用原始 G_{L-1}**，不是 remap 后的残差——否则常数图会被最近的采样强度拖走；8/16-bit 用按 code value 索引的每样本表（与直算逐字节一致，有 `ForceDirectRemap` 对拍），Rgba32F 逐像素 `Math.Pow`；层原生存储 |
+| LL 增益与量测 | 细节增益由「采样间距 / σr」决定：默认 32 样本、σr=0.15、α=0.3 实测 **1.5×** 纹波放大（`BoostsLocalContrastWithoutMovingTheMean` 的阈值按此定 1.3×）。**未做样本间线性插值**——它能把量化台阶抹平，但不会显著提高斜率；提高增益的现实手段是加 `samples` 或降 `σr`，两者都写在 xmldoc |
+| LL 内存与耗时 | 层原生（4/3 张图）而不是每层整幅。1080p 实测 **1.81 s / 分配 139.7 MB**（`SimdImaging.Benchmarks`，默认 L=5/S=32）；4K 未实测，按面积外推约 560 MB。每层整幅会到 2.9 GB 且结果一样。算子自带 `MaxScratchBytes = 2 GiB` 硬上限，超了抛 |
+| ⚠ `MaxWorkingBytes` 盲区 | `ProcessingPlan.EstimateWorkingBytes` 只算 plan 自己的缓冲，**看不到算子内部 scratch**（`Glow` 早已如此）。`ExecuteOptions.MaxWorkingBytes` 对 NLM/LL 不构成真实约束，只有算子内部的 2 GiB 上限生效。**M14 已修机制**：`Add(..., haloX, haloY, scratch)` 加了一个 6 参重载（旧的 5 参签名原样保留，快照 0 改写），`MemoryEstimator` 把它算进每 worker 项。剩下的欠账是**给 `Glow/GuidedFilter/NLM/LL` 各补一个 `ScratchBytes` 声明**——机制在、接线未全 |
+| 跨 ISA | `Math.Exp`（NLM 权重）与 `Math.Pow`（LL remap）沿用 EWA 口径：x64 实测位模式稳定，ARM 未在硬件执行——不宣称跨架构已验 |
+
+## M12 反卷积与内容感知缩放（完成，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| 入口形态 | `RichardsonLucyOps.RichardsonLucy` / `.RichardsonLucyMotion` + `Image.` 同名两个方法；`SeamCarving.RemoveSeams` / `.InsertSeams` / `.CarveTo` + `Image.RemoveSeams` / `.InsertSeams` / `.SeamCarve` |
+| RL 契约 | `e₀=I`；每迭代 `c=e⊛K`、`r=(I+ε)/(c+ε)`、`e←e·(r⊛K)`，`ε=1e-6`。**固定迭代次数**而非「相对变化 < 阈值」：后者是整图归约，band 并行下迭代次数会随 worker 切分变化，等于换了一个答案。文档给的是实测 PSNR 峰值（高斯 10.55→13.58 dB，运动 7.23→11.52 dB），不是猜的默认值 |
+| RL 的处理域 | **straight RGB，alpha 原样拷贝**。RL 是乘性比值更新而非线性组合：对预乘 RGB 反卷积等于在反卷积覆盖率，半透明边缘会在 alpha 上振铃。这与本库「线性滤波一律预乘」的纪律**故意不同**，理由写在 xmldoc 与 `operators.md` |
+| RL 的 PSF | 高斯：`radius=ceil(3σ)`，double 归一后一次截断到 f32。运动：**取 `MotionBlur` 的同一套整数偏移**（`MathF.Round(t·cosθ)` + 重复计数归一），所以 `RichardsonLucyMotion(n,θ)` 是 `MotionBlur(n,θ)` 的真逆对；稀疏 tap 表长度≈`length`（15 对稠密 225） |
+| RL 的确定性 | `PlanarConvolve` 的向量轴是**像素**、每 lane 按 tap 升序累加，与标量孪生逐字同序 ⇒ D1 由构造保证。档位矩阵实测三档一致；另有 `ForceScalar` 孪生测试守着（`MathF.Cos/Sin` 沿用 EWA 口径：x64 实测稳定，ARM 未在硬件执行） |
+| RL 的成本 | 1080p Rgba8 实测：σ=1.5 十次迭代 **254 ms / 分配 95 MiB**；运动 len=15 十次 **347 ms**。四组平面（输入/估计/预测/修正）+ 每 worker 行带 scratch；1080p 约 38 B/px。超 2 GiB 直接抛，不静默 OOM |
+| Seam 契约 | 能量 `E=|L(x+1)−L(x−1)|+|L(x,y+1)−L(x,y−1)|`，边界 clamp。8/16-bit 用整数 luma `(54R+183G+19B)>>8`（权重和 256）⇒ 能量与 DP 全是精确整数，**D0**；Rgba32F 用 float luma + double DP（D1）。像素只被**搬运**不被重采样，保留下来的像素字节不变 |
+| Seam 的平局规则 | DP 比较 up→left→right 且只在**严格更小**时替换；起点取末行最左最小 ⇒ 平坦图恒删第 0 列。这条规则可测（`Ties` 用常量 RGB + alpha 阶梯构造零能量场，断言删掉的是第 0 列），不是「差不多」 |
+| Seam 的方向与插入 | 水平缝 = 转置 → 删竖缝 → 转置：转置是纯置换，且 `|Δx|+|Δy|` 在转置下对称，数学上等价于另写一份横向 DP。插入时把已插入路径在掩码里标脏（`E=+∞`），k 次插入得到 k 条不同路径，而不是同一条复制 k 次 |
+| Seam 的成本 | 每条缝一次全图能量 + DP：1080p 删 50 列 **502 ms（≈10 ms/缝）/ 分配 4 MiB**。4K 未实测 |
+| **增量能量更新：实测否决** | 移除一条缝会把它右侧所有像素左移一位，受影响列集合的宽度由该缝的 x 跨度决定、**无上界**；DP 的影响锥每行扩散一列，整高缝到底行就覆盖全宽。所谓「增量」仍要碰约半个图，省不下一个数量级，却多一条可能与全量结果不一致的代码路径。文档在 `RemoveSeams` 的 xmldoc 里写明理由 |
+| ⚠ RL 的 halo 随迭代增长 | RL 作为计划步时支撑是 `iterations × PSF 半径`，不是 PSF 半径：第 2 次迭代的估计依赖第 1 次在 ±r 内的结果，逐次外扩。声明成一个半径时，融合/逐步两条路径都对（它们用同样的窗口），但 band 边界会比整图调用差 1 LSB——`RunningAsAPlanStep_MatchesTheWholeImageCall` 是唯一能抓到的测试，`RequiredHalo` / `RequiredHaloMotion` 是给调用方的正确值 |
+| Seam **不是** plan step | 它改变尺寸，与 `Crop`/`Resize` 同类，不进 `ProcessingPlan`（plan 按 `width×height` 租缓冲）。`operators.md` 有 GEO-4 与 GEO-21 的逐条对照，防再次混淆 |
+| FFT 反卷积 | **评估后不落地**，见 [`fft-evaluation.md`](fft-evaluation.md)：1080p 补零 2048² 每次迭代 4 次变换 ≈1.84 GFLOP，是直接卷积（9.1e7）的 20×；交叉点 σ≈18 px；且蝶形顺序随档位变，D1 只能靠冻结标量 FFT，正好抵消优势 |
+| ⚠ `MaxWorkingBytes` 盲区 | 与 M11 同一条：`EstimateWorkingBytes` 只算 plan 自己的缓冲，看不到 RL 的 95 MiB 平面。**M14 起可用**：`RichardsonLucyOps.ScratchBytes` 是声明函数，`plan.Add("rl", …, scratch: RichardsonLucyOps.ScratchBytes)` 之后 `MemoryEstimator` 会把它算进每 worker 项（1080p 单步计划 = 48 B/px × workers）；不声明则仍然报 `HasEstimatedTerms = false`，不假装知道 |
+
+## M13 HDR GainMap 与 ICC LUT（完成，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| ICC 入口 | `IccTransformOps.Transform` / `Image.IccTransform` 签名不变，行为扩展：现在的解析器按方向分别选 LUT 或 matrix/TRC，LUT 优先（CMM 语义） |
+| ICC 的数值契约 | 1D 表与 CLUT 全整数：u16 网格、Q15 权重（`0..32768`，允许整 1）、int64 累加、最后一次 `(acc + 16384) >> 15` 舍入。**CLUT 段因此是 D0**；整条 `Transform` 因 PCS 缝合与目标端 matrix/TRC 的 float 路径登记 **D1**，不宣称整链 D0 |
+| ⚠ PCS 编码有三套，按 tag 类型分 | `mAB`/`mBA`：`L*=v/65535·100`、`a*=v/257−128`、XYZ 为 u1Fixed15（`0x8000 = 1.0`）；`mft2`：遗留编码 `L*=v/65280·100`、`a*=v/256−128`；`mft1` 经 ×257 展宽后 `L*` 与 `mft2` 同、`a*/b*` 与通用同。把三套混成一套会让 L* 差 0.04、a*/b* 差半个单位，且**没有任何字节级像素测试能抓到**——只有 `IccProfile_Lut16MidGreyIsHalfOfFullScale` 这类直接对码值的常量测试能 |
+| ICC 的加速：行带并行，**不做 per-pixel SIMD**（实测否决） | 实测 1080p：`grid=33`（215 KB 的 CLUT）**40.0 ms**、`grid=2`（24 个样本，全在 L1）**36.5 ms**、同图的 matrix/TRC **34.8 ms**。也就是说整个 CLUT 的数据量与取址只值约 3.5 ms（≈9%），剩下的是格式转换与共享的 sRGB/PCS 数学。再叠一层：3D CLUT 的累加需要 34 位，**AVX2 没有 64 位整数乘（`vpmullq` 是 AVX-512DQ）**，int64 的向量乘会被 JIT 展开成标量序列；8 角点又是 gather。两头都不利，所以第二阶段的结论是**只保留标量核 + 行带并行**，向量化留到 M15 的 AVX-512 评估（那里 `vpmullq` 才存在） |
+| ICC 的语料缺口 | 测试用的 LUT profile 是 `SyntheticIccProfiles` 手写字节构造的（`mft2` 恒等/常量、`mAB` 全阶段、`mft1`+Lab、`mBA`、以及各拒绝面），期望值手算或由 `ColorMath` 独立算出。**没有可分发的真实扫描仪/打印机 profile**，因此"已对拍真实 profile"这句话不成立；`DeltaE2000` 对独立双精度参考的均值/最大值也未登记成阈值（构造向量逐字节一致已覆盖） |
+| ΔE2000 | `ColorDifference.DeltaE2000` 两种形态（单色对、整图 Mean/Max）。正确性判据是 Sharma et al. (2005) 的 34 组参考对，全部误差 ≤1e-4；这 34 组里包含 4 组正好落在 180° 色相不连续上的用例 |
+| GainMap 承载 | 新成对类型 `GainMappedImage`（`Base` + `GainMap` + `GainMapParameters`，拥有两张图）。`GainMapParameters` 放在 Abstractions，`SimdImaging` 在文件边界与 codec 的 `GainMapMetadata` 互转 —— `Processing` 永远看不到 codec 类型 |
+| ⚠ 几何联动的派生规则 | 本仓 `AffineMatrix` 与 homography 都是 **source→destination、列向量、平移在第 3 列**，所以 `M_gain = T⁻¹·M_base·S`，闭式（非两次矩阵乘，否则对角项 `A·sx/sx ≠ A` 会破坏逐字节）。Crop 的增益矩形用整数 floor/ceil（round 会丢边列）；`Rotate` 的画布从**base 画布**派生，不对 gain 尺寸重跑 `RotationCanvas`（那里的 `Ceiling(-1e-4f)` 会让两张图各走各的）。`Affine_ConjugationMeansTheSameMappingInBothPixelGrids` 是唯一能抓到方向写反的测试 |
+| 未配对的操作 | `Trim` / `EntropyCrop` / `SeamCarve` 由内容决定，两张图会裁出不同区域；`Pad` / `Tile` / `ResizeCanvas` / 锚定式 `Resize` / `ResizeToWidth·Height` 用的是每图自己的画布规则；`RoundCorners` 是 alpha 掩膜合成。这些**故意不提供**，`ThePairDoesNotOfferOperationsWhoseAnswerTwoRenditionsWouldDisagreeOn` 用反射守着，防止以后被"顺手"加上 |
+| 像素空间 `Warp` 被拒 | `PixelWarp` 是 destination→source 的**像素**坐标委托，没有解析逆，两张图各按自己的像素数解释会得到两个映射。配对类型只给 `NormalizedWarp`（归一化坐标，同一个函数对象交给两张图） |
+| Ultra HDR 的读写 | 读：`JpegGainMap.TryRead`，Base/GainMap 各走一次 `Image.FromDecodedImage`；写：base 与 gain 各编一张 JPEG 再 `JpegGainMap.Assemble`；建：`JpegGainMap.Compute`。**不需要 `ImageCodecs.Register`** —— gain-map 解码器已在内置注册表里（codec README 的 facade 表 + `Sdcb.SimdCodecs.xml` 的 facade 摘要），而 `Register` 只用于包未引用的 codec（今天只有 HEIF），且注册项排在所有内置之后，注册它反而会被普通 JPEG 抢先 |
+| `Image.Load` 对 Ultra HDR 的既有行为 | 已实测并写成测试：facade 的 `TryDecode` 返回 `GainMapDecodedImage`（`SampleFormat = Float32`），所以 `Image.Load` **本来就给出 Rgba32F 的 HDR 重建值**，`LoadOptions.Format = Rgba8` 才落到 SDR 底图。M13 没有改这条路径，只是把它变成断言 |
+| `Image.Encode` 仍存不了 Rgba32F | `WorkingFormat.ToPixelFormat` 对 float 抛异常。配对类型存盘走 Ultra HDR（base 是 8/16 位），要存重建出的 HDR 得先 `ToneMap` + `Delinearize` 到 8/16 位，或用 TIFF/PNG 的浮点路径（未接）。`GainMappedImage.ToHdr` 的 xmldoc 写明 |
+| 旧 `HdrOps.ApplyGainMap` 冻结 | 4 参简化模型（固定 sRGB 解码、单一 headroom、无 offset/gamma/capacity）**一个字节都没改**，与 hdrgm 的 `ReconstructGainMap` 并存；`ApplyGainMap_KeepsItsPublishedFormula` 守着它不被顺手"统一"掉 |
+
+## M14 内存预算与预估 API（完成，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| 公开面 | `MemoryBudget.Snapshot()` / `Trim()` / `SetLimits(...)` + 纯函数 `MemoryEstimator.Estimate(...)`。快照里 `Scratch` 是**调用线程**的数（存储是 `[ThreadStatic]`，这是无锁与逐字节确定性的前提）；`WeightCache` 是进程级共享 |
+| FloatScratch 预算 | 每线程 **64 MB** 保留、**32 MB** 单块上限，默认值；超单块上限的缓冲**仍然分配并正常使用**，只是用完不留在缓存里 —— 这条是刻意的，否则 8K resize 每次都要重分配。淘汰按"最久未用"（空闲表只存归还顺序，表头即最旧） |
+| 权重表缓存 | 从「24 条 + 溢出时 `Cache.Clear()`」改为**字节预算 8 MB + 64 条上限 + LRU**。旧策略在超过 24 种尺寸时会把整张缓存清空，于是每次 Resize 都重建全部表；现在只淘汰最久未用的那一条。命中/未命中/淘汰计数可从快照读 |
+| 预估模型 | `InputBytes`（调用方的源）/ `OutputBytes`（执行器的目标）/ `PlanScratchBytes`（融合窗口 = `租借峰值 − 一张目标图`）/ `PerWorkerBytes`（各步 `Scratch` 声明里**最大**的那个，不是求和：一个 worker 一次只跑一步）/ `PeakBytes = 源 + 租借 + 每worker × workers`。workers 与 `RowParallel` 同规则（每 band 一个，受 degree 与 band 数双重限制） |
+| 精确 vs 估算 | 前四项里前三项是执行器自己的算术（`checked`，溢出抛异常不绕回）；只有 `PerWorkerBytes` 依赖算子声明，`HasEstimatedTerms` 明确标出来。没有声明时它报 0 而不是猜一个数 |
+| 验收口径 | 用 `CountingPool.PeakBytes`（执行器实际租借的字节峰值）对拍：`PeakBytes ≥ 实测 + 源`，三个尺寸（64×48 / 1920×1080 / 200×1080）全过。另有一条把融合算术**锁成常量**的测试（两个 point 步 + 64 行 band + degree 4 → `2×4×491520`），因为「融合总是更省内存」是错的：每 worker 两个窗口在 point 步上比一张全图中间结果更贵 |
+| 一条不能碰的边界 | `ProcessingPlan.Add` 的 5 参签名**原样保留**，新增的是 6 参重载。把 `scratch` 直接加到旧签名上会改写公开快照里的一行——那违反"快照只允许新增"的纪律，即使源码层面兼容 |
+| 与预算无关的输出 | `ABudgetCannotChangeAnOutputByte`：把两个预算都压到 0（每次重分配、每次重算权重）后，resize 输出与基线逐字节相同；恢复默认再跑一次仍然相同 |
+| 实测（2026-11-14，`SimdImaging.Benchmarks` 的 `memory:` 行） | 1080p 连续 40 个各不相同的尺寸 → 权重缓存**顶到 64 条 / 1.98 MB**（字节预算生效，24 次淘汰），命中率 8.3%；随后 12 个尺寸重复 4 轮 → 累计命中率 **41.7%**。scratch 侧：保留 **14.65 MB / 5 块**、命中率 **98.8%**；`Trim()` 之后两项都归 0 |
+| 仍缺 | `Glow` / `GuidedFilter` / `NLM` / `LL` 还没有 `ScratchBytes` 声明；直接调用算子（不进 plan）时没有预估入口，只有 `RichardsonLucyOps.ScratchBytes` 这类公开函数可自己算 |
+
+## M15 性能回退门禁（部分完成，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| 基线文件 | `benchmarks/baselines/windows-10.0.19045-x64-16-m15.json`：**29 个场景，15 个设 15% 阈值**，值取同一 binary 两次 `best-of-3` 的均值。2026-11-14 两次重录（cross guide 落地、DT 列遍改 tile 各一次）：`binarySha256` 与当前 Processing+Abstractions 一致，`--perf` 报 `comparable-baselines=1`。设门槛的条件是「每一对记录都 ≤10%」——15% 因此至少留 5 个点给噪声；任何一次摆动越过 15% 的场景一律 `null`。成员：resize bicubic / quantize×3 / reduce / fill / clip / oil / guided / `guided.cross` / chroma / NLM×2 / LL / composite；**不设**的是 stroke（23%）、gaussian（15.6%）、bilateral（21.8%）、`dt`（21.7%）、RL / seam（历史 29% / 25%）、ICC（37%）、gainmap（22%）、crop（20.5%）、lanczos（25.9%） |
+| 可比性 | `machine`（`OS|arch|核数`）+ `binarySha256`（Processing 与 Abstractions 两个 dll 的 SHA-256）+ `protocol`（含 `slow=` 标记）+ `repeats` 全部相同才算可比。任一不同就跳过并打印原因——**跨机器的秒表读数不是门禁** |
+| 判据 | `observed > baseline × 1.15` 判失败，逐条打印 `基线 → 实测（+x%，允许 15%）` |
+| 自检 | `--self-test`：阈值全部压到 0，要求**非零退出**。实测 exit=1、**29 个场景全部报超**（最差 `oil paint 4K` +3.7%——这一跑本身很稳）；正常模式 exit=0、**15 个强制**，两次校验最差 **+1.9%**（`ll 1080p`）/ **+3.5%**（`nlm S=3`） |
+| 实测重复性（这是阈值只给 15 个场景的原因） | 重录用的一对（同一 binary 连跑两次，相对均值）：量化 7.7 / 1.0 / 3.3%、reduce 3.1%、fill 3.1%、clip 4.9%、oil 5.7%、guided 2.0%、cross 2.4%、chroma 1.9%、NLM 5.3 / 0.2%、LL 0.3%、composite 0.2%、resize 3.5%；而同一天另外几对里 stroke 到过 **23.0%**、gaussian **15.6%**、bilateral **21.8%**、crop **20.5%**、lanczos **25.9%**、icc **19.6%**、`dt` **21.7%**，更早一对里 rl **+29%**、seam **+25%**、icc grid=2 **+37%**。门槛取「每对都 ≤10%」，就是给 15% 留 5 个点；越过 15% 的一律 `null` |
+| 已知近似 | `machine` 不含 CPU 型号，两台同 OS/同核数的机器会撞 id；`binarySha256` 因此成为第二道闸，但换编译器版本后旧基线同样会"not comparable"而静默跳过——**基线需要随 binary 一起更新**，这是设计而非疏漏 |
+| 第四档（AVX-512） | **已出评估，未出数**：`docs/simd-tiers-evaluation.md`。关键结论是今天的代码在有 AVX-512 的机器上跑的仍是同一套 `Vector256` 内核（`Vector512.IsHardwareAccelerated` 未用），所以"四档一致"不构成任何 512 位验证。值得写 512 位的只有 `Median3x3` 与 `Convolve2D`（NLM 次之，ICC CLUT 明确不做），且必须运行时分派，`IlcInstructionSet=avx2` 不能动 |
+| AotSmoke 全量核对 | **已核对**：49 条 hash，`REQUIRED` 22 条，**无悬空项**（`REQUIRED ⊆ hashed`，0 条 REQUIRED 没有对应 hash）。M15 点名的六类都在闸内：`warp` / `ewa.rotate` / `nlm` / `gainmap.hdr` / `icc.lut` / `plan.fused`；`dt` 与 `guided.cross` 于 2026-11-14 补入。其余 27 条只 hash 不设闸，属信息性覆盖 |
+| 契约表 | **已完成**：`docs/contracts.md` 30 条，每条锚定一个测试类；`ContractsTests` 反射校验类存在、且该类至少有一个 `[Fact]/[Theory]`，同时校验"恰好 30 条、编号 1..30 连续"。它不解析 markdown——解析只能证明文件与数组一致，数组才是"必须存在"的那份清单 |
+
+## Distance Transform（完成，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| 已落地 | `DistanceTransformOps.SquaredEuclidean(PixelView, threshold, pool)`：Felzenszwalb 抛物线包络，两遍可分扫描 O(N)；alpha 为掩膜通道（≥0.5 为前景）；输出 Rgba32F，R/G/B 为**平方**距离、A=1。门面 `Image.DistanceTransform(...)` 经 `ReplaceBuffer`，格式取自返回缓冲（Rgba32F）而不是输入 —— 与 `ColorSpaceConvert` 一样属于拓宽算子，格式重贴标测在 `DistanceTransformTests` 里 |
+| 为什么输出平方值 | 平方距离在 2²⁴ 以内是精确整数 ⇒ 整个算子 **D0**，测试可与手算/暴力扫描逐位对拍，不靠容差；需要距离本身时调用方 `MathF.Sqrt` |
+| 测试 | `DistanceTransformTests` 8 例：单行 `[4,1,0,1,4]`、3×3 角上 2、全前景 0、空蒙版返回极大值、阈值越界拒绝、9×7 图案与 O(n²) 定义逐像素对拍、3×40 高窄图（越界回归）、门面返回 Rgba32F 且字段同上 |
+| 门禁 | AotSmoke 的 `dt` hash + `REQUIRED`：三路（JIT / AOT-avx2 / AOT-SSE2）同为 `6584AC8BE598B04F`，**列遍改写成 tile 之后仍然不变**（逐字节前提）；`docs/contracts.md` 第 30 条锚定 `DistanceTransformTests`；`gates.sh` 全绿（**899 例 / 0 警告**，快照只增门面一行） |
+| 实测（1080p，8px 棋盘蒙版，分配 45 KiB） | 分块前 **43.1 ms**（43.6 / 42.6），分块后 **40.6 ms**（39.5 / 40.7 / 40.8 / 41.8 / 40.1 五跑）—— **−5.8%**。仍留 `null`：更早那对 **41.0 / 49.9**（+21.7%）就是「门槛会被自己的实测打穿」的反例 |
+| 分块转置（已做，收益有限） | 列遍改为 64 列、列主序 tile：源行一次读 256 B 而不是每元素一条缓存行，tile 的 64 条目标行跨行驻留 L1，扫描在 L2 里跑（1080p 276 KB）。**只值 5.8%** ⇒ 瓶颈不在访存，而在两遍 1-D 扫描本身：每样本一次除法（`Intersection`）加数据相关的回溯 / 前进分支，串行依赖，SIMD 无从下手。此前「列方向跨整行访问是主要成本」是推断，已被这次 A/B 推翻 |
+| 高窄图越界（已修，P0） | `height > width` 时列遍把 `height` 个样本写进按 `width` 租的 scratch，直接 `IndexOutOfRangeException`；此前所有用例都是宽 ≥ 高（5×1、9×7、64×48……），从未覆盖。修复 = scratch 取 `max(width, height)` + 列遍不再借用行缓冲；`ATallImageIsTransformedColumnByColumn`（3×40）修复前确实抛，现钉住 |
+| 同批（2026-11-14） | ①**cross guided filter 已补**：`GuidedFilterOps.GuidedFilter(source, guide, ...)` 与门面 `Image.GuidedFilter(guide, ...)`，`a = cov(I,G)/(var(G)+eps)`、`b = mean(I) − a·mean(G)`；guide 与 source 是同一块内存时回落自导向老路径（逐字节相同，`GuidedFilterTests` 5 例钉住，含 window 参考对拍）。4K r=4 实测 **774 ms / 分配 17 MB**（自导向同次 582 ms / 10.7 MB）。②**domain transform 已评估、不落地**：`docs/domain-transform-evaluation.md`（54 个平面遍 + 每像素 18 次 exp，卖点已被箱均值 O(1)/px 覆盖） |
+| 口径 | `operators.md` 记 `ANL-9`、总数 119；`docs/contracts.md` 30 条；M15 基线已重录：`guided.cross` 设 15% 门槛（两跑 2.4%），`dt` 在文件里但留 `null` |
+
+## P0 正确性与采样精度（M7，2026-11-14）
+
+| 项 | 现状 |
+|---|---|
+| `ProcessingPlan.Execute` 缓冲所有权 | 已修：Rent 与 `owned` 移交之间的无主窗口由显式 `pending` 消除；kernel / band worker / observer 任一抛异常时，`pending`（当前帧）与 `owned`（上一帧）各释放一次、互不重叠。`ProcessingPlanLeakTests` 用计数 `IPixelPool` 验证 `Rent == Dispose`、重复释放 0（5 例） |
+| `Transforms.Copy` | 已修：Rent 后用 `try/catch` 包裹，复制期间异常释放目标帧 |
+| `Sampling.Warp` 精度 | 已修：不再经过 `RgbaColor`(4×byte)。`SamplingCore` 按工作格式原生读写；Rgba16 保留低 8 位、Rgba32F 不钳位（HDR / 负值 / 超范围原样写回）。`WarpPrecisionTests` 12 例 + `tests/Fixtures/vectors/warp-identity-*` 三条独立推导的参考向量 |
+| 公开 API 快照 | M7 显式重生成并 review diff：**只有新增**（`SampleOptions`、4 个 enum、`SampleRaw`、类型清单行），无现有签名删除或改写；旧 8-bit 便利重载完整保留 |
+| Alpha 语义 | M7 仍是 **straight alpha**，与既有 Rgba8 输出字节一致 —— 四档 body SHA-256 与 M6 完全相同（`44390203…6763`）。预乘域统一与色域外策略属 M8 |
+| 三链统一 | **未做**：`Sampling.cs` / `Mapping.cs` / `Resize.cs` 仍各自采样，相位、边界、Alpha 约定不同；统一 Resampler、`LinearLight` / `Premultiplied` 属 M8 |
+| `SampleOptions` 未实现组合 | 显式 `NotSupportedException`，无静默回退 |
+| Warp 的 SIMD twin | `SamplingCore` 是纯标量参考实现，无向量内核可对拍；跨档位一致性由 `benchmarks/simd-tiers.sh` 覆盖，M9 引入 EWA 权重 SIMD 时补 twin |
 
 ## 已实现算子（M1，标量）
 
@@ -111,7 +266,7 @@
 | FLT-18 | HistogramEqualization | 逐通道 CDF；单占位图不拉伸 |
 | FLT-19 | Clahe | 分块直方图 + clip limit 均匀回灌 + 双线性插值 LUT；只有单一灰度的 tile 保持恒等 |
 | FLT-20 | Noise | xorshift128+（splitmix64 播种），12 次均匀和近似高斯；无 libm，跨平台一致 |
-| FLT-21 | GuidedFilter | 自引导，逐通道；箱均值的窗口求和按 8 像素向量化（float 前缀和），行带执行，工作集 = 5 × (band + 4r) 行（4K / band 128 约 11 MB） |
+| FLT-21 | GuidedFilter | 自引导与 cross guide 两条内核，逐通道；箱均值的窗口求和按 8 像素向量化（float 前缀和），行带执行，工作集 = 5 × (band + 4r) 行（4K / band 128 约 11 MB）；cross 为 8 平面 / 约 17 MB，guide 与源同内存时回落自导向 |
 | ANL-1 | Histogram | 每通道 256 桶 |
 | ANL-2 | Statistics | 四通道 min/max/mean/stddev/entropy，一趟；归一化到 0..1，熵按 256 级 |
 | ANL-6 | Ssim | 11×11 高斯（σ1.5）窗，逐行环形缓冲，4K 只要不到 1 MB 临时内存 |
@@ -146,7 +301,7 @@
 
 | 项 | 边界 |
 |---|---|
-| COL-30 IccTransform | 只支持 **matrix/TRC** 型 RGB 配置文件（sRGB、Display P3、Adobe RGB）。LUT 型（mAB/mBA、CMYK、扫描仪 profile）抛 `NotSupportedException`——CLUT 求值需要解析器交出网格，`Sdcb.SimdCodecs.Color.Icc` 未暴露，解析器被重复实现时会漂移 |
+| COL-30 IccTransform | RGB 的 **matrix/TRC 与 LUT 型都支持**：`mft1` / `mft2` / `mAB` / `mBA` 的 `A2B0` / `B2A0`，PCS 为 XYZ 或 Lab，1D 预整形 + 3D CLUT 四面体 + 输出 1D。仍拒绝：非 RGB 设备空间（CMYK / 灰度 / Lab）、`mft1` + PCSXYZ（规范本身未定义 8 位 XYZ）、只有 Intent 1/2 的 profile、`mft` 的非恒等矩阵。边界与数值契约见 [`icc-boundary-decision.md`](icc-boundary-decision.md) |
 | 多帧保存 | `Save` / `Encode` 对 `FrameCount > 1` 抛 `NotSupportedException`，而不是只写第 0 帧。要导出动画得先 `KeepFrames` 选一帧 |
 | 多帧解码路径 | 静图仍走零拷贝 span 路径；多帧需要会话持有数据，会先 `ToArray()` 复制一次 |
 | IO-8 Thumbnail | 没有 DCT 域下推（JPEG 1/8 缩放），缩略图来自解码器内置预览或整图缩放 |
@@ -171,7 +326,7 @@
 |---|---|---|
 | AVX-512 档 | `src/` 全库 **0 处 `Vector512`**，机器 `avx512=False`，第四档从未被执行 | **未修**。对外不得再宣称"四档 SIMD 逐字节一致"，只能写"三档实现 + 一档预留" |
 | `.git` 不存在 | `docs/sixlabors.lic` 没有任何忽略规则保护，密钥泄漏防护为零 | **未修**，需先建仓 |
-| `FloatScratch` 无大小上限 | `[ThreadStatic]` + `MaxRetained=8`，每 worker 可驻留 8 块任意大小缓冲且永不收缩 | **未修**，64 核机器上可观 |
+| `FloatScratch` 无大小上限 | `[ThreadStatic]` + `MaxRetained=8`，每 worker 可驻留 8 块任意大小缓冲且永不收缩 | **M14 已修**：每线程保留预算 64 MB + 单块保留上限 32 MB，超限淘汰（但**照常分配**，只是不留），`MemoryBudget.Trim()` 立即释放。上限只约束"保留"，所以 8K 的 64 MB scratch 不会因此变慢 |
 | `Rgba32F` 的 rotate90 | 泛化只覆盖 4 与 8 字节像素，16 字节仍走 `Slice+CopyTo` 慢路径 | **未修** |
 | 偶发测试失败 | **已定位并修复**。`GaussianBlur_KeepsAConstantImageConstant(sigma: 5)`，60 次里 4 次失败。根因：平面化横向的前缀循环写成 `for (; x < radius; x++)`，**只以 radius 为界没以 width 为界**；11 像素宽的图配 sigma 5（radius 15）时 `planes[to + x]` 越过 `8*width`。`FloatScratch` 是 best-fit、可能返回更大的缓冲，于是**缓冲够大时静默写脏相邻平面、刚好等大时抛 `IndexOutOfRangeException`** —— 异常那次反而是运气好。已修（`Math.Min(radius, width)`），修复后 60/60 全绿 |
 | 同类写法已全库排查 | grep `< radius` / `<= radius` 后逐处核对：`GuidedFilterOps` 第 150 行有 `interior = width > radius * 2 + 1` 守住了横向边界（误报）；`ThresholdOps` 是核内 tap 循环。**只发现这一处，没有第二例** |
@@ -188,7 +343,7 @@
 | 对标的后果 | 流水线 A/B 是 **0 / 3**（唯一那个"赢"是参照实现首个用例的预热假象），与 12 个单算子的 12/12 完全相反 |
 | 已修 | `Execute` 的 band 循环由串行 `for` 改为 `RowParallel.ForBands`，并在 `PlanSteps` 内抑制嵌套并行让算子内联。流水线 A/B 从 **0/3 翻到 3/3**（几何平均 0.3793 → 1.9954×） |
 | 契约变更 | band 并行后**内核会被并发调用**，用户 kernel 必须线程安全。已写入 `Execute` 文档注释；`Plan_ReportsTheSourceRectWithHaloClampedToTheImage` 因裸 `List.Add` 在并行下损坏而改成 `ConcurrentBag` + 排序断言 |
-| 仍未做 | **跨步骤融合**。`Execute` 仍按步骤整图循环、每步租一张整图 ping-pong；`PlanSteps` 仍每 band 租缓冲再拷行。注意：`ProcessingPlan` 的类注释**本来就写准了**（"每步的目标缓冲是整图大小，这部分无法避免"），此前转述为"零中间图"属转述错误，不是代码问题 |
+| 已实现（2026-11-14，M10） | **跨步骤融合**：连续可切带步骤按段走 `FusedExecutor` 的窗口递归（halo 累积、同原点视图、每 worker 两张窗口 ping-pong），`Global`/`Composite` 为整图段边界；`AddPointLut` 把连续 4×256 字节表折叠成单遍（Rgba8）。逐步骤路径保留：`ExecuteOptions.AllowFusion = false` 或存在 `PlanObserver`。`PlanSteps` 仍是每 band 租缓冲再拷行（适配器本身未改） |
 | 已提供（2026-11-07） | `PlanObserver`：`Execute`/`Apply` 可在每步结束、缓冲仍存活时回调，实验台的场景链视图就建在它上面。它**不改变内存模型**（仍每步一张整图），反而依赖这个模型——融合之后就没有中间结果可看。两者是两条路径，不是一件事 |
 | 场景链的 ImageSharp 对照 | 每条配方至少一步参照实现没有对等实现：复古胶片的 `grain`（参照实现无噪声生成器）、风光增强的 `CLAHE`（参照实现无此算子）、线稿化的 `Sobel`（语义不同）、两条风格链的 `Vignette`（参照实现要求颜色参数，语义不同）。做"部分链"对照测出来的既不是本库链也不是参照实现链，数字没有意义 | **评估后不做**（2026-11-07）：遵守"没有公平对等就不设倍数"的既有原则；等某个链的每一步都有对等实现时再补 |
 | 按 band 切会错的算子 | `Vignette` 从**传入视图的中心**算衰减，切 band 后每带各自算中心，输出变成"每带一个椭圆"。它必须走 `Global`。这是实测发现的，不是推断：第一版链把它标成 `Neighborhood` + halo 0，出图后暗角是每带一个 |
@@ -271,6 +426,66 @@ LUT 都是安全的。**没有发现缺陷**，但在此之前这一点只是"�
 限制 8K worker 数 —— 11→4 按 Amdahl 粗估耗时翻倍，19/19 全胜当场消失；
 共享 `FloatScratch` —— 破坏 `[ThreadStatic]` 无锁前提与逐字节确定性。三条都是拿冷启动峰值这把
 错尺子去改产品热路径，按 `known-gaps.md` 铁律 4「不要自己造尺子」否决。
+
+## nearest 内层位拷贝优化（2026-11-15，对标超越）
+
+**动机**：跨尺寸 A/B 矩阵（`sizes`）里 `resize-nearest` 是唯一「小/中图稳定落后、4K 才领先」的算子——
+640×360 **0.82×** / 720p **0.81×** / 1080p **0.84×** / 1440p **0.91×** / 4K **1.21×**。profile 实测「只租还缓冲
+0.0001 ms」，瓶颈不在池而在内核。读 `Resize.cs` 的 Rgba8 nearest 快路径：每个目标像素做 **4 次单字节 load/store**。
+
+**先量后改（`measure before optimizing`）**：新增 `SimdImaging.Comparison -- nearest-ablate`（复刻内层循环、用项目自己的
+`Timing.Time` 交错采样，同 `Profile.MatrixSchemeBenchmark` 范式），三种搬运形态 1080p→960×540、逐字节比对：
+
+| 形态 | 第 1 次 | 第 2 次 | 字节一致 |
+|---|---|---|---|
+| `byte`×4（原实现） | 2.061 ms | 1.909 ms | 基准 |
+| `uint` 一次 32 位位拷贝 | 1.082 ms（**1.90×**） | 0.959 ms（**1.99×**） | ✅ |
+| `Slice(4).CopyTo` | 1.310 ms（1.57×） | 1.202 ms（1.59×） | ✅ |
+
+选 `uint`：把 4 个 Rgba8 字节当作一个未对齐 32 位整数读回再写出，是**纯位搬运**、不做整数重解释，故字节序列在
+大端/小端、AVX2/V128/标量三档、JIT/AOT 下都恒等。`System.Runtime.CompilerServices.Unsafe` 已在 `Resize.cs` 引用。
+
+**端到端（同机器、同协议、`perf`/`sizes` 前后各一轮）**：我方 nearest 稳态绝对时间在中等尺寸下降——
+720p **0.147→0.094 ms**、1080p **0.307→0.183 ms**、1440p **0.537→0.387 ms**；跨尺寸名次由「4/5 落后、翻面」变为
+**5/5 稳定领先**；`perf` 1080p 超越判定 **2.0151×（17/19）→ 2.2755×（19/19）**。4K 我方 1.273→1.346 ms 无改善
+（纯字节搬运已到内存带宽墙，属预期）。
+> ⚠ 两轮里**对手侧读数大幅抖动**（4K 1.545→2.268 ms），所以加速比（如 0.89×→2.21×）**不能**当作优化功劳；
+> 可信的因果证据是同进程交错消融的 1.90–1.99× 与我方绝对时间的下降，端到端 A/B 只作方向佐证。按 §1.3「单个 cell
+> 数字两次差 2× 不算数」的纪律，不引用单格比值下结论。
+
+**字节与门禁**：910 单测通过、公开 API 快照无漂移；三档 SIMD（`simd-tiers.sh`）与 AOT 三路逐字节一致；
+AotSmoke 补 `resize.nearest` 直接输出 hash（`05CAB372…`，JIT/AVX2/SSE2 三路全等）并加入 `REQUIRED`（AGENTS.md：
+改实现的算子必须进 hash list，否则门禁绿了却什么都没验）。改动落在 `SimdImaging.Processing.dll`，`binarySha256`
+随之变化 → `check-baseline.sh` 按设计判「binary differs」并跳过（comparable=0），**没有**改基线值/指纹强行对齐：
+一次试图对齐的尝试拿满载读数比空闲基线，15 场景 +30~98% 假 FAIL，把 nearest 还原成旧写法同时段重测同样 +10~70%，
+证明是机器负载而非回归。细节与「故意跳过」纪律见 `benchmarks/baselines/README.md`。
+
+**剩余优化空间（2026-11-15 实测证伪，关闭）**：上轮登记「矩阵类点算子小尺寸 0.85–0.96× 是 `ApplyMatrixRgba8`
+每次调用重建 `3×256×4` float records 表的固定开销，可缓存」这一假设。本轮用 `SimdImaging.Comparison -- records-ablate`
+（复刻内核、同进程交错、`Timing.Time` 中位、三尺寸、逐字节校验）量化「缓存 records 表」的收益上限：
+
+| 尺寸 | 第 1 次缓存收益 | 第 2 次缓存收益 | 判定 |
+|---|---|---|---|
+| 640×360 | 5.3%（1.06×） | 6.8%（1.07×） | 仅最小图、贴近噪声 |
+| 1920×1080 | 0.1%（1.00×） | 3.8%（1.04×） | **两次差 3.7pt，在噪声内** |
+| 3840×2160 | −2.7%（0.97×） | 4.7%（1.05×） | **符号翻转，纯噪声** |
+
+同一尺寸两次读数差 4~7 个百分点、4K 甚至符号翻转 → 按「单个 cell 数字两次差 2× 不算数」，缓存收益**不成立**。
+3072 次浮点乘相对 2M 像素内核微不足道，且缓存 `[ThreadStatic]` 表要按 12 float 矩阵键判定（sepia amount / 灰度 /
+任意 ColorMatrix 各异），有串味破坏逐字节一致的风险。故**不改产品代码**。点算子整体已接近单核内存带宽墙
+（16.6 MB ÷ 1.7 ms ≈ 9.8 GB/s），SIMD 内核（值主序记录 + 三级 Narrow 打包）已高度优化，不宜凭猜再动。
+
+**位拷贝边界证明（2026-11-15）**：`NearestBitCopyTests` 9 例把 uint 位拷贝的字节恒等钉成机械断言，覆盖既有
+`NearestResizeTests` 未测的非紧排（padded-stride）源：① 每个目标像素按独立权重表从**原始 flat 数组按 padded stride**
+取 4 字节做参照（与内核 `Row(y)` 不同寻址路径）；② tight 与 padded 两种布局的同像素必须 resize 成逐字节一致输出
+（越界读 padding 会让两者分叉，无需易误报的 sentinel 扫描）；③ 覆盖 2:1 下采样（快路径）、非整数比、放大、恒等、
+极小图。5 尺寸逐像素参考 + 4 尺寸布局对照全过。
+
+**机器状态与基线（2026-11-15 复查）**：连跑两次 benchmark，`|run1−run2|` 中位 7%、最大 52%（短场景 fill/crop/
+lanczos 抖动），长场景（nlm/ll/guided/composite，≥150 ms）相对 M15 基线回到 ±11% 内 → **优化无回归再次佐证**。
+但短场景仍 ±20~50%，机器未完全空闲，按 `benchmarks/baselines/README.md` 纪律**不在负载里重录基线**：改了产品 dll
+的 `check-baseline` 继续按设计「故意跳过」（comparable=0），待机器空闲、同 binary 两次 best-of-3 稳定后重录才让门禁
+重新有牙。这是刻意的收口条件，不是遗漏。
 
 ## 实验台暴露的两个真短板（2026-11-06）
 
@@ -443,7 +658,7 @@ LUT 都是安全的。**没有发现缺陷**，但在此之前这一点只是"�
 
 | 项 | 现状 | 影响 |
 |---|---|---|
-| **没有 `.git`** | 连续两轮审计标记；本人也确认"合规红线悬空"。当前所有改动不可回滚、不可追溯 | 仓库公开前的每一天都是密钥泄漏敞口 |
+| **`.git` 已建立（2026-11-12 修正）** | 此前两轮审计写「仓库内没有 `.git`」的依据是当时的工作区快照；实际仓库已有提交历史，`docs/sixlabors.lic` 被 `.gitignore:18` 忽略且从未入库（`git check-ignore -v` 可复核） | 该结论已过时，不要再按「不可回滚 / 密钥裸露」判断。**仍未提交**的是 M6–M10 的工作区改动（由维护者用 VS 提交） |
 | **golden v2 / 定点化未立项** | 720p 上 `grayscale` / `sepia` 仍 0.83–0.84×；浮点重排的空间在收敛，但迟早要面对"锁字节 vs 定点化"的选择 | 决定这两个算子还能不能继续提速 |
 
 ## 测量口径（实践中遇到的问题）
@@ -481,7 +696,7 @@ LUT 都是安全的。**没有发现缺陷**，但在此之前这一点只是"�
 | 出口条件 | 实测 | 判定 |
 |---|---|---|
 | M2 模糊 ≥ 1.5× | 1080p **1.61–1.86×**（11-07） | ✅ 达标 |
-| M2 点算子融合后分配 = 0 | `perfpipe` 三条链 **7 / 39 / 8 KiB/op**；`perf16` 单算子 0–15 KiB/op | ❌ **前提不成立**：§5.4 明写跨步骤融合未实现。这不是「没测」，是功能不存在，不能用测数补救 |
+| M2 点算子融合后分配 = 0 | 11-11 `perfpipe` 三条链 **7 / 39 / 8 KiB/op**（融合前读数）；`perf16` 单算子 0–15 KiB/op。**2026-11-15 融合后重测**：`AddPointLut` LUT 折叠稳态 ≈4.3 KiB/op（§1.3 字面尺）/ ≈6.0 KiB/op（进程级），见 §「M2『点算子融合后分配』重测与判定」 | ❌ **未达标（已判定）**：0 B/op 未达成，但已在 M10 融合路径上出数、两尺子/两次运行/两尺寸可复现；残余为 per-call 计划重建，非像素缓冲 |
 | M3 量化 PSNR 对同参数 | **16.61 dB**，49152/49152 像素不同，平均差 31.32，最大通道差 115（Wu / 64 色 / 无抖动，256×192） | ⚠ 已出数，判定「算法/语义不同」。§11 未给阈值，**不能据此判达标或落后** |
 | M3 抗锯齿覆盖率 | 无数值判据；`PathOpsTests` 只有 `partial.ShouldBeGreaterThan(0)` 这类存在性断言 | ❌ 判据未定义（无测法、无阈值），不可判定；M5 需先写死测法 |
 | M4 10-bit HEIF → 16-bit PNG 端点精确 | **这条测不了**：HEIF 解码器是独立包 `Sdcb.SimdCodecs.Heif`，要启动时 `ImageCodecs.Register` 注册，本库不接入（见「实现边界」）；仓库也没有 10-bit HEIF 语料。现有 `Png_Rgba16_RoundTripsByteExact` 只证 16-bit PNG 往返字节精确 | ❌ 未出数，且**当前架构下无法出数**。不拿 PNG 往返冒充 HEIF 端点 |
@@ -496,12 +711,63 @@ LUT 都是安全的。**没有发现缺陷**，但在此之前这一点只是"�
   16.61 dB 反映的是算法差异，不是质量胜负。对拍入口建在 `Parity.cs` 的 B4，刻意不进 `Cases.Build`，
   避免改变既有 13 场景吞吐表与 1.8224× 判定。
 - §1.3 第 2 条「稳态分配 0 B/op」本轮同样**未达成**：流水线 7–39 KiB/op、Rgba16 单算子 0–15 KiB/op。
+  2026-11-15 在 M10 融合路径上重测仍 ≈4.3–6.0 KiB/op，见 §「M2『点算子融合后分配』重测与判定」。
 - 顺带出的数（不属 §11 出口条件，仅作证据）：`Rgba16` 端到端 **7 / 7 领先、几何平均 2.1003×**；
   流水线 **1.1074×（2/3）**，`point-5` 0.61× 落后；`parity` B1 17 场景中 5 项逐字节一致、6 项 ≤1 LSB、
   3 项视觉等价、3 项算法/语义不同；B2 对手对 `GaussianBlur(NaN)` 静默接受。
 
 ⚠ **三项仍未关闭**：8K `gaussian-blur` 超阈值、抗锯齿覆盖率判据缺失、HEIF 端点无语料。
 这三项是验收欠账，不是功能缺失；但按 §11 口径，M2–M4 都还不能称完成。
+（M2 的「融合后分配 = 0」原是第 4 个「未判定」，2026-11-15 已判定为**未达标**并出数，见下节；
+它是「判过了、输了」，不再属于「没测」，但同样不构成达标。）
+
+## M2「点算子融合后分配」重测与判定（2026-11-15，M5 出数）
+
+§11 M2 行与本文档 M10 节的「⚠ 未判定：分配曲线未重测」自此**关闭为「已判定：未达标」**。11-11 的
+`perfpipe` 7 / 39 / 8 KiB/op 是融合前、单次进程级采样；本轮在 M10 落地后的**融合路径**上重测，用项目
+自己的两把尺子、两次独立运行、两个尺寸，得到可复现数字。
+
+**方法**：`benchmarks/SimdImaging.Comparison -- allocplan`（`AllocPlan.cs`，child-style，只测我方、不加载
+对手/许可、不写报告、不改 golden）。同一个 `ProcessingPlan` 对象反复 `ExecuteWithOptions`（即 §1.3 的
+「池化 + 计划复用后稳态」），`warmup=40 / batch=120 / passes=3`，报三批中位数 [min..max]。同一批执行上
+同时读两把尺子：A = `GC.GetAllocatedBytesForCurrentThread`（§1.3 第 2 条字面口径），
+B = `GC.GetTotalAllocatedBytes(precise:false)`（`Infrastructure.Timing` 的进程级口径，能看见 band 并行
+下 pool 线程的分配）。覆盖 §715 点名的两条融合路径：`AddPointLut`×3（LUT 字节域折叠）与
+`PlanSteps.Point`×3（`FusedExecutor` 窗口递归），各测 fused（M10 默认）/ step（`AllowFusion=false`）；
+`degree=1` 作对照让两尺子收敛。机器 `Windows 10.0.19045 | X64 | 16 核 | .NET 10.0.14 | avx2=True`。
+
+**1920×1080 Rgba8，稳态 B/op**：下表为一次代表运行的「三批中位数 [min..max]」。另有两次同协议独立
+运行，LUT 折叠 fused default 的「每线程 / 进程级」中位数分别为 4365 / 6050 与 4356 / 6174，与下表
+同量级——三次运行每线程差 <1%、进程级 <3%（进程级含 pool 线程/GC 抖动，本就更宽）。
+
+| 链 | 融合 | degree | A 每线程 B/op | B 进程级 B/op |
+|---|---|---|---|---|
+| `AddPointLut`×3（LUT 折叠） | fused | default | 4362 [4360..4368] | 6196 [5802..6328] |
+| 同上 | step | default | 7915 [7900..7923] | 13381 [13319..13463] |
+| `PlanSteps.Point`×3（窗口递归） | fused | default | 5508 [5485..5515] | 25342 [25325..25706] |
+| 同上 | step | default | 10078 [10071..10082] | 31943 [31867..32167] |
+| `AddPointLut`×3 | fused | 1 | 2144 [2144..2144] | 2144 [2144..2145] |
+| `PlanSteps.Point`×3 | fused | 1 | 19816 [19816..19816] | 19817 [19816..19817] |
+
+**判定：❌ 未达标（0 B/op 未达成）**。即便按 §1.3 最有利的字面尺子 A，融合后最强路径
+（`AddPointLut` LUT 折叠）稳态仍 ≈4.3 KiB/op；`degree=1`、零 pool 线程时仍固定 2144 B/op；进程级
+尺子更高（≈6.0 KiB/op）。这与 §467、§653、README 已登记的「稳态 0 分配目标未达成」一致，本轮只是把它
+在 **M10 融合路径**上坐实并出数。融合确实把分配约减半（LUT 折叠 A 7.9→4.4 KiB/op、B 13.4→6.1），
+但没有到 0；不按 §1.3 的目标强行宣称达标，也不改产品字节去凑 0（改 `ProcessingPlan` 会动
+`binarySha256`、让性能基线静默失效，正是 AGENTS.md 反复警告的「绿的 gate 什么都没验」）。
+
+**两条实测副产物（写清原因，非推断）**：
+
+- **残余分配是 per-call 而非 per-pixel**：640×360 与 1920×1080 相差 9× 像素，`AddPointLut` `degree=1`
+  却都精确 2144 B/op。来源是每次 `ExecuteWithOptions` 重建执行计划（`BuildExecutionSteps` 的
+  `List<PlanStep>`/`int[]`/折叠 1024 字节 LUT 克隆、`FusionPlanner.Segment`、band `WorkingBuffer` 包装、
+  `Parallel.For` 调度），不是像素缓冲——后者走 `ArrayPixelPool`。要到 0 需缓存执行计划/折叠表，
+  属产品改动，未在本次进行。窗口递归链在 `degree=1` 随尺寸变（19816→7760）是因为它按 band 数租
+  `WorkingBuffer` 包装，不是像素数。
+- **§1.3 第 2 条字面尺子在并行下系统性少报**：A 只看见调用线程，漏掉 pool 线程——LUT 折叠
+  A≈4360 vs B≈6100、窗口递归 A≈5500 vs B≈25400；`degree=1` 时两尺子收敛到同值（2144、19816），
+  证明差额来自 pool 线程分配而非尺子噪声。这正是 `Infrastructure.cs:171-176` 已注释的坑。
+  故无论取哪把尺子，「未达标」结论都成立。
 
 ## ImageSharp 替换：迁移阻塞清单（2026-11-11）
 

@@ -53,7 +53,14 @@ Not in scope: codecs (SimdCodecs owns them), text rendering, GPU backends.
 ```bash
 bash benchmarks/gates.sh                          # all gates: build + tests + public-API snapshot (~1 min)
 bash benchmarks/gates.sh --aot                    # also the NativeAOT smoke (~1.5 min with the C++ workload)
+bash benchmarks/gates.sh --aot --perf             # also the versioned performance-baseline check
+bash benchmarks/simd-tiers.sh [--aot]             # SIMD tier matrix: full suite + operator-output SHA-256 diff
 ```
+
+`--perf` currently reports `enforced=0`: the baseline format is versioned but every threshold stays
+`null` until real numbers are measured. It is a framework, not yet a regression gate.
+`tests/Fixtures/` holds the CC0 corpus manifest (URL + measured SHA-256, cache never committed),
+the independent reference vectors and the deterministic synthetic offline substitute.
 
 Run the gate script, not the individual commands, unless you are debugging one of them: it checks the
 **observed** numbers (0 warnings, 0 failed, passed ≥ 500, snapshot unchanged) rather than relying on an exit
@@ -84,14 +91,30 @@ bash tests/SimdImaging.AotSmoke/run.sh            # needs the C++ workload (see 
 - Integer pipelines are byte-exact across SIMD tiers and platforms. Float pipelines freeze the operation
   order and use single-rounding FMA; no reassociation, no `Vector.Sum` for pixel values.
 - Never regenerate a golden to make a test pass.
+- Resident memory is budgeted, never unbounded: the thread-local float scratch keeps at most 64 MB idle
+  (32 MB per buffer) and the weight-table cache 8 MB, both reported by `MemoryBudget.Snapshot()`. Limits
+  bound what is **kept**, never what is handed out — an 8K scratch is allocated and then dropped, not
+  refused. Any operator that allocates more than a row buffer must say so through `PlanStep.Scratch`, or
+  `MemoryEstimator` reports a working set that is short by exactly that much.
+- A gain-map pair derives the gain map's geometry from the **base's** parameters — the same normalised
+  rectangle, the conjugated transform, the scaled target size — never by re-running the operator's canvas
+  or scale heuristic on the gain map's own dimensions. Two renditions that make their own decisions stop
+  describing one scene, and the byte-equality tests are the only thing that notices.
 - Untrusted input fails with `InvalidDataException`, caller mistakes with `ArgumentException` /
   `NotSupportedException`; no silent fallback to another format, depth or sampler.
 
-## Status (2026-11-07)
+## Status (2026-11-14)
 
-**Milestone status: M0 and M1 complete and verified. M2–M4 implemented, exit criteria only partly verified.**
-Each milestone has acceptance criteria in `docs/architecture.md` §11; only M0, M1, and M2's blur criterion
-(1.61–1.86× at 1080p) have actually been measured. Do not call a milestone done until its row has numbers.
+**Milestone status: M0, M1 and M6–M10 complete and verified. M2–M4 implemented, exit criteria only partly verified.**
+Each milestone has acceptance criteria in `docs/architecture.md` §11; M2's blur criterion (1.61–1.86× at
+1080p), M3's quantisation PSNR, M4's 8K memory, and the M6–M10 rows carry measured numbers. M2's
+"zero allocation after point fusion" was re-measured on the M10 fused path on 2026-11-15 and is now
+**judged: not met** (steady state ~4.3 KiB/op by §1.3's literal `GC.GetAllocatedBytesForCurrentThread`
+ruler, ~6.0 KiB/op process-wide; two independent runs, two sizes, both rulers — see
+`docs/known-gaps.md` §「M2『点算子融合后分配』重测与判定」). The residual is per-call plan rebuild, not
+pixel buffers, and the §1.3 per-thread ruler under-reports under band parallelism. M3's antialiasing
+coverage and M4's HEIF endpoint remain unjudged for the reasons recorded in `docs/known-gaps.md`.
+Do not call a milestone done until its row has numbers **and they meet the criterion**.
 
 M2–M4 in code: `SimdImaging.Processing` has geometry (Crop, Pad, Trim, Flip, Rotate 90/180/arbitrary, affine, perspective, Resize with
 five resamplers and the five resize modes, canvas pad/crop, tiling, rounded corners, entropy crop, transposes, combined rotate-flip, delegate warping, point sampling, aspect-preserving resize by one axis), point operators (Brightness, Contrast, Saturation, Grayscale, Invert, Gamma, Threshold, Posterize,
@@ -100,24 +123,33 @@ vibrance, temperature, tint, colour balance, channel swap,
 black/white, curves, opacity), blurs
 (Gaussian, box — both separable and row-banded, 4K scratch 8.9 MB; median) a Sobel edge map,
 3×3 morphology (erode / dilate / open / close)
-a bilateral filter, 3×3 convolution, emboss, unsharp mask, Gaussian sharpen, motion blur, bokeh, pixelate, vignette, glow, bit-depth dither (five diffusion kernels, Bayer 2/4/8), oil paint, CLAHE, seeded noise, guided filter (row-banded and vectorised: 4K 523–540 ms / 11 MB, was 893–990 ms / 162 MB), transfer curves (sRGB/γ2.2/Rec.709/PQ/HLG), adaptive threshold, background replacement, colour-vision simulation, colour-space conversion (XYZ/Lab/Luv/LCh/HSL/HSV/YCbCr with chromatic adaptation), chroma subsampling (row-banded, 4K working set 1.1 MB), tone mapping (Reinhard/Hable/ACES/BT.2390 with auto exposure), gain maps, SSIM, gradients, image placement and watermarking and median-cut, Wu, octree, web-safe and dithered palette quantization (one-step `ReduceColors` included),
-transcode with metadata replacement, EXIF auto-orient, metadata transfer, multi-frame loading with kept durations, animation composition, embedded thumbnails, ICC matrix/TRC transforms, channel statistics, histogram equalization, Premultiply / Unpremultiply and the twelve Porter-Duff operators
+a bilateral filter, 3×3 convolution, emboss, unsharp mask, Gaussian sharpen, motion blur, bokeh, pixelate, vignette, glow, bit-depth dither (five diffusion kernels, Bayer 2/4/8), oil paint, CLAHE, seeded noise, guided filter (row-banded and vectorised: 4K 523–540 ms / 11 MB, was 893–990 ms / 162 MB), non-local means (exact, unpruned: 1080p 5.8 s at S=3/P=1, 16.1 s at S=5/P=2), the local Laplacian pyramid (layer-native, per-level sample selection), Richardson–Lucy deconvolution (Gaussian and motion PSFs, 1080p 254 ms at σ=1.5 / ten iterations), seam carving (content-aware, 1080p 10 ms per seam), transfer curves (sRGB/γ2.2/Rec.709/PQ/HLG), adaptive threshold, background replacement, colour-vision simulation, colour-space conversion (XYZ/Lab/Luv/LCh/HSL/HSV/YCbCr with chromatic adaptation), chroma subsampling (row-banded, 4K working set 1.1 MB), tone mapping (Reinhard/Hable/ACES/BT.2390 with auto exposure), gain maps, SSIM, gradients, image placement and watermarking and median-cut, Wu, octree, web-safe and dithered palette quantization (one-step `ReduceColors` included),
+transcode with metadata replacement, EXIF auto-orient, metadata transfer, multi-frame loading with kept durations, animation composition, embedded thumbnails, ICC transforms (matrix/TRC and LUT: `mft1`/`mft2`/`mAB`/`mBA` with a tetrahedral CLUT, 1080p 40 ms at a 33-point grid), CIEDE2000 colour difference, gain-map pairs (base + gain map kept in step through crop, flip, rotate, resize, affine, perspective and normalised warp, with Ultra HDR read/write), channel statistics, histogram equalization, Premultiply / Unpremultiply and the twelve Porter-Duff operators
 18 W3C blend modes,
 in-place fills, line/rect drawing,
 ellipse and polygon fills, and Bézier paths — coverage-antialiased fill (even-odd / non-zero) and stroke (miter / round / bevel joins, butt / round / square caps, dashes), plus path clipping.
-603 tests green. The resize passes and the Rgba8 premultiplied row read are vectorized (≈1.8–2.1× / ≈2.0–2.3×
+884 tests green. The resize passes and the Rgba8 premultiplied row read are vectorized (≈1.8–2.1× / ≈2.0–2.3×
 end to end, ranges and caveats in `benchmarks/README.md`). Since 2026-11-07 the hot paths also include
 byte-domain SIMD for `Median3x3` (16 lanes, 575 ms → 0.8 ms at 1080p), shifted-row accumulation for
 `BokehBlur` and `Convolve2D` (169/81 taps), and row-band parallelism behind `OilPaint`, `Bilateral`,
 `Sobel`, `Clahe` and `EqualizeHistogram`. Point operators are still scalar; at equal core counts we are
 1.1–1.3× behind the oracle overall, and the headline lead comes from the same number of cores doing
 more work per pass, not from more cores. Numbers and protocol: `docs/compare-4.1.3-2026-11-07.md`. `ProcessingPlan` runs same-size steps in row bands with halo-aware source rects, and `PlanSteps` adapts the
-existing operators into steps. `Execute`/`Apply` take an optional `PlanObserver` that is handed each step's
-output while it is still alive — that is the verification path (the lab's chain view is built on it), and it
-is the reason the executor still rents one full-size buffer per step rather than fusing them: a fused executor
-would have no intermediate to show. Band-safety is per operator and not guessable: `Vignette` derives its
-falloff from the centre of the view it is given, so slicing it into bands yields one ellipse per band. It has
-to run `Global`.
+existing operators into steps. Since M10 consecutive band-able steps are **fused** by default: each segment
+runs through band windows (two per worker) with the halo accumulated along the chain, and the output is
+byte-identical to the step-by-step path — `ExecuteOptions.AllowFusion = false` restores it, and a
+`PlanObserver` forces it because the observer has to see every full-size intermediate. Consecutive
+`AddPointLut` steps fold into a single 4×256 table and run in one pass (Rgba8 only). Band-safety is per
+operator and not guessable: `Vignette` derives its falloff from the centre of the view it is given, so
+slicing it into bands yields one ellipse per band. It has to run `Global` — and an operator that reads its
+own view's height is not bandable at all, which is why the fused executor hands every step a view anchored
+at the same `winTop`.
+
+**A step's declared halo must equal the operator's real support.** Fusion changes the failure mode of an
+understated halo from "seam at the band edge" to "the neighbouring real rows are read instead of clamped
+replicas", so a chain that looked acceptable step-by-step can change bytes once fused. The equivalence tests
+compare fused against step-by-step on correctly declared halos only; they cannot make a wrong declaration
+right.
 
 **The public surface is locked by a snapshot, not an analyzer.** `docs/public-api.txt` lists every public
 type and member with its nullable annotations; `PublicApiTests` reflects it and fails on any difference.

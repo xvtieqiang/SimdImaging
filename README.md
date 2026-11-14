@@ -6,6 +6,17 @@
 
 目标：功能对标 ImageSharp 4.1.x 并超越；NativeAOT 一等公民；跨 SIMD 档位输出逐字节一致（**三档已实现，AVX-512 档位预留、尚未实现**）。
 
+## 定位
+
+**高性能 .NET 图像处理与计算摄影引擎。** 四个方向建立竞争力：
+
+| 方向 | 目标 | 现状 |
+|---|---|---|
+| **1. 基础图像处理** | 性能、精度、完整性超过普通 .NET 图片库 | 118 个算子、三工作格式、16 种重采样器；Resize 4K→1080p 比 ImageSharp 快 1.8–2.3×（同参数对拍） |
+| **2. 高级计算摄影** | 去模糊、去噪、去雾、HDR、多帧融合、频域处理 | 去模糊（Richardson-Lucy 高斯/运动 PSF）、去噪（NLM / 局部拉普拉斯 / 双边 / 导向）、HDR（5 种色调映射 + 增益图 + Ultra HDR 读写）、去雾与多帧融合**未做**、频域处理**评估后不落地**（`docs/fft-evaluation.md`） |
+| **3. 计算架构** | 纯托管 SIMD、融合执行、内存预算、NativeAOT | 纯托管零原生依赖；三档 SIMD 逐字节一致（AVX-512 预留未实现）；`ProcessingPlan` 分段融合；`MemoryBudget` + `MemoryEstimator`；NativeAOT 作为构建门禁 |
+| **4. 图像数据保真** | 16-bit、32-bit float、HDR、Alpha、色彩管理 | 全链路 Rgba16 不塌 8 位；Rgba32F 的 HDR>1 不钳位；直通 alpha 与预乘语义分离；ICC matrix/TRC **与 RGB LUT** + CIEDE2000 |
+
 ## 状态
 
 **M0–M4 的功能已全部落地；出口条件已部分核验（2026-11-11 补测，见 [`docs/known-gaps.md`](docs/known-gaps.md)），逐项状态见
@@ -13,7 +24,7 @@
 
 **已可用：**`Image.Load / Save / Encode`、三个工作格式、池化缓冲；几何
 （Crop / Pad / Flip / Rotate90·180 / Rotate 任意角 / Affine / Perspective / Resize 五种采样器）；点算子（Brightness / Contrast / Saturation /
-Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueRotate / Sepia / Normalize / Vibrance / Temperature / Tint / ColorBalance / ChannelSwap / BlackWhite / Curves / Opacity / Clamp）、直方图与均衡；滤波（GaussianBlur / BoxBlur / Median3x3 / Sobel / 形态学 3×3 / 双边 / 卷积 / 浮雕 / 锐化 / 运动模糊 / 散景 / 渐变 / 贴图 / 水印）；合成（Porter-Duff 12 式 + 18 种混合模式）、原地填充/清空、矩形描边、Bresenham 直线、椭圆与多边形填充、预乘/反预乘、调色板量化（中位切分 / Wu / WebSafe / 抖动）、直方图与均衡。
+Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueRotate / Sepia / Normalize / Vibrance / Temperature / Tint / ColorBalance / ChannelSwap / BlackWhite / Curves / Opacity / Clamp）、直方图与均衡；滤波（GaussianBlur / BoxBlur / Median3x3 / Sobel / 形态学 3×3 / 双边 / 卷积 / 浮雕 / 锐化 / 运动模糊 / 散景 / 渐变 / 贴图 / 水印）；合成（Porter-Duff 12 式 + 18 种混合模式）、原地填充/清空、矩形描边、Bresenham 直线、椭圆与多边形填充、预乘/反预乘、调色板量化（中位切分 / Wu / WebSafe / 抖动）、直方图与均衡；高级摄影（非局部均值 / 局部拉普拉斯 / Richardson-Lucy 反卷积 / 接缝裁剪）；色彩管理（ICC 的 matrix/TRC **与 RGB LUT 型 profile**、CIEDE2000）；HDR（五种色调映射、增益图成对类型 `GainMappedImage` + Ultra HDR 读写）；内存治理（每线程 scratch 预算 64 MB、权重表缓存 8 MB + LRU、`MemoryBudget` 统计与 Trim、`MemoryEstimator.Estimate` 预估峰值且区分精确项与算子声明项）。
 
 - `Release` 构建 0 警告，全量测试通过（此处不写死数量，以 CI 输出为准）。
 - Resize 走行带执行：4K→1080p 的分配从 70 MB 降到 **17 MB**（16 MB 预算），输出逐字节不变。
@@ -81,7 +92,7 @@ using var edited = photo.Clone(x => x.Crop(rect).Resize(800, 600).Saturation(1.2
 | 位深 | 由像素类型决定 | 全链路 `Rgba16`，16 位不被 8 位中间层吞掉 |
 | 确定性 | 无跨 SIMD 档位承诺 | **三档**（AVX2 / V128 / 标量）逐字节一致；AVX-512 档位预留，尚未实现 |
 | 内存 | 整图 `MemoryAllocator` | 池化 + ping-pong + 行带；实测 7–39 KiB/op，`0 B/op` 目标未达成 |
-| 格式面 | 多 EXR / TGA / CgBI PNG / ANI | 多 JPEG 2000 / JBIG2 / PNM 全族 / Ultra HDR；HEIF/HEIC 需自行引用 `Sdcb.SimdCodecs.Heif` 并注册 |
+| 格式面 | 多 EXR / TGA / CgBI PNG / ANI | 多 JPEG 2000 / JBIG2 / PNM 全族 / Ultra HDR（读 + 写，含增益图与底图的同步几何）；HEIF/HEIC 需自行引用 `Sdcb.SimdCodecs.Heif` 并注册 |
 
 格式面的差异由底层 `Sdcb.SimdCodecs` 决定，不是应用层的取舍。
 
@@ -92,13 +103,13 @@ using var edited = photo.Clone(x => x.Crop(rect).Resize(800, 600).Saturation(1.2
 | 文档 | 内容 |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | 分层、与 SimdCodecs 的边界、缓冲抽象、SIMD 策略、AOT、测试与基准方法、里程碑、风险 |
-| [`docs/operators.md`](docs/operators.md) | 112 个算子的完整清单（语义 / 实现策略 / 确定性 / 阶段）+ ImageSharp 功能对标 |
+| [`docs/operators.md`](docs/operators.md) | 118 个算子的完整清单（语义 / 实现策略 / 确定性 / 阶段）+ ImageSharp 功能对标 |
 
 ## 一句话设计
 
 - **三个工作格式**：`Rgba8` / `Rgba16` / `Rgba32F`。布局翻译只在边界发生一次，由 SimdCodecs 的 `PixelConverter` 完成。
-- **两个缓冲，来回倒**：`WorkingBuffer`（实现 `IMemoryOwner<byte>`，可零拷贝交给编码器）+ 池；稳态分配实测 7–39 KiB/op（§1.3 的 `0 B/op` 目标未达成）。
-- **计划先于执行**（设计目标）：点算子融合成一张 LUT、预乘只做一次、`Region`/`ScaleDenominator` 下推给解码器。**跨步骤融合目前未实现**——`Execute` 仍按步骤整图循环、每步一张整图 ping-pong（见 `architecture.md` §5.4 与 `known-gaps.md`）。
+- **两个缓冲，来回倒**：`WorkingBuffer`（实现 `IMemoryOwner<byte>`，可零拷贝交给编码器）+ 池；稳态分配实测 7–39 KiB/op（§1.3 的 `0 B/op` 目标未达成）。2026-11-15 在 M10 融合路径上重测仍 ≈4.3 KiB/op，未达标但已出数（见 `known-gaps.md`）。
+- **计划先于执行**：点算子链可用 `AddPointLut` 折叠成一张 4×256 表单遍跑；连续可切带步骤由 M10 的窗口递归融合执行（halo 沿链累积，输出与逐步骤逐字节相同）；`Region`/`ScaleDenominator` 下推给解码器。`PlanObserver` 存在时回退逐步骤（见 `architecture.md` §5.5 与 `known-gaps.md`）。
 - **确定性**：整数路径跨平台逐字节；浮点路径固定运算序 + 单次舍入 FMA，跨档位逐字节。
 
 ## 目录

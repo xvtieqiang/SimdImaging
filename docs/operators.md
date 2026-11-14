@@ -1,6 +1,6 @@
 # SimdImaging 算子清单（v0.1 设计稿）
 
-> 配套 [`architecture.md`](architecture.md)。共 **112 个算子**，按域分组。  
+> 配套 [`architecture.md`](architecture.md)。共 **119 个算子**，按域分组。  
 > 这张表是 M0 之后所有实现的唯一来源：编号进代码、进测试名、进基准用例名。
 
 ## 图例
@@ -32,7 +32,7 @@
 | IO-7 | MetadataTransfer | Exif / XMP / ICC / cICP / mDCV / cLLI 透传与覆盖       | 无内核。写回走各格式 writer 的选项参数                                                                                      | D0  | P0 |
 | IO-8 | Thumbnail        | 原生缩略图 → 1/2–1/8 下推 → 残余缩放 → 轻锐化                   | IO-1 + GEO-5 + FLT-8 组合；JPEG 走 DCT 域可省 5–8×                                                                  | D0  | P1 |
 
-## B. 几何（20）
+## B. 几何（21）
 
 | 编号     | 算子               | 语义要点                                            | 实现策略（算法 + SIMD）                                                                                  | 确定性   | 阶段                                         |
 | ------ | ---------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----- | ------------------------------------------ |
@@ -56,6 +56,11 @@
 | GEO-18 | CustomWarp       | 用户提供的坐标映射（委托）                                 | 逐像素委托调用（非热路径）。**接口式 `ISampler` 未提供**：委托就是 AOT 安全形式，再加接口只多一层虚调用（`known-gaps.md`）                                            | D1    | P2                                         |
 | GEO-19 | RoundCorners     | 圆角/圆形裁剪，带抗锯齿                                    | 解析覆盖率或 4×4 超采样生成 mask，乘 alpha；覆盖率按行 SIMD                                                         | D0    | P1                                         |
 | GEO-20 | Sample           | 单点/多点坐标采样（最近/双线性）                               | 抽出的公共采样器，供 GEO-13/15/16/18 复用                                                                    | D1    | P1                                         |
+| GEO-21 | SeamCarving      | 内容感知缩放：删/插低能量连通缝，**不是矩形裁切**                          | 能量 `\|ΔxL\|+\|ΔyL\|`（8/16-bit 用整数 luma `(54R+183G+19B)>>8`，全部比较精确）；DP 自顶向下，平局偏好 up→left→right、起点取末行最左最小；水平走转置复用同一路径；插入时把已用缝标脏避免重复选同一条 | D0（8/16-bit，路径选择为整数精确）/ D1（Rgba32F） | P2 |
+
+**GEO-4 与 GEO-21 的区别（易混）**：`EntropyCrop` 只裁**四边**、依据是行/列 luma 熵、结果仍是原图的矩形子区；
+`SeamCarving` 依据逐像素梯度能量、移除的是一条**逐行连通的像素路径**、结果不是矩形子区，用于改变画幅比例
+同时保住主体。两者不可互相替代：扫描件留白用前者，改宽高比用后者。
 
 ### GEO-5 的 16 种重采样器（设计目标）
 
@@ -111,14 +116,14 @@
 | COL-27 | Linearize / Delinearize | sRGB、γ2.2、Rec.709、PQ、HLG                                                                                                 | u8/u16：Q16 LUT；f32：`MathF.Pow` 太慢，用 4096 段 LUT + 线性插值（误差 < 0.5 LSB16）         | D0/D1 | P2 |
 | COL-28 | ToneMap                 | Reinhard / Hable / ACES / BT.2390                                                                                        | f32 逐像素曲线；可选按帧统计做自动曝光                                                         | D1    | P2 |
 | COL-29 | GainMapApply            | Ultra HDR / Adobe gain map 合成 HDR                                                                                        | 基础图 × gain^w，按 `ColorEncoding` 决定输出空间                                         | D1    | P2 |
-| COL-30 | IccTransform            | ICC → ICC（A2B/B2A）                                                                                                       | 快路径：3×3 矩阵 + 1D TRC；完整路径：mAB/mBA 的 1D 预整形 + 3D CLUT 三线性 + 输出 1D。CLUT 用 Q15 定点 | D1    | P2 |
+| COL-30 | IccTransform            | ICC → ICC（A2B0 / B2A0）                                                                                                   | 快路径：3×3 矩阵 + 1D TRC；完整路径：`mft1` / `mft2` / `mAB` / `mBA` 的 1D 预整形 + 3D CLUT **四面体** + 输出 1D，PCS 16 位编码按 tag 类型分套（Lab 遗留 8.8 / 通用 16 位、XYZ u1Fixed15）。CLUT 用 Q15 权重 + u16 网格 + int64 累加 —— 该段整数精确（D0），整链因 PCS 缝合登记 D1。仅 RGB 设备空间 | D1    | P2 |
 | COL-31 | ColorSpaceConvert       | RGB ↔ YCbCr / XYZ / xyY / Lab / LCh / Luv / LChuv / HunterLab / LMS / HSL / HSV / CMYK / YccK，含 Von Kries / Bradford 色适应 | 矩阵路径 f32；YCbCr / YccK 的 8/16 位走整数定点（BT.601/709/2020）；色适应是三阶矩阵乘                | D0/D1 | P2 |
 | COL-32 | ChromaResample          | 4:2:0 / 4:2:2 / 4:4:4 上下采样                                                                                               | 下采样 2×2 box 平均；上采样双线性；整数                                                      | D0    | P2 |
 | COL-33 | AdaptiveThreshold       | 局部均值自适应二值化（mean-C / Bradley）                                                                                             | 积分图求窗口均值，O(1)/px；阈值 `mean·(1-k)`；全整数，无浮点。仅为对标 4.x 保留，文档二值化流水线不在本项目范围          | D0    | P1 |
 | COL-34 | ColorBlindness          | 四型色觉模拟/校正（protan / deutan / tritan / achromatopsia）                                                                      | LMS 空间 3×3 矩阵，f32；可逆模式做矩阵求逆                                                   | D1    | P2 |
 | COL-35 | BackgroundColor         | 把指定背景色替换为目标色（容差 + 边缘羽化），证件照/商品图常用                                                                                        | 颜色距离（RGB 欧氏或 Lab ΔE）→ 掩码 → 替换；容差边缘 1px 线性羽化                                   | D0    | P1 |
 
-## D. 滤波（21）
+## D. 滤波（25）
 
 | 编号     | 算子                    | 语义要点                                                                       | 实现策略（算法 + SIMD）                                                                | 确定性               | 阶段 |
 | ------ | --------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------- | -- |
@@ -142,7 +147,11 @@
 | FLT-18 | HistogramEqualization | 全局直方图 → CDF                                                                | 两遍：直方图 → 256 项 LUT → 应用                                                        | D0                | P1 |
 | FLT-19 | Clahe                 | 分块自适应均衡，clip limit                                                         | 分块直方图 → 裁剪重分布 → CDF LUT → tile 间双线性插值                                          | D0                | P2 |
 | FLT-20 | Noise                 | 高斯/均匀噪声                                                                    | xorshift128+ 定种子；高斯用 Box–Muller 或 12 次均匀和近似                                    | D2（固定种子）          | P2 |
-| FLT-21 | GuidedFilter          | 保边平滑（可选）                                                                   | 积分图求均值/方差，O(1)/px                                                              | D1                | P2 |
+| FLT-21 | GuidedFilter          | 保边平滑（可选 cross guide）                                                        | 箱均值的列和 + 前缀和，O(1)/px；自导向与 cross guide 两条内核（guide 与源同内存时回落自导向）       | D1                | P2 |
+| FLT-22 | NonLocalMeans         | 非局部均值去噪：patch 相似度加权平均，**精确求和、无剪枝** | 搜索窗 `(2S+1)²` × patch `(2P+1)²`；Rgba8 整数 SSD（int32，可结合 ⇒ AVX2 与标量同值）/ Rgba16+Rgba32F double SSD；候选 dy→dx 升序、double 累加、一次 f32 截断；每 worker 行环，halo = `S+P`（可切带、可融合）。**默认 S=3/P=1：1080p 实测 5.8 s；S=5/P=2 实测 16.1 s**（`benchmarks/SimdImaging.Benchmarks`，本机 2026-11-14） | D1 | P2 |
+| FLT-23 | LocalLaplacian        | 局部拉普拉斯金字塔：保边局部对比增强（Paris et al.） | Burt–Adcock 5-tap `[1,4,6,4,1]/16` 金字塔；**按层选样**（用输入 G 金字塔第 l 层挑最近强度）；**基带用原始 G_{L-1}**（不是 remap 残差，否则常数图被最近样本拖走）；每样本 code-value LUT（8/16-bit，索引按 code 而非归一化浮点）/ Rgba32F 逐像素 `Math.Pow`；层原生存储；collapse `out_l = L_l + U(out_{l+1})`。**细节增益由「采样间距/σr」决定：默认 32 样本、σr=0.15、α=0.3 实测 1.5×**；1080p 实测 1.81 s / 分配 139.7 MB；样本间线性插值未做 | D1 | P2 |
+| FLT-24 | RichardsonLucy        | 高斯 PSF 反卷积（Richardson–Lucy），固定迭代次数                    | 每迭代 `c=e⊛K`、`r=(I+ε)/(c+ε)`、`e←e·(r⊛K)`；K 对称故镜像即自身；Rgba8/16/32F 平面卷积（向量轴为像素、tap 升序 ⇒ 与标量孪生逐字节）；**straight RGB、alpha 原样**（乘性更新不是线性组合）；Rgba32F 不钳上界；1080p σ=1.5 十次迭代实测 **254 ms**。**作计划步时 halo = `iterations × PSF 半径`**（`RequiredHalo`）——支撑随迭代线性增长，写成一个半径会在 band 边界留 1 LSB 差 | D1 | P2 |
+| FLT-25 | RichardsonLucyMotion  | 运动 PSF 反卷积：`MotionBlur(length, angle)` 的逆                  | PSF 取 `MotionBlur` **同一套整数偏移**（`MathF.Round` + 重复计数归一），因此两者是真逆对而非近似；稀疏 tap 表（长度 15 → 15 tap，稠密需 225）；1080p len=15 十次迭代实测 **347 ms** | D1 | P2 |
 
 ## E. 合成与绘制（13）
 
@@ -176,7 +185,7 @@
 | QNT-7 | ReduceColors     | 量化 + 抖动                 | QNT-* + FLT-16                 | D0/D2 | P1 |
 | QNT-8 | DitherToPalette  | 有界误差扩散到索引色              | 误差限制在 ±16，避免雪花；固定扫描序           | D2    | P1 |
 
-## G. 分析（7）
+## G. 分析（9）
 
 | 编号    | 算子             | 语义要点                        | 实现策略（算法 + SIMD）                     | 确定性 | 阶段 |
 | ----- | -------------- | --------------------------- | ----------------------------------- | --- | -- |
@@ -187,6 +196,8 @@
 | ANL-5 | Psnr           | MSE → PSNR                  | u32/u64 差平方累加；SIMD 乘加               | D0  | P1 |
 | ANL-6 | Ssim / MsSsim  | 11×11 高斯窗                   | 可分离高斯 + 局部均值/方差/协方差；f32             | D1  | P2 |
 | ANL-7 | Diff           | 逐像素绝对差、最大差、超阈值计数            | 无符号差 + `SAD` 思路；一次遍历三个指标            | D0  | P1 |
+| ANL-8 | ColorDifference | CIEDE2000（单色对 + 整图 Mean/Max） | Sharma 式；度数/弧度与 180° 色相不连续分支逐条固定；double 累加 | D1 | P2 |
+| ANL-9 | DistanceTransform | 平方欧氏距离场（蒙版 → 到最近前景的距离²） | Felzenszwalb 抛物线包络，两遍可分扫描 O(N)；alpha 为掩膜通道，阈值 0.5；输出平方值以保住整数精确（2²⁴ 内） | D0 | P1 |
 
 ---
 
@@ -216,7 +227,7 @@
 | 元数据       | Exif / IPTC / XMP / ICC；4.0 加格式间元数据转换 API                                                                                                                  | IO-7                     | 只做透传 + 少量字段；不提供 IPTC 编辑                                                  |
 | 多帧/动画     | `ImageFrameCollection`、GIF/WebP/ANI；4.0 规范化动画编码与 alpha 透明处理                                                                                                | IO-5/6                   | GIF/WebP 覆盖；ANI 在 SimdCodecs 侧暂不支持，属 codec 缺口                            |
 | 位深        | 由像素类型决定（`Rgba32`/`Rgba64`/`HalfVector4`…）                                                                                                                  | 全链路 Rgba16               | 16 位不被 8 位中间层吞掉                                                          |
-| 色彩管理      | 4.0 起 `ColorProfileConverter` + CieLab/LCh/Luv/XYZ/xyY/HunterLab/LMS/CMYK/YCbCr/YccK + Von Kries 色适应                                                       | COL-30/31/32             | **追赶项**：ΔE2000 对拍 4.1.3，不是"有没有"                                          |
+| 色彩管理      | 4.0 起 `ColorProfileConverter` + CieLab/LCh/Luv/XYZ/xyY/HunterLab/LMS/CMYK/YCbCr/YccK + Von Kries 色适应                                                       | COL-30/31/32 + ANL-8     | ΔE2000 **已有**（ANL-8，Sharma 34 组参考）；ICC 的 RGB **LUT 型 profile 已支持**。仍缺：CMYK / 灰度设备空间、Intent 1/2、真实扫描仪 profile 语料；**追赶项**是拿 ΔE2000 对 4.1.3 做同图对拍 |
 | HDR       | 公开处理器集合中未见 PQ/HLG 语义级处理（待复核）                                                                                                                               | COL-27/28/29             | PQ/HLG 色调映射 + Ultra HDR gain map                                         |
 | 扩展性       | `PixelRowOperation` 行委托、`Filter` 组合、`IImageProcessor`                                                                                                      | `IImageOp` + 非泛型行委托      | 我们多"算子声明 halo 与源矩形"，因此可分块                                                |
 | AOT       | 4.1 起为像素格式与 ICO/CUR/QOI 加 AOT 种子；**实测 PNG+Rgba32 完整编解码链路可 NativeAOT publish（0 警告、运行正常）**，其余格式/像素格式组合待逐项核实 | 构建门禁 + 双基线档位断言 | 从第一个提交起零 trim/AOT 警告；参照实现此链路同样可用，此项不宣称领先 |
@@ -238,12 +249,12 @@
 | 容器 | IO-1 Load（含多帧）、IO-2 Save（单帧）、IO-3 Transcode（改元数据重编码）、IO-4 AutoOrient（EXIF 1–8 + 复位标签）、IO-5 Frames / KeepFrames、IO-6 AnimationCompose（逐帧 SourceOver）、IO-7 MetadataTransfer、IO-8 Thumbnail |
 | 几何 | GEO-1 Crop、GEO-2 Pad、GEO-5 Resize（Nearest / Box / Bilinear / Bicubic / Lanczos3，5 / 16 种采样器）、GEO-9 Rotate 90 · 180 · 270、GEO-13 Rotate（任意角）、GEO-14 Affine、GEO-15 Perspective、GEO-10 Flip H / V、GEO-3 Trim（容差）、GEO-6 ResizeMode（Stretch / BoxPad / CropPad / Max / Min + 9 锚点）、GEO-8 ResizeCanvas、GEO-17 Tile / 镜像平铺、GEO-19 RoundCorners（抗锯齿 alpha 掩膜）、GEO-4 EntropyCrop、GEO-11 Transpose / 副转置、GEO-12 RotateFlip（单遍）、GEO-18 Warp（委托映射）、GEO-20 Sample（单点 / 批量）、GEO-7 ResizeToWidth / ResizeToHeight                                                                                                                                                                      |
 | 色彩 | COL-1 Brightness、COL-2 Contrast、COL-3 Saturation、COL-4 HueRotate、COL-6 Opacity、COL-7 Invert、COL-8 Gamma、COL-9 Levels、COL-10 Curves、COL-11 ColorMatrix、COL-12 ChannelSwap、COL-13 Grayscale、COL-14 BlackWhite、COL-15 Threshold、COL-16 Posterize、COL-17 Sepia、COL-18 Tint、COL-19 ColorBalance、COL-20 Temperature、COL-21 Vibrance、COL-22 Premultiply、COL-23 Unpremultiply、COL-24 AlphaThreshold、COL-25 Normalize、COL-26 Clamp、COL-27 Linearize / Delinearize（sRGB / γ2.2 / Rec.709 / PQ / HLG）、COL-33 AdaptiveThreshold（局部均值）、COL-34 ColorBlindness（四种 + Daltonize 校正）、COL-35 BackgroundColor（容差 + 羽化）、COL-5 Lightness（乘性增益）、COL-31 ColorSpaceConvert（XYZ / xyY / Lab / LCh / Luv / LChuv / HunterLab / LMS / HSL / HSV / YCbCr + 色适应）、COL-32 ChromaResample（4:2:2 / 4:2:0）、COL-30 IccTransform（matrix/TRC 型 ICC）、COL-28 ToneMap（Reinhard / Reinhard 扩展 / Hable / ACES / BT.2390 + 自动曝光）、COL-29 GainMap                                                                                                                                            |
-| 滤波 | FLT-2 GaussianBlur（真高斯）、FLT-5 Bilateral、FLT-3 BoxBlur、FLT-4 Median3x3、FLT-10 Sobel、FLT-1 Convolve3x3、FLT-6 BokehBlur、FLT-7 MotionBlur、FLT-8 Sharpen（unsharp mask）、FLT-9 GaussianSharpen（负高斯单核）、FLT-11 Emboss、FLT-17 Morphology（Erode / Dilate / Open / Close 3×3）、FLT-13 Pixelate、FLT-14 Vignette、FLT-15 Glow、FLT-16 Dither（None / Floyd–Steinberg / Atkinson / Burkes / Sierra / Stucki / Bayer 2·4·8）、FLT-12 OilPaint、FLT-18 HistogramEqualization、FLT-19 Clahe、FLT-20 Noise（固定种子）、FLT-21 GuidedFilter                                                                                                                                            |
+| 滤波 | FLT-2 GaussianBlur（真高斯）、FLT-5 Bilateral、FLT-3 BoxBlur、FLT-4 Median3x3、FLT-10 Sobel、FLT-1 Convolve3x3、FLT-6 BokehBlur、FLT-7 MotionBlur、FLT-8 Sharpen（unsharp mask）、FLT-9 GaussianSharpen（负高斯单核）、FLT-11 Emboss、FLT-17 Morphology（Erode / Dilate / Open / Close 3×3）、FLT-13 Pixelate、FLT-14 Vignette、FLT-15 Glow、FLT-16 Dither（None / Floyd–Steinberg / Atkinson / Burkes / Sierra / Stucki / Bayer 2·4·8）、FLT-12 OilPaint、FLT-18 HistogramEqualization、FLT-19 Clahe、FLT-20 Noise（固定种子）、FLT-21 GuidedFilter、FLT-22 NonLocalMeans、FLT-23 LocalLaplacian                                                                                                                                            |
 | 合成 | CMP-1 DrawImage、CMP-10 Linear / Radial / SweepGradient、CMP-13 Watermark、CMP-5 FloodFill、CMP-4 Fill / CMP-12 Clear（原地写入）、CMP-6 DrawLine（Bresenham + Liang-Barsky 裁剪）、CMP-7 DrawRect / FillEllipse / FillPolygon、CMP-2 BlendModes（18 种，含 Hue / Saturation / Color / Luminosity）、CMP-3 PorterDuff（12 式全：Clear / Src / Dst / SrcOver / DstOver / SrcIn / DstIn / SrcOut / DstOut / SrcAtop / DstAtop / Xor）、CMP-8 FillPath（贝塞尔扁平化 + even-odd / non-zero 扫描线）、CMP-9 StrokePath（miter / round / bevel 连接、butt / round / square 端点、虚线）、CMP-11 Clip（路径覆盖率乘 alpha） |
 | 量化 | QNT-2 Wu（矩 + 方差最小化切分）、QNT-4 WebSafe、QNT-8 DitherToPalette、QNT-3 中位切分调色板（无 k-means 精修）、QNT-1 Octree（8 层 + 插入期剪枝）、QNT-7 ReduceColors（量化 + 可选抖动）、QNT-5 BuildPalette、QNT-6 MapToPalette                                                                                                                                                                                                                         |
 | 分析 | ANL-1 Histogram（每通道 n 桶）                                                                                                                                                                                                                                                                                        |
 
-共 112 / 112。几何与滤波的 resize/blur 已向量化（Rgba8 行读写 + 两遍卷积）；此后 `Median3x3` / `BokehBlur` / `Convolve2D` 等热点也 SIMD 化、多个重算子改行带并行。点算子走字节域 LUT 快路径（与标量孪生逐位一致），**未做 SIMD 向量化**。
+共 119 / 119。几何与滤波的 resize/blur 已向量化（Rgba8 行读写 + 两遍卷积）；此后 `Median3x3` / `BokehBlur` / `Convolve2D` 等热点也 SIMD 化、多个重算子改行带并行。点算子走字节域 LUT 快路径（与标量孪生逐位一致），**未做 SIMD 向量化**。
 逐项状态见 [`known-gaps.md`](known-gaps.md)。
 
 ---
@@ -253,10 +264,46 @@
 | 组      |      数量 |     P0 |     P1 |     P2 |
 | ------ | ------: | -----: | -----: | -----: |
 | A 容器与帧 |       8 |      4 |      3 |      1 |
-| B 几何   |      20 |      6 |     12 |      2 |
+| B 几何   |      21 |      6 |     12 |      3 |
 | C 色彩   |      35 |      7 |     20 |      8 |
-| D 滤波   |      21 |      0 |     13 |      8 |
+| D 滤波   |      25 |      0 |     13 |     12 |
 | E 合成绘制 |      13 |      2 |      7 |      4 |
 | F 量化   |       8 |      0 |      8 |      0 |
-| G 分析   |       7 |      0 |      5 |      2 |
-| **合计** | **112** | **19** | **68** | **25** |
+| G 分析   |       9 |      1 |      5 |      3 |
+| **合计** | **119** | **20** | **68** | **31** |
+
+---
+
+## 采样精度与确定性补记（M7，2026-11-14）
+
+既有 112 个算子的编号不变（M11 追加 FLT-22/23），此处补记 P0 修复后的采样语义，避免清单与代码漂移。
+
+| 项 | 确定性 | 语义 |
+|---|---|---|
+| `Sampling.Warp` / `Sampling.SampleRaw` | D0（整数格式）/ D1（Rgba32F 冻结运算序） | 格式原生：Rgba8 归一化后写回逐字节一致；Rgba16 保留全部 16 位（不再 `/257`）；Rgba32F 原样保留 HDR>1、负值、超范围与 Alpha，不钳位。恒等映射在像素中心相位下只有一个权重 1.0 的 tap |
+| `Sampling.Sample` / `Image.SamplePixel` | D0 | **8-bit 便利 API**，签名与行为保持不变，返回 `RgbaColor`；需要格式原生精度时改用 `SampleRaw`。这是显式区分的便利语义，不是"静默降级到别的格式" |
+| `SampleOptions` | — | M7 只实现 `Encoded` / `Straight` / `Clamp` / `Preserve` 这一组默认契约；其余组合显式抛 `NotSupportedException`，禁止静默回退。`LinearLight` / `Premultiplied` 由 M8 三链统一实现 |
+
+**尚未统一（M8 后的残余）**：legacy `Mapping.cs`（Affine / Perspective / Rotate）与 `Resize.cs` 路径**逐字冻结**（等价扫描判分支 B：Rgba32F 与 TapPlan 权重版差 1 ULP，根因 = JIT 对 legacy 一次性 `Σw·c` 表达式做 FMA 融合而循环累加不融合，实现细节级不对称）。新 `…WithOptions` 入口走 `TapPlanBuilder` 权重 + `SamplingCore.SampleWithOptions` / `MappingTapSampler` 统一语义：`Mapping.TransformWithOptions` / `PerspectiveWithOptions`（centre 级 `>W` / `w<=1e-12` 背景判定是 Mapping 几何语义、与 `EdgeMode` 无关）、`Resample.ResizeWithOptions`（逐点 scale-aware TapPlan，`Edge=Background` 越界 tap 换背景、权重不重归一化，`default` 转发冻结路径）。零值张力：全零 `SampleOptions` == `default` == 该链历史契约，「全零字段的字面统一契约」不可表达，需统一语义时至少设一个非零字段。GEO-5 的 `Resampler` 枚举仍只有 5 种，不顺手扩到设计表的 16 种。
+
+`SamplingCore` 目前是纯标量参考实现（无向量内核），因此不存在可与之对拍的 SIMD twin；跨档位一致性由 `benchmarks/simd-tiers.sh` 的三档全量测试加算子输出 SHA-256 比对覆盖。M9 引入 EWA 权重 SIMD 时，按 §7.5 惯例补 scalar twin。
+
+---
+
+## 采样契约补记（M8，进行中，2026-11-14）
+
+既有算子的编号不变。M8 采用「**同一核心 + 每链默认契约**」：`TapPlanBuilder` 是唯一权重生成器（`Resize.cs BuildCore` 与新重建路径共用），但 `Alpha` / `Edge` / 累加序按各链现行语义保留，只有显式 `SampleOptions` 才切换到统一语义。因此既有算子输出字节零变化 —— 剥离 AotSmoke 新增两行后 body SHA-256 仍为 `44390203…6763`。
+
+| 项 | 确定性 | 语义 |
+|---|---|---|
+| `TapPlanBuilder` | D1 | 唯一定义 `scale / filterScale / radius / taps / center / sum 归一化 / sum==0 兜底`；5 核来自 `ResamplerKernels.Get`，GEO-5 仍只有 5 种不扩 16 |
+| `SamplingCore.SampleWithOptions` | D1 | 冻结累加序（y major → x ascending → channel ascending），5 核、`LinearLight` 域变换、`Premultiplied` 预乘、`Clamp`/`Background` 边界、`Clamp`/`Throw` 色域外策略 |
+| `SampleOptions.Curve` | — | `SampleTransferCurve`（Abstractions 镜像 enum，`Srgb=0`，6 值）；per-sample 传输**不钳 [0,1]**，保 HDR>1 / 负值 / 超范围；整图 LUT 管线不复用 |
+| `WarpWithOptions` / `Image.WarpWithOptions` | D1 | 新增重载，旧签名 100% 保留；`docs/public-api.txt` 只有新增、0 删除 0 改写 |
+| `Mapping.TransformWithOptions` / `PerspectiveWithOptions` / `Image.{Rotate,Affine,Perspective}WithOptions` | D1 | centre 级判定（`>W` 开区间 / `w<=1e-12`）恒写背景、与 `EdgeMode` 无关（Mapping 几何语义）；`default` 契约走 `MappingTapSampler`（TapPlan 权重 + 预乘读 + Σw·c），非 default 走统一语义；`Alpha=Straight` 在统一路径按字面解释（0 值张力见 known-gaps M8） |
+| `Resample.ResizeWithOptions` / `Image.ResizeWithOptions` | D1 | `default` 转发冻结的 `Resample.Resize`；非 default 逐点 scale-aware TapPlan（下采样展宽同 `WeightTable` 约定），`Edge=Background` 越界 tap 换背景、**权重不重归一化**；吞吐优化留 M15 |
+| `EwaKernel` / `AdaptiveAa` / `SampleOptions.AaMode` | D1 | M9：椭圆高斯足迹 `w = exp(-0.5·dᵀ(JJᵀ)⁻¹d)`（J = dest→source Jacobian，Q=JJᵀ，R=Q⁻¹；缩小越宽、放大越窄），窗口 = 2σ 包围盒（半径 `2·sqrt(λmax(Q))`）再按 tap 预算截断（`dᵀRd ≤ 4`），double 归一化后由累加器一次 f32 截断；`Math.Exp` 为 BCL 托管实现（x64 实测位模式稳定，ARM 未在硬件执行——如实记录）；累加**纯标量冻结序**（无 SIMD 层，M15 再评估，规避 M8 发现的 FMA 形状不对称）；退化（`|det J| < 1e-6`、非有限、或轴比 > 64，待测 `ewa.aa.*`）显式报 `DegenerateIsotropic` 并退回各向同性重建，绝不静默；`WarpWithOptions` 传 Elliptical 显式抛（lambda 无解析导数）；`Nearest+Elliptical` 显式抛 |
+| `ProcessingPlan.ExecuteWithOptions` / `FusedExecutor` / `PlanReport` | D1 | M10：连续 `Point`/`Neighborhood`/`Separable` 段按 band 窗口递归执行（`R_k = Σ_{j>k} halo_j`，所有视图同一 `winTop` 原点，每 worker 两张窗口 ping-pong），输出与逐步骤**逐字节相同**；`Global`/`Composite` 整图分段；`PlanObserver` 强制逐步骤并在 `FallbackReason` 说明；`Diagnostics=false` 不建报告、不计时。`MaxWorkingBytes` 是估算上限（1 张输出 + 2×worker 窗口），超限抛 `InvalidOperationException` |
+| `ProcessingPlan.AddPointLut` | 恒等 | M10：`T_AB[c][v] = T_B[c][T_A[c][v]]`，连续 4×256 字节表折叠成一张、单遍执行；逐步执行本来就在字节域量化，折叠是构造性恒等而非近似。**Rgba8 only**，其它格式入口抛 `NotSupportedException` |
+
+**仍未完成**：`ColorConversionOps.Sample` 第 4 插值器明确排除在 M8 之外；HDR 背景语义（`RgbaColor` 为 8-bit）是已知边界，留 M13；`ewa.aa.tier.*` / `ewa.aa.tap.budget` / `k` 的摩尔纹语料扫描回填（P4）待跑；Local Laplacian 的样本间线性插值（抹平量化台阶）未做，留 M15；FFT 反卷积只做了评估、不落地（σ ≳ 18 px 才有算术优势，且与 D1 冲突，见 [`fft-evaluation.md`](fft-evaluation.md)）。
