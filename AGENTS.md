@@ -57,8 +57,9 @@ bash benchmarks/gates.sh --aot --perf             # also the versioned performan
 bash benchmarks/simd-tiers.sh [--aot]             # SIMD tier matrix: full suite + operator-output SHA-256 diff
 ```
 
-`--perf` currently reports `enforced=0`: the baseline format is versioned but every threshold stays
-`null` until real numbers are measured. It is a framework, not yet a regression gate.
+`--perf` judges only runs whose `machine`, `binarySha256` and `protocol` all match a stored baseline,
+and prints the enforced count when they do; a different binary prints "not comparable" and passes, which
+is the design, not a pass that proved anything. Re-record the baseline whenever the binary changes.
 `tests/Fixtures/` holds the CC0 corpus manifest (URL + measured SHA-256, cache never committed),
 the independent reference vectors and the deterministic synthetic offline substitute.
 
@@ -103,11 +104,12 @@ bash tests/SimdImaging.AotSmoke/run.sh            # needs the C++ workload (see 
 - Untrusted input fails with `InvalidDataException`, caller mistakes with `ArgumentException` /
   `NotSupportedException`; no silent fallback to another format, depth or sampler.
 
-## Status (2026-11-14)
+## Status (2026-11-15)
 
-**Milestone status: M0, M1 and M6–M10 complete and verified. M2–M4 implemented, exit criteria only partly verified.**
+**Milestone status: M0, M1 and M6–M14 complete and verified. M15 in progress. M5 (the acceptance report)
+not started. M2–M4 implemented, exit criteria only partly verified.**
 Each milestone has acceptance criteria in `docs/architecture.md` §11; M2's blur criterion (1.61–1.86× at
-1080p), M3's quantisation PSNR, M4's 8K memory, and the M6–M10 rows carry measured numbers. M2's
+1080p), M3's quantisation PSNR, M4's 8K memory, and the M6–M14 rows carry measured numbers. M2's
 "zero allocation after point fusion" was re-measured on the M10 fused path on 2026-11-15 and is now
 **judged: not met** (steady state ~4.3 KiB/op by §1.3's literal `GC.GetAllocatedBytesForCurrentThread`
 ruler, ~6.0 KiB/op process-wide; two independent runs, two sizes, both rulers — see
@@ -128,7 +130,8 @@ transcode with metadata replacement, EXIF auto-orient, metadata transfer, multi-
 18 W3C blend modes,
 in-place fills, line/rect drawing,
 ellipse and polygon fills, and Bézier paths — coverage-antialiased fill (even-odd / non-zero) and stroke (miter / round / bevel joins, butt / round / square caps, dashes), plus path clipping.
-884 tests green. The resize passes and the Rgba8 premultiplied row read are vectorized (≈1.8–2.1× / ≈2.0–2.3×
+The full suite is green — read the count from the gate's `observed:` line rather than pinning it here,
+because it grows with every milestone. The resize passes and the Rgba8 premultiplied row read are vectorized (≈1.8–2.1× / ≈2.0–2.3×
 end to end, ranges and caveats in `benchmarks/README.md`). Since 2026-11-07 the hot paths also include
 byte-domain SIMD for `Median3x3` (16 lanes, 575 ms → 0.8 ms at 1080p), shifted-row accumulation for
 `BokehBlur` and `Convolve2D` (169/81 taps), and row-band parallelism behind `OilPaint`, `Bilateral`,

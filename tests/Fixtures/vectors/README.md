@@ -41,7 +41,7 @@ dotnet test tests/SimdImaging.Tests/SimdImaging.Tests.csproj -c Release --filter
 | Warp 三格式精度 / HDR | M7（`warp-identity-*` 已落地） |
 | 显式 `SampleOptions` 契约（5 核 / LinearLight / Premultiplied / OutOfGamut） | M8 进行中（`sample-options-encoded-midpoint` 已落地，其余待补） |
 | 融合 / 非融合逐字节一致 | M10 |
-| 四档 SIMD + JIT / AOT | M6 脚本，M15 全量 |
+| 三档 SIMD + JIT / AOT | M6 脚本，M15 全量 |
 | EWA / 自适应 AA | M9 |
 | NLM / Local Laplacian / RL / Seam | M11–M12 |
 | GainMap / ICC CLUT | M13 |

@@ -19,7 +19,7 @@
 | 项 | 现状 |
 |---|---|
 | 多帧 / 动画 | 已实现：`Load` 见 `FrameCount > 1` 走会话逐帧解码（`LoadFrames`），保留每帧 `Duration`；保存仍只写单帧，对多帧抛 `NotSupportedException`（见「实现边界」） |
-| 处理算子 | 已实现 112 个（全量）；实现边界见下方「实现边界」 |
+| 处理算子 | 已实现 119 个（全量）；实现边界见下方「实现边界」 |
 | SIMD 内核 | Rgba8 行读写、resize/blur 两遍卷积已向量化；点算子走「字节 LUT + 值主序矩阵记录 + 寄存器内钳制打包」，与标量孪生逐位一致（有端到端对比测试）。全部逐位一致，有测试兜底 |
 | `ProcessingPlan` | 已实现：同尺寸步骤按行带执行，`PlanSteps` 把现有算子适配成步骤；`Mutate` 未提供（算子返回新图，原地绘制归 DrawOps） |
 | `SimdImaging.Drawing` 包 | 未创建，P1 起 |
@@ -152,7 +152,7 @@
 | 实测重复性（这是阈值只给 15 个场景的原因） | 重录用的一对（同一 binary 连跑两次，相对均值）：量化 7.7 / 1.0 / 3.3%、reduce 3.1%、fill 3.1%、clip 4.9%、oil 5.7%、guided 2.0%、cross 2.4%、chroma 1.9%、NLM 5.3 / 0.2%、LL 0.3%、composite 0.2%、resize 3.5%；而同一天另外几对里 stroke 到过 **23.0%**、gaussian **15.6%**、bilateral **21.8%**、crop **20.5%**、lanczos **25.9%**、icc **19.6%**、`dt` **21.7%**，更早一对里 rl **+29%**、seam **+25%**、icc grid=2 **+37%**。门槛取「每对都 ≤10%」，就是给 15% 留 5 个点；越过 15% 的一律 `null` |
 | 已知近似 | `machine` 不含 CPU 型号，两台同 OS/同核数的机器会撞 id；`binarySha256` 因此成为第二道闸，但换编译器版本后旧基线同样会"not comparable"而静默跳过——**基线需要随 binary 一起更新**，这是设计而非疏漏 |
 | 第四档（AVX-512） | **已出评估，未出数**：`docs/simd-tiers-evaluation.md`。关键结论是今天的代码在有 AVX-512 的机器上跑的仍是同一套 `Vector256` 内核（`Vector512.IsHardwareAccelerated` 未用），所以"四档一致"不构成任何 512 位验证。值得写 512 位的只有 `Median3x3` 与 `Convolve2D`（NLM 次之，ICC CLUT 明确不做），且必须运行时分派，`IlcInstructionSet=avx2` 不能动 |
-| AotSmoke 全量核对 | **已核对**：49 条 hash，`REQUIRED` 22 条，**无悬空项**（`REQUIRED ⊆ hashed`，0 条 REQUIRED 没有对应 hash）。M15 点名的六类都在闸内：`warp` / `ewa.rotate` / `nlm` / `gainmap.hdr` / `icc.lut` / `plan.fused`；`dt` 与 `guided.cross` 于 2026-11-14 补入。其余 27 条只 hash 不设闸，属信息性覆盖 |
+| AotSmoke 全量核对 | **已核对**：53 条 hash，`REQUIRED` 23 条，**无悬空项**（`REQUIRED ⊆ hashed`，0 条 REQUIRED 没有对应 hash）。M15 点名的六类都在闸内：`warp` / `ewa.rotate` / `nlm` / `gainmap.hdr` / `icc.lut` / `plan.fused`；`dt` 与 `guided.cross` 于 2026-11-14 补入。其余 30 条只 hash 不设闸，属信息性覆盖 |
 | 契约表 | **已完成**：`docs/contracts.md` 30 条，每条锚定一个测试类；`ContractsTests` 反射校验类存在、且该类至少有一个 `[Fact]/[Theory]`，同时校验"恰好 30 条、编号 1..30 连续"。它不解析 markdown——解析只能证明文件与数组一致，数组才是"必须存在"的那份清单 |
 
 ## Distance Transform（完成，2026-11-14）
@@ -177,7 +177,7 @@
 | `Transforms.Copy` | 已修：Rent 后用 `try/catch` 包裹，复制期间异常释放目标帧 |
 | `Sampling.Warp` 精度 | 已修：不再经过 `RgbaColor`(4×byte)。`SamplingCore` 按工作格式原生读写；Rgba16 保留低 8 位、Rgba32F 不钳位（HDR / 负值 / 超范围原样写回）。`WarpPrecisionTests` 12 例 + `tests/Fixtures/vectors/warp-identity-*` 三条独立推导的参考向量 |
 | 公开 API 快照 | M7 显式重生成并 review diff：**只有新增**（`SampleOptions`、4 个 enum、`SampleRaw`、类型清单行），无现有签名删除或改写；旧 8-bit 便利重载完整保留 |
-| Alpha 语义 | M7 仍是 **straight alpha**，与既有 Rgba8 输出字节一致 —— 四档 body SHA-256 与 M6 完全相同（`44390203…6763`）。预乘域统一与色域外策略属 M8 |
+| Alpha 语义 | M7 仍是 **straight alpha**，与既有 Rgba8 输出字节一致 —— 三档 body SHA-256 与 M6 完全相同（`44390203…6763`）。预乘域统一与色域外策略属 M8 |
 | 三链统一 | **未做**：`Sampling.cs` / `Mapping.cs` / `Resize.cs` 仍各自采样，相位、边界、Alpha 约定不同；统一 Resampler、`LinearLight` / `Premultiplied` 属 M8 |
 | `SampleOptions` 未实现组合 | 显式 `NotSupportedException`，无静默回退 |
 | Warp 的 SIMD twin | `SamplingCore` 是纯标量参考实现，无向量内核可对拍；跨档位一致性由 `benchmarks/simd-tiers.sh` 覆盖，M9 引入 EWA 权重 SIMD 时补 twin |

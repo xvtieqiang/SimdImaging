@@ -112,7 +112,7 @@ curl -sL -o photo-mist.jpg     "https://picsum.photos/seed/simd3-contrast/1280/7
 它验证的是"合成之后继续处理"这条路，同时标出 `ProcessingPlan` 的一条边界——合成步骤只能以
 `Global` 整图执行，切带没有意义（`Blend` 要读整幅叠加层）。
 
-> 库里的算子编号有 148 个（见 `docs/operators.md`），实验台覆盖 60。差额主要是需要第二张输入图的
+> 库里的算子编号有 119 个（见 `docs/operators.md`），实验台覆盖 60。差额主要是需要第二张输入图的
 > 合成类（已在 2026-11-12 撤掉的 18 种混合模式与 12 式 Porter-Duff、以及水印/图层合成）和需要色彩
 > 配置文件上下文的（ICC、色彩空间转换），这些不是"加一行 Catalog"能接的，得先有第二张图和配置入口。
 

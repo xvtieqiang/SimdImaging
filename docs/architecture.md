@@ -1,6 +1,7 @@
-# SimdImaging 架构设计（v0.1 设计稿）
+# SimdImaging 架构设计（v0.1）
 
-> 状态：**设计稿，待确认后进入 M0**。本文只定义形状与契约，不含实现。
+> 状态：**设计契约 + 实施记录（2026-11-15）**。M0、M1、M6–M14 已完成并验收，M15 进行中，M5 验收未启动，
+> M2–M4 功能已落地但出口条件仅部分核验。§11 中带「已完成」与实测数字的行是记录，未标记的行仍是待兑现的设计。
 > 底层依赖：`Sdcb.SimdCodecs` 2.0.x，**NuGet 包**，版本锁在 `Directory.Packages.props`。仓库不持有、也不构建任何外部源码。
 > 算子清单见 [`operators.md`](operators.md)。
 
@@ -38,7 +39,7 @@
 
 | # | 维度 | 目标 | 测法 |
 |---|---|---|---|
-| 1 | 端到端吞吐 | 12 个固定场景 ≥ 4.1.3，其中 resize/模糊/合成 ≥ 1.5× | 同进程 A/B，MP/s |
+| 1 | 端到端吞吐 | 19 个固定场景 ≥ 4.1.3，其中 resize/模糊/合成 ≥ 1.5× | 同进程 A/B，MP/s |
 | 2 | 稳态分配 | 池化 + 计划复用后 **0 B/op** | `GC.GetAllocatedBytesForCurrentThread` |
 | 3 | 峰值内存 | 8K 图 ≤ 2.5× 单帧 | `GC.GetTotalMemory` + WorkingSet |
 | 4 | 位深保真 | 10/16 bit 全链路不塌到 8 bit | 16-bit PNG / TIFF 往返端点误差 0。原本的 10-bit HEIF 端点**测不了**：HEIF 是独立包且需手动注册，本库不接入（`known-gaps.md`） |
@@ -96,7 +97,7 @@ AGENTS.md 写明：JPEG 编解码、WebP 解码、PNG 编解码**已调到世界
   │
   ├─ SimdImaging                    门面：Load / Save / Mutate / Clone / Plan
   │    ├─ SimdImaging.Drawing       P1 起：形状 / 路径 / 渐变 / 抗锯齿
-  │    ├─ SimdImaging.Processing    118 个算子 + 全部 SIMD 内核
+  │    ├─ SimdImaging.Processing    119 个算子 + 全部 SIMD 内核
   │    └─ SimdImaging.Abstractions  Image / WorkingBuffer / IImageOp
   │
   ├─ 边界：一次 PixelConverter + RasterImage
@@ -715,7 +716,7 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 | **M2 色彩 + 滤波（功能完成）** | 35 个点算子 + LUT 字节域融合、Gaussian/Box/Median/Sobel/Unsharp、直方图与均衡、自适应二值化 | 模糊 ≥ 1.5×：**1080p 实测 1.61–1.86×，达标**（11-07）；「点算子融合后分配 = 0」：**❌ 已判定未达标（2026-11-15，M5 出数）**——M10 的 `AddPointLut` 折叠与窗口递归落地后重测，稳态 ≈4.3 KiB/op（§1.3 字面尺 `GC.GetAllocatedBytesForCurrentThread`）/ ≈6.0 KiB/op（进程级），两尺子、两次独立运行、两尺寸可复现；残余是 per-call 计划重建而非像素缓冲。0 B/op 未达成，与 §1.3/§6.1/README 既有口径一致；11-11 的 7 / 39 / 8 KiB/op 是融合前的旧读数，不作结论。见 `known-gaps.md` §「M2『点算子融合后分配』重测与判定」 |
 | **M3 量化 + 绘制（功能完成）** | Octree/Wu/Palette/WebSafe、抖动、路径与形状、18 blend + 12 Porter-Duff、渐变、水印 | 量化 PSNR：**16.61 dB**（Wu / 64 色 / 无抖动，同参数对拍，11-11）；本行未给阈值，只能记数、不能判达标。抗锯齿覆盖率：**判据未定义**（无测法、无阈值，现有测试只有 `partial > 0` 存在性断言）→ 仍不可判定 |
 | **M4 HDR/ICC/高级（功能完成）** | 传递函数、色调映射、gain map、ICC 矩阵/TRC（LUT 顺延 M13）、CLAHE、双边、行带流式 | 8K 峰值内存：**4 场景 0.74 / 2.68 / 1.01 / 1.01× 单帧**（单帧 126.56 MiB，2.5× = 316.4 MiB），gaussian-blur 339.0 MiB **超 7.1%**；10-bit HEIF → 16-bit PNG 端点：**测不了**——HEIF 未接入、也无可编解码语料，未出数（`Png_Rgba16_RoundTripsByteExact` 只证 16-bit PNG 往返，不等于 HEIF 端点） |
-| **M5 验收** | 12 场景基准报告、分配报告、AOT 报告、`known-gaps.md` 定稿 | §1.3 六条全部出数，输的条目写清原因 |
+| **M5 验收** | 19 场景基准报告、分配报告、AOT 报告、`known-gaps.md` 定稿 | §1.3 七条全部出数，输的条目写清原因 |
 | **M6 治理与验收基建前置（已完成）** | 参考向量包 / 像素差异工具 / CC0 语料清单 + SHA-256 下载脚本 / SIMD 档位矩阵 / 版本化性能基线格式与 `gates.sh --perf` 框架 / AotSmoke 必需 hash 检查与 `warp` 条目 | ✅ 2026-11-14：`gates.sh` observed `warnings=0 errors=0`、`failed=0 passed=619`、PublicApi 快照 unchanged；`simd-tiers.sh` 三档 JIT 各 619/619，算子输出 body SHA-256 均为 `44390203…6763`；`run.sh` 的 JIT/AVX2/SSE2 三路 `diff` 无差且必需 hash 含 `warp` / `samplepixel`；语料 2/2 条 SHA-256 通过；`--perf` 如实输出 `enforced=0`（框架入库、阈值待 M15）。AOT 档无法跑 xUnit，以 smoke 的三路字节比对代替第四次全量测试，这是口径说明不是宣称跑了四套测试 |
 
 | **M7 P0 正确性止血（已完成）** | `Execute` / `Transforms.Copy` 异常所有权；`SamplingCore` 格式原生采样 + `SampleOptions` 契约 + `SampleRaw`；Warp 精度回归；AotSmoke `warp` / `samplepixel` 条目 | ✅ 2026-11-14：计数池 5 例（Global kernel / band kernel / observer / 正常三步 / 空 plan）验证 `Rent == Dispose`、重复释放 0；`WarpPrecisionTests` 12 例覆盖三格式恒等逐字节、Rgba16 低字节、Rgba32F 的 HDR>1 / 负值 / 超范围、边界背景、非整数坐标、8-bit 兼容重载、不支持契约显式抛、map 抛异常不泄漏；`gates.sh --aot --perf` observed `warnings=0 errors=0`、`failed=0 passed=636`、快照 review 后 unchanged、AOT 三路 `diff` 无差；`simd-tiers.sh` 三档各 636/636，body SHA-256 `44390203…6763` 与 M6 相同（Rgba8 输出字节未变，旧内联断言全部未改）。`docs/public-api.txt` 只有新增条目、无现有签名改写 |

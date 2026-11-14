@@ -85,9 +85,9 @@ suite and produced the same operator-body SHA-256
 precision rewrite (the Rgba8 output bytes did not move). The exact pass count is deliberately not
 pinned here — it grows with every milestone; read it from the gate's `observed:` line instead.
 `tests/SimdImaging.AotSmoke/run.sh` additionally diffed JIT / avx2 / SSE2 bodies with no difference
-and now requires `warp` and `samplepixel` hashes. An AOT publish cannot run xUnit, so the fourth
-tier is that smoke rather than a fourth full test-suite run — a scope note, not a claim that four
-full suites were executed.
+and now requires `warp` and `samplepixel` hashes. An AOT publish cannot run xUnit, so the smoke's
+byte-for-byte diff stands in for re-running the suite under AOT — a different axis (build product),
+not a fourth SIMD tier, and not a claim that four full suites were executed.
 
 M8 update (2026-11-14): `AotSmoke/Program.cs` gained two explicit-contract operators
 (`warp.linear`, `warp.premul`), so the operator-body SHA moved to

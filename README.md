@@ -12,15 +12,18 @@
 
 | 方向 | 目标 | 现状 |
 |---|---|---|
-| **1. 基础图像处理** | 性能、精度、完整性超过普通 .NET 图片库 | 118 个算子、三工作格式、16 种重采样器；Resize 4K→1080p 比 ImageSharp 快 1.8–2.3×（同参数对拍） |
+| **1. 基础图像处理** | 性能、精度、完整性超过普通 .NET 图片库 | 119 个算子、三工作格式、**5 种重采样器**（设计表 16 种，见 `docs/operators.md`）；Resize 4K→1080p 比 ImageSharp 快 1.8–2.3×（同参数对拍） |
 | **2. 高级计算摄影** | 去模糊、去噪、去雾、HDR、多帧融合、频域处理 | 去模糊（Richardson-Lucy 高斯/运动 PSF）、去噪（NLM / 局部拉普拉斯 / 双边 / 导向）、HDR（5 种色调映射 + 增益图 + Ultra HDR 读写）、去雾与多帧融合**未做**、频域处理**评估后不落地**（`docs/fft-evaluation.md`） |
 | **3. 计算架构** | 纯托管 SIMD、融合执行、内存预算、NativeAOT | 纯托管零原生依赖；三档 SIMD 逐字节一致（AVX-512 预留未实现）；`ProcessingPlan` 分段融合；`MemoryBudget` + `MemoryEstimator`；NativeAOT 作为构建门禁 |
 | **4. 图像数据保真** | 16-bit、32-bit float、HDR、Alpha、色彩管理 | 全链路 Rgba16 不塌 8 位；Rgba32F 的 HDR>1 不钳位；直通 alpha 与预乘语义分离；ICC matrix/TRC **与 RGB LUT** + CIEDE2000 |
 
 ## 状态
 
-**M0–M4 的功能已全部落地；出口条件已部分核验（2026-11-11 补测，见 [`docs/known-gaps.md`](docs/known-gaps.md)），逐项状态见
-[`docs/architecture.md` §11](docs/architecture.md)。** 全量测试通过、`Release` 构建 0 警告、public API 由快照锁定。
+**M0、M1、M6–M14 已完成并验收；M15（SIMD 收口 / 门禁 / 契约）进行中；M5 验收未启动；M2–M4 功能已落地、
+出口条件部分核验**——M2 的「点算子融合后分配 = 0」已判定**未达标**（≈4.3–6.0 KiB/op，2026-11-15），
+M4 的 8K `gaussian-blur` 峰值超 7.1%，M3 抗锯齿覆盖率与 M4 的 HEIF 端点仍无判据可测。
+逐项状态见 [`docs/architecture.md` §11](docs/architecture.md) 与 [`docs/known-gaps.md`](docs/known-gaps.md)。
+全量测试通过、`Release` 构建 0 警告、public API 由快照锁定。
 
 **已可用：**`Image.Load / Save / Encode`、三个工作格式、池化缓冲；几何
 （Crop / Pad / Flip / Rotate90·180 / Rotate 任意角 / Affine / Perspective / Resize 五种采样器）；点算子（Brightness / Contrast / Saturation /
@@ -103,7 +106,7 @@ using var edited = photo.Clone(x => x.Crop(rect).Resize(800, 600).Saturation(1.2
 | 文档 | 内容 |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | 分层、与 SimdCodecs 的边界、缓冲抽象、SIMD 策略、AOT、测试与基准方法、里程碑、风险 |
-| [`docs/operators.md`](docs/operators.md) | 118 个算子的完整清单（语义 / 实现策略 / 确定性 / 阶段）+ ImageSharp 功能对标 |
+| [`docs/operators.md`](docs/operators.md) | 119 个算子的完整清单（语义 / 实现策略 / 确定性 / 阶段）+ ImageSharp 功能对标 |
 
 ## 一句话设计
 

@@ -104,7 +104,7 @@ internal static class Parity
         report.Table(["非法输入", "我方", "对手", "我方 ms", "对手 ms", "判定"], robustRows);
 
         report.Heading(3, "B3 可复现性（同进程重跑两次）");
-        report.Line("> 我方跨 SIMD 档位的逐字节一致性由 CI 四档矩阵 + AOT 冒烟覆盖，结果见本报告 C1 与「外部命令实测」章节；这里只测同档位重跑。");
+        report.Line("> 我方跨 SIMD 档位的逐字节一致性由 CI 三档矩阵 + AOT 冒烟覆盖，结果见本报告 C1 与「外部命令实测」章节；这里只测同档位重跑。");
         report.Line();
         var reproRows = new List<string[]>();
         foreach (var c in cases.Where(c => c.Id is "invert" or "resize-bicubic" or "gaussian-blur"))
