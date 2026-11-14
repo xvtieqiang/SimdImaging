@@ -103,7 +103,10 @@ public static class TransferOps
         return table[index] + (table[index + 1] - table[index]) * fraction;
     }
 
-    private static float Decode(TransferCurve curve, float value) => curve switch
+    // internal (not private): the per-sample reconstruction core maps SampleTransferCurve onto
+    // TransferCurve and reuses this mathematics instead of growing a second copy of it.
+    // The implementation itself is unchanged, so the whole-image LUT path keeps its bytes.
+    internal static float Decode(TransferCurve curve, float value) => curve switch
     {
         TransferCurve.Srgb => value <= 0.04045f
             ? value / 12.92f
@@ -117,7 +120,7 @@ public static class TransferOps
         _ => value,
     };
 
-    private static float Encode(TransferCurve curve, float value) => curve switch
+    internal static float Encode(TransferCurve curve, float value) => curve switch
     {
         TransferCurve.Srgb => value <= 0.0031308f
             ? value * 12.92f

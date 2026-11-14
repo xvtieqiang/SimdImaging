@@ -1,0 +1,400 @@
+using System.Runtime.InteropServices;
+using Sdcb.SimdCodecs.Abstractions;
+using SimdImaging.Abstractions;
+using SimdImaging.Processing.Internal;
+
+namespace SimdImaging.Processing.Geometry;
+
+/// <summary>
+/// Content-aware resizing by seam carving: instead of resampling, it removes (or repeats) connected paths of
+/// pixels that carry the least gradient energy, one at a time, and the image loses exactly those columns or
+/// rows.
+/// <para><b>This is not <see cref="EntropyCrop"/>.</b> EntropyCrop trims uniform <i>borders</i> and always keeps a
+/// rectangle; a seam is a per-row path through the middle of the image, so the result is not a sub-rectangle of
+/// the input. Use EntropyCrop for scan margins, seam carving to change the aspect ratio while keeping the
+/// subject.</para>
+/// <para><b>Determinism.</b> For 8- and 16-bit input the luma is an exact integer
+/// (<c>(54·R + 183·G + 19·B) &gt;&gt; 8</c>, BT.709 with weights summing to 256), so the energy map, the dynamic
+/// programme and every comparison are exact integers — the output is bit-identical on any machine (D0). Float
+/// input uses float luma and a double programme in a fixed order (D1). Pixels are only ever <i>moved</i>, never
+/// resampled, so the kept pixels keep their exact bytes.</para>
+/// <para>Cost is one full energy + programme pass per seam: <c>O(W·H)</c> each, so removing 100 columns from
+/// 1080p is a hundred passes. The energy is recomputed from pixels every time rather than updated
+/// incrementally; see the note on <see cref="RemoveSeams"/> for why.</para>
+/// </summary>
+public static class SeamCarving
+{
+    /// <summary>
+    /// Removes <paramref name="count"/> connected seams, shrinking the image by one column or row each.
+    /// <para><b>Why the energy is recomputed rather than updated.</b> Removing a seam moves every pixel to its
+    /// right (or below) one position, so the columns whose gradient changes are not a fixed-width band around the
+    /// seam: the set is bounded only by how far the path wanders, which is unbounded in general. The programme has
+    /// the same problem in a worse form — a change at one cell spreads one column per row, so for a full-height
+    /// seam the affected region is a triangle that reaches the far edge by the bottom row. An "incremental"
+    /// update therefore still touches about half the image, and the measured saving did not justify a second
+    /// code path that could disagree with the full one.</para>
+    /// </summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="axis">Which way the seams run.</param>
+    /// <param name="count">How many seams to remove; must leave at least one column or row.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative, or would remove the
+    /// whole image.</exception>
+    public static WorkingBuffer RemoveSeams(PixelView source, SeamAxis axis, int count, IPixelPool? pool = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        if (count == 0)
+            return Transforms.Copy(source, pool);
+
+        return axis == SeamAxis.Vertical
+            ? RemoveVertical(source, count, pool)
+            : RemoveHorizontal(source, count, pool);
+    }
+
+    /// <summary>
+    /// Repeats <paramref name="count"/> connected seams, growing the image by one column or row each. Each
+    /// insertion is chosen on the already-enlarged image with the previously inserted paths blocked, so the
+    /// duplicates spread out instead of piling onto the same path.
+    /// </summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="axis">Which way the seams run.</param>
+    /// <param name="count">How many seams to insert.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative.</exception>
+    public static WorkingBuffer InsertSeams(PixelView source, SeamAxis axis, int count, IPixelPool? pool = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        if (count == 0)
+            return Transforms.Copy(source, pool);
+
+        return axis == SeamAxis.Vertical
+            ? InsertVertical(source, count, pool)
+            : InsertHorizontal(source, count, pool);
+    }
+
+    /// <summary>Resizes to an exact size by removing or inserting seams on each axis: vertical first, then
+    /// horizontal.</summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="width">Target width, at least 1.</param>
+    /// <param name="height">Target height, at least 1.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">A target dimension is not positive.</exception>
+    public static WorkingBuffer CarveTo(PixelView source, int width, int height, IPixelPool? pool = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+
+        var current = source;
+        WorkingBuffer? owned = null;
+        try
+        {
+            var deltaWidth = width - current.Width;
+            if (deltaWidth != 0)
+            {
+                owned = deltaWidth < 0 ? RemoveSeams(current, SeamAxis.Vertical, -deltaWidth, pool)
+                    : InsertSeams(current, SeamAxis.Vertical, deltaWidth, pool);
+                current = owned.View;
+            }
+
+            var deltaHeight = height - current.Height;
+            if (deltaHeight != 0)
+            {
+                var next = deltaHeight < 0 ? RemoveSeams(current, SeamAxis.Horizontal, -deltaHeight, pool)
+                    : InsertSeams(current, SeamAxis.Horizontal, deltaHeight, pool);
+                owned?.Dispose();
+                owned = next;
+                current = owned.View;
+            }
+
+            return owned ?? Transforms.Copy(source, pool);
+        }
+        catch
+        {
+            owned?.Dispose();
+            throw;
+        }
+    }
+
+    private static WorkingBuffer RemoveVertical(PixelView source, int count, IPixelPool? pool)
+    {
+        var width = source.Width;
+        var height = source.Height;
+        if (count >= width)
+            throw new ArgumentOutOfRangeException(nameof(count), count,
+                $"Cannot remove {count} of {width} columns; at least one must remain.");
+
+        var work = Transforms.Copy(source, pool);
+        try
+        {
+            var workspace = new Workspace(width, height);
+            var logical = width;
+            for (var i = 0; i < count; i++)
+            {
+                var seam = workspace.FindSeam(work.View, logical);
+                Workspace.CutSeam(work.View, seam);
+                logical--;
+            }
+
+            return Transforms.Crop(work.View, new PixelRect(0, 0, logical, height), pool);
+        }
+        finally
+        {
+            work.Dispose();
+        }
+    }
+
+    private static WorkingBuffer InsertVertical(PixelView source, int count, IPixelPool? pool)
+    {
+        var width = source.Width;
+        var height = source.Height;
+        var bytesPerPixel = source.Format.BytesPerPixel();
+        var work = Transforms.Copy(source, pool);
+        try
+        {
+            var workspace = new Workspace(width + count, height);
+            var logical = width;
+            for (var i = 0; i < count; i++)
+            {
+                var seam = workspace.FindSeam(work.View, logical, blocked: true);
+                var next = WorkingBuffer.Rent(logical + 1, height, source.Format, pool);
+                try
+                {
+                    for (var y = 0; y < height; y++)
+                    {
+                        var from = work.View.Row(y);
+                        var to = next.View.Row(y);
+                        var at = seam[y] * bytesPerPixel;
+
+                        from[..at].CopyTo(to);
+                        from.Slice(at, bytesPerPixel).CopyTo(to[at..]);
+                        from[at..].CopyTo(to[(at + bytesPerPixel)..]);
+                    }
+                }
+                catch
+                {
+                    next.Dispose();
+                    throw;
+                }
+
+                workspace.BlockSeam(seam, logical);
+                work.Dispose();
+                work = next;
+                logical++;
+            }
+
+            return work;
+        }
+        catch
+        {
+            work.Dispose();
+            throw;
+        }
+    }
+
+    private static WorkingBuffer RemoveHorizontal(PixelView source, int count, IPixelPool? pool)
+    {
+        var transposed = Orientation.Transpose(source, false, pool);
+        try
+        {
+            using var carved = RemoveVertical(transposed.View, count, pool);
+            return Orientation.Transpose(carved.View, false, pool);
+        }
+        finally
+        {
+            transposed.Dispose();
+        }
+    }
+
+    private static WorkingBuffer InsertHorizontal(PixelView source, int count, IPixelPool? pool)
+    {
+        var transposed = Orientation.Transpose(source, false, pool);
+        try
+        {
+            using var carved = InsertVertical(transposed.View, count, pool);
+            return Orientation.Transpose(carved.View, false, pool);
+        }
+        finally
+        {
+            transposed.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Per-call scratch: because the width changes with every seam, every buffer is sized for the widest image
+    /// the call can reach, and the programme's back-pointers are one byte per pixel.
+    /// </summary>
+    private sealed class Workspace
+    {
+        private readonly int _capacity;
+        private readonly int _height;
+        private readonly byte[] _back;
+        private readonly bool[] _blocked;
+        private readonly double[] _rowA;
+        private readonly double[] _rowB;
+        private readonly float[] _above;
+        private readonly float[] _centre;
+        private readonly float[] _below;
+        private readonly float[] _straight;
+        private readonly int[] _seam;
+
+        public Workspace(int width, int height)
+        {
+            _capacity = width;
+            _height = height;
+            _back = new byte[(long)width * height];
+            _blocked = new bool[(long)width * height];
+            _rowA = new double[width];
+            _rowB = new double[width];
+            _above = new float[width];
+            _centre = new float[width];
+            _below = new float[width];
+            _straight = new float[width * 4];
+            _seam = new int[height];
+        }
+
+        /// <summary>
+        /// Finds the minimum-energy connected path. Ties resolve to the top neighbour first, then left, then
+        /// right (the comparison is strict), and the starting column is the leftmost minimum of the last row —
+        /// so a flat image always loses column 0, which is what makes the tie-break testable.
+        /// </summary>
+        public int[] FindSeam(PixelView view, int width, bool blocked = false)
+        {
+            var previous = _rowA;
+            var current = _rowB;
+            var above = _above;
+            var centre = _centre;
+            var below = _below;
+
+            Luma(view, 0, width, above);
+            Luma(view, 0, width, centre);
+            Luma(view, Math.Min(1, _height - 1), width, below);
+
+            for (var x = 0; x < width; x++)
+            {
+                previous[x] = Energy(width, x, above, centre, below, blocked, 0);
+                _back[x] = 1;
+            }
+
+            for (var y = 1; y < _height; y++)
+            {
+                var spare = above;
+                above = centre;
+                centre = below;
+                below = spare;
+                Luma(view, Math.Min(y + 1, _height - 1), width, below);
+
+                var row = y * _capacity;
+                for (var x = 0; x < width; x++)
+                {
+                    var best = previous[x];
+                    var direction = (byte)1;
+                    if (x > 0 && previous[x - 1] < best)
+                    {
+                        best = previous[x - 1];
+                        direction = 0;
+                    }
+
+                    if (x + 1 < width && previous[x + 1] < best)
+                    {
+                        best = previous[x + 1];
+                        direction = 2;
+                    }
+
+                    current[x] = Energy(width, x, above, centre, below, blocked, y) + best;
+                    _back[row + x] = direction;
+                }
+
+                (previous, current) = (current, previous);
+            }
+
+            var column = 0;
+            var minimum = previous[0];
+            for (var x = 1; x < width; x++)
+            {
+                if (previous[x] < minimum)
+                {
+                    minimum = previous[x];
+                    column = x;
+                }
+            }
+
+            for (var y = _height - 1; y >= 0; y--)
+            {
+                _seam[y] = column;
+                column = Math.Clamp(column + _back[y * _capacity + column] - 1, 0, width - 1);
+            }
+
+            return _seam;
+        }
+
+        /// <summary>Marks the newly duplicated path as used, shifting the mask that later insertions read.</summary>
+        public void BlockSeam(int[] seam, int width)
+        {
+            for (var y = 0; y < _height; y++)
+            {
+                var row = y * _capacity;
+                var x = seam[y];
+                for (var c = width; c > x + 1; c--)
+                    _blocked[row + c] = _blocked[row + c - 1];
+                _blocked[row + x] = true;
+                _blocked[row + x + 1] = true;
+            }
+        }
+
+        /// <summary>Shifts one row left over the seam; the copy runs forward, which is safe for a left shift.</summary>
+        public static void CutSeam(PixelView view, int[] seam)
+        {
+            var bytesPerPixel = view.Format.BytesPerPixel();
+            for (var y = 0; y < view.Height; y++)
+            {
+                var row = view.Row(y);
+                var at = seam[y] * bytesPerPixel;
+                row.Slice(at + bytesPerPixel).CopyTo(row[at..]);
+            }
+        }
+
+        private double Energy(int width, int x, float[] above, float[] centre, float[] below, bool blocked, int y)
+        {
+            var left = centre[x > 0 ? x - 1 : 0];
+            var right = centre[x + 1 < width ? x + 1 : width - 1];
+            var residual = (double)Math.Abs(right - left) + Math.Abs((double)below[x] - above[x]);
+            return blocked && _blocked[y * _capacity + x] ? double.PositiveInfinity : residual;
+        }
+
+        /// <summary>Luma of one row: exact integers for 8/16-bit, BT.709 floats for Rgba32F.</summary>
+        private void Luma(PixelView view, int y, int width, float[] destination)
+        {
+            var row = view.Row(y);
+
+            if (view.Format == WorkingFormat.Rgba16)
+            {
+                var samples = MemoryMarshal.Cast<byte, ushort>(row);
+                for (var x = 0; x < width; x++)
+                {
+                    var o = x * 4;
+                    destination[x] = (54 * samples[o] + 183 * samples[o + 1] + 19 * samples[o + 2]) >> 8;
+                }
+
+                return;
+            }
+
+            if (view.Format == WorkingFormat.Rgba8)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    var o = x * 4;
+                    destination[x] = (54 * row[o] + 183 * row[o + 1] + 19 * row[o + 2]) >> 8;
+                }
+
+                return;
+            }
+
+            Pixels.ReadRowRaw(row, width, view.Format, _straight);
+            for (var x = 0; x < width; x++)
+            {
+                var o = x * 4;
+                destination[x] = 0.2126f * _straight[o] + 0.7152f * _straight[o + 1] + 0.0722f * _straight[o + 2];
+            }
+        }
+    }
+}

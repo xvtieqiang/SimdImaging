@@ -1,0 +1,28 @@
+{
+  "id": "resize.background-edge",
+  "generator": "generate-vectors.py",
+  "determinism": "D1",
+  "tolerance": null,
+  "input": {
+    "width": 1,
+    "height": 1,
+    "format": "Rgba8",
+    "bytes": "FFFFFFFF",
+    "sha256": "AD95131BC0B799C0B1AF477FB14FCF26A6A9F76079E48BF090ACB7E8367BFD0E"
+  },
+  "params": {
+    "op": "ResizeWithOptions",
+    "map": "1×1 → 2×2, resize phase centre (i + 0.5) / scale",
+    "resampler": "Bilinear",
+    "domain": "Encoded",
+    "alpha": "Straight",
+    "edge": "Background (field = opaque black)",
+    "expectedWidth": 2,
+    "expectedHeight": 2,
+    "reference": "independent: only the (0,0) tap at exact weight 0.5625 is in bounds; no renormalisation"
+  },
+  "expected": {
+    "bytes": "8F8F8FFF8F8F8FFF8F8F8FFF8F8F8FFF",
+    "sha256": "8BDAF7687F93EF7244F0CBA03AC18860F12C2A548099992ABA7C60BB59F4CB18"
+  }
+}

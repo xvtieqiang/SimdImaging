@@ -16,6 +16,13 @@ namespace SimdImaging.Processing;
 /// set is five planes of <c>bandRows + 4·radius</c> rows instead of five full images — 4K drops from about
 /// 160 MB to about 11 MB.
 /// </para>
+/// <para>
+/// The two-argument overload takes a separate guide: the coefficients come from <c>cov(I, G)</c> and
+/// <c>var(G)</c> instead of the source's own variance, so a depth map, a mask or a denoised copy can steer the
+/// filter without contributing its own colours. That path holds eight planes of band rows (about 17 MB at 4K
+/// with the default band). It is kept as its own kernel rather than folded into the self-guided one: the
+/// self-guided output is byte-stable and a shared loop would put those bytes at risk for no gain.
+/// </para>
 /// </summary>
 public static class GuidedFilterOps
 {
@@ -31,10 +38,7 @@ public static class GuidedFilterOps
     public static WorkingBuffer GuidedFilter(PixelView source, int radius = 4, float epsilon = 1e-4f,
         int bandRows = 128, IPixelPool? pool = null)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
-        if (!(epsilon > 0f) || float.IsInfinity(epsilon))
-            throw new ArgumentOutOfRangeException(nameof(epsilon), epsilon, "Epsilon must be finite and positive.");
+        Validate(radius, bandRows, epsilon);
 
         var width = source.Width;
         var height = source.Height;
@@ -112,6 +116,157 @@ public static class GuidedFilterOps
                     {
                         var index = baseIndex + x;
                         row[x * 4 + channel] = Math.Clamp(aPlane[index] * input[index] + bPlane[index], 0f, 1f);
+                    }
+
+                    Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));
+                }
+            }
+        }
+
+        return destination;
+    }
+
+    /// <summary>Cross-guided filter: <paramref name="guide"/> decides where the edges are,
+    /// <paramref name="source"/> supplies the colours.
+    /// <para>
+    /// The size check is also the fusion guard: inside a banded plan step the view is a band, so a full-size
+    /// guide does not match and throws instead of filtering against a misaligned guide.
+    /// </para>
+    /// </summary>
+    /// <param name="source">The pixels to filter.</param>
+    /// <param name="guide">Same width and height as <paramref name="source"/>. Channel <c>c</c> of the guide
+    /// filters channel <c>c</c>, so a grey guide acts as one scalar guide for all three; its alpha is ignored.</param>
+    /// <param name="radius">Box radius in pixels.</param>
+    /// <param name="epsilon">Variance regulariser in normalised units squared.</param>
+    /// <param name="bandRows">Rows per band.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentException"><paramref name="guide"/> is not the same size as
+    /// <paramref name="source"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A parameter is out of range.</exception>
+    public static WorkingBuffer GuidedFilter(PixelView source, PixelView guide, int radius = 4,
+        float epsilon = 1e-4f, int bandRows = 128, IPixelPool? pool = null)
+    {
+        if (guide.Width != source.Width || guide.Height != source.Height)
+            throw new ArgumentException(
+                $"The guide is {guide.Width}x{guide.Height} but the source is {source.Width}x{source.Height}.",
+                nameof(guide));
+
+        // The guide is the source: same operator, so take the frozen self-guided path and its bytes.
+        if (guide.Span.Overlaps(source.Span))
+            return GuidedFilter(source, radius, epsilon, bandRows, pool);
+
+        Validate(radius, bandRows, epsilon);
+        return CrossGuided(source, guide, radius, epsilon, bandRows, pool);
+    }
+
+    private static void Validate(int radius, int bandRows, float epsilon)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
+        if (!(epsilon > 0f) || float.IsInfinity(epsilon))
+            throw new ArgumentOutOfRangeException(nameof(epsilon), epsilon, "Epsilon must be finite and positive.");
+    }
+
+    /// <summary>
+    /// The cross-guided kernel: <c>a = cov(I, G) / (var(G) + eps)</c>, <c>b = mean(I) − a·mean(G)</c>, both
+    /// box-averaged. Separate from the self-guided loop so that loop keeps its bytes; only <see cref="BoxMean"/>
+    /// is shared.
+    /// </summary>
+    private static WorkingBuffer CrossGuided(PixelView source, PixelView guide, int radius, float epsilon,
+        int bandRows, IPixelPool? pool)
+    {
+        var width = source.Width;
+        var height = source.Height;
+        var stride = width * 4;
+
+        var destination = Transforms.Copy(source, pool);
+
+        var context = radius * 2;
+        var capacity = Math.Min(height, bandRows + context * 2) * width;
+
+        var values = new float[capacity];
+        var guideValues = new float[capacity];
+        var meanInput = new float[capacity];
+        var meanGuide = new float[capacity];
+        var secondGuide = new float[capacity];
+        var cross = new float[capacity];
+        var meanA = new float[capacity];
+        var meanB = new float[capacity];
+        var columnSums = new float[width];
+        var prefix = new float[width + 1];
+        var row = new float[stride];
+        var guideRow = new float[stride];
+
+        for (var bandTop = 0; bandTop < height; bandTop += bandRows)
+        {
+            var bandBottom = Math.Min(height, bandTop + bandRows);
+            var top = Math.Max(0, bandTop - context);
+            var bottom = Math.Min(height, bandBottom + context);
+            var rows = bottom - top;
+            var length = rows * width;
+
+            for (var channel = 0; channel < 3; channel++)
+            {
+                for (var i = 0; i < rows; i++)
+                {
+                    Pixels.ReadRowRaw(source.Row(top + i), width, source.Format, row);
+                    Pixels.ReadRowRaw(guide.Row(top + i), width, guide.Format, guideRow);
+                    var plane = values.AsSpan(i * width, width);
+                    var guideRowPlane = guideValues.AsSpan(i * width, width);
+                    for (var x = 0; x < width; x++)
+                    {
+                        plane[x] = row[x * 4 + channel];
+                        guideRowPlane[x] = guideRow[x * 4 + channel];
+                    }
+                }
+
+                var input = values.AsSpan(0, length);
+                var guidePlane = guideValues.AsSpan(0, length);
+                var meanI = meanInput.AsSpan(0, length);
+                var meanG = meanGuide.AsSpan(0, length);
+                var scratch = secondGuide.AsSpan(0, length);
+                var crossPlane = cross.AsSpan(0, length);
+                var aPlane = meanA.AsSpan(0, length);
+                var bPlane = meanB.AsSpan(0, length);
+
+                BoxMean(input, meanI, width, rows, radius, columnSums, prefix);
+                BoxMean(guidePlane, meanG, width, rows, radius, columnSums, prefix);
+
+                for (var i = 0; i < length; i++)
+                    scratch[i] = guidePlane[i] * guidePlane[i];
+
+                BoxMean(scratch, aPlane, width, rows, radius, columnSums, prefix);
+
+                for (var i = 0; i < length; i++)
+                    crossPlane[i] = input[i] * guidePlane[i];
+
+                BoxMean(crossPlane, bPlane, width, rows, radius, columnSums, prefix);
+
+                // a = cov / (var + eps), b = mean(I) - a * mean(G). Two of the planes are free after being
+                // read once: the product plane takes a, the mean-of-products plane takes b.
+                for (var i = 0; i < length; i++)
+                {
+                    var meanOfGuide = meanG[i];
+                    var variance = MathF.Max(0f, aPlane[i] - meanOfGuide * meanOfGuide);
+                    var a = (bPlane[i] - meanI[i] * meanOfGuide) / (variance + epsilon);
+                    bPlane[i] = meanI[i] - a * meanOfGuide;
+                    crossPlane[i] = a;
+                }
+
+                BoxMean(crossPlane, aPlane, width, rows, radius, columnSums, prefix);
+
+                // scratch held the guide's second moment; it is free now and becomes the box-averaged b.
+                BoxMean(bPlane, scratch, width, rows, radius, columnSums, prefix);
+
+                for (var y = bandTop; y < bandBottom; y++)
+                {
+                    var baseIndex = (y - top) * width;
+                    Pixels.ReadRowRaw(destination.View.Row(y), width, source.Format, row);
+
+                    for (var x = 0; x < width; x++)
+                    {
+                        var index = baseIndex + x;
+                        row[x * 4 + channel] = Math.Clamp(aPlane[index] * input[index] + scratch[index], 0f, 1f);
                     }
 
                     Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));

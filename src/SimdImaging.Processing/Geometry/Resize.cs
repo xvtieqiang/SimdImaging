@@ -11,6 +11,27 @@ namespace SimdImaging.Processing.Geometry;
 /// normalized weights. Fixed tap count (zero padded at the ends) keeps the inner loop branch-free and leaves
 /// room for a vectorized version later.
 /// </summary>
+/// <summary>What the reconstruction-weight cache holds, as <c>MemoryBudget.Snapshot()</c> reports it.</summary>
+/// <param name="Entries">Cached size combinations.</param>
+/// <param name="Bytes">Their total managed size.</param>
+/// <param name="Hits">Builds served from the cache.</param>
+/// <param name="Misses">Builds that had to compute a table.</param>
+/// <param name="Evictions">Tables dropped by the budget or by a trim.</param>
+/// <param name="BudgetBytes">The byte budget in force.</param>
+/// <param name="MaxEntries">The entry cap in force.</param>
+public readonly record struct WeightCacheStatistics(
+    int Entries,
+    long Bytes,
+    long Hits,
+    long Misses,
+    long Evictions,
+    long BudgetBytes,
+    int MaxEntries)
+{
+    /// <summary>Hits over all requests, 0 when nothing has been requested.</summary>
+    public double HitRate => Hits + Misses == 0 ? 0 : (double)Hits / (Hits + Misses);
+}
+
 internal sealed class WeightTable
 {
     private WeightTable(int taps, int[] starts, float[] weights)
@@ -18,54 +39,133 @@ internal sealed class WeightTable
         Taps = taps;
         Starts = starts;
         Weights = weights;
+        Bytes = (long)starts.Length * sizeof(int) + (long)weights.Length * sizeof(float);
     }
 
     public int Taps { get; }
     public int[] Starts { get; }
     public float[] Weights { get; }
 
+    /// <summary>Managed bytes this table holds; what the cache budget is measured in.</summary>
+    public long Bytes { get; }
+
     // Weights depend only on (sourceLength, destinationLength, resampler), never on pixels. Rebuilding
     // them per frame costs both the kernel evaluations and a fresh ~65 KiB allocation on every resize.
-    // Bounded so a long-lived process resizing at many different sizes cannot grow without limit.
-    private static readonly Dictionary<(int Source, int Destination, Resampler Filter), WeightTable> Cache = new();
+    //
+    // Bounded by bytes and by entry count, and evicted least-recently-used rather than all at once: the
+    // previous policy cleared the whole cache on overflow, so a process resizing at 25 different sizes
+    // rebuilt every table on every call instead of dropping one. A 4K resize holds ~130 KiB per axis, so
+    // the default budget keeps roughly sixty distinct sizes.
+    private static readonly Dictionary<(int Source, int Destination, Resampler Filter), LinkedListNode<Entry>>
+        Cache = new();
+    private static readonly LinkedList<Entry> Lru = new();
     private static readonly object CacheGate = new();
-    private const int MaxCached = 24;
+
+    internal const long DefaultBudgetBytes = 8L << 20;
+    internal const int DefaultMaxEntries = 64;
+
+    internal static long BudgetBytes = DefaultBudgetBytes;
+    internal static int MaxEntries = DefaultMaxEntries;
+    private static long _cachedBytes;
+    private static long _hits;
+    private static long _misses;
+    private static long _evictions;
+
+    private readonly record struct Entry((int Source, int Destination, Resampler Filter) Key, WeightTable Table);
+
+    /// <summary>The cache as <c>MemoryBudget.Snapshot()</c> reports it.</summary>
+    public static WeightCacheStatistics Statistics
+    {
+        get
+        {
+            lock (CacheGate)
+                return new WeightCacheStatistics(Cache.Count, _cachedBytes, _hits, _misses, _evictions, BudgetBytes, MaxEntries);
+        }
+    }
 
     public static WeightTable Build(int sourceLength, int destinationLength, Resampler resampler)
     {
         var key = (sourceLength, destinationLength, resampler);
         lock (CacheGate)
         {
-            if (Cache.TryGetValue(key, out var cached))
-                return cached;
+            if (Cache.TryGetValue(key, out var node))
+            {
+                Lru.Remove(node);
+                Lru.AddFirst(node);
+                _hits++;
+                return node.Value.Table;
+            }
+
+            _misses++;
         }
 
+        // Built outside the lock: the arithmetic is the expensive part and it does not touch shared state.
         var built = BuildCore(sourceLength, destinationLength, resampler);
         lock (CacheGate)
         {
-            if (Cache.Count >= MaxCached)
-                Cache.Clear();
-            Cache[key] = built;
+            if (Cache.TryGetValue(key, out var raced))
+            {
+                // Another thread built the same table while this one was working; keep theirs so every
+                // caller for a given size shares one instance.
+                Lru.Remove(raced);
+                Lru.AddFirst(raced);
+                return raced.Value.Table;
+            }
+
+            var entry = new Entry(key, built);
+            var node = Lru.AddFirst(entry);
+            Cache[key] = node;
+            _cachedBytes += built.Bytes;
+
+            while (Cache.Count > 1 && (Cache.Count > MaxEntries || _cachedBytes > BudgetBytes))
+                EvictLast();
         }
 
         return built;
     }
 
+    private static void EvictLast()
+    {
+        var node = Lru.Last;
+        if (node is null)
+            return;
+
+        Lru.RemoveLast();
+        Cache.Remove(node.Value.Key);
+        _cachedBytes -= node.Value.Table.Bytes;
+        _evictions++;
+    }
+
+    /// <summary>Drops every cached table.</summary>
+    internal static void TrimCache()
+    {
+        lock (CacheGate)
+        {
+            _evictions += Cache.Count;
+            Cache.Clear();
+            Lru.Clear();
+            _cachedBytes = 0;
+        }
+    }
+
+    /// <summary>Restores the default budget and clears counters (tests only).</summary>
+    internal static void ResetForTests()
+    {
+        TrimCache();
+        BudgetBytes = DefaultBudgetBytes;
+        MaxEntries = DefaultMaxEntries;
+        _hits = 0;
+        _misses = 0;
+        _evictions = 0;
+    }
+
     private static WeightTable BuildCore(int sourceLength, int destinationLength, Resampler resampler)
     {
-        if (sourceLength <= 0)
-            throw new ArgumentOutOfRangeException(nameof(sourceLength));
-        if (destinationLength <= 0)
-            throw new ArgumentOutOfRangeException(nameof(destinationLength));
-
-        var (support, kernel) = ResamplerKernels.Get(resampler);
-        var scale = (double)destinationLength / sourceLength;
-
-        // Downscaling widens the kernel so every source pixel contributes (area sampling); upscaling keeps it.
-        // Nearest is point sampling at any scale, so its support must not widen.
-        var filterScale = resampler == Resampler.Nearest ? 1.0 : (scale < 1.0 ? 1.0 / scale : 1.0);
-        var radius = support * filterScale;
-        var taps = Math.Max(1, (int)Math.Ceiling(2 * radius) + 2);
+        // M8: the weight mathematics lives in TapPlanBuilder so Warp, Affine and Resize all use
+        // one reconstruction filter. The arithmetic is verbatim, including the double-precision
+        // normalisation, so switching this over cannot change a single output byte.
+        var (scale, filterScale, radius, taps, kernel) =
+            TapPlanBuilder.Parameters(sourceLength, destinationLength, resampler);
 
         var starts = new int[destinationLength];
         var weights = new float[destinationLength * taps];
@@ -74,31 +174,12 @@ internal sealed class WeightTable
         for (var i = 0; i < destinationLength; i++)
         {
             var center = (i + 0.5) / scale;
-            var start = (int)Math.Ceiling(center - radius - 0.5);
-            var sum = 0.0;
-            for (var k = 0; k < taps; k++)
-            {
-                var x = start + k;
-                var distance = (x + 0.5 - center) / filterScale;
-                var weight = Math.Abs(x + 0.5 - center) <= radius ? kernel(distance) : 0.0;
-                buffer[k] = weight;
-                sum += weight;
-            }
-
-            if (sum == 0.0)
-            {
-                // Degenerate (a tap range that fell entirely outside the kernel): use the nearest pixel.
-                Array.Clear(buffer);
-                var nearest = Math.Clamp((int)Math.Floor(center), 0, sourceLength - 1) - start;
-                if ((uint)nearest < (uint)taps)
-                    buffer[nearest] = 1.0;
-                sum = 1.0;
-            }
+            var start = TapPlanBuilder.FillAt(buffer, center, sourceLength, filterScale, radius, kernel);
 
             starts[i] = start;
             var offset = i * taps;
             for (var k = 0; k < taps; k++)
-                weights[offset + k] = (float)(buffer[k] / sum);
+                weights[offset + k] = (float)buffer[k];
         }
 
         return new WeightTable(taps, starts, weights);
@@ -176,10 +257,13 @@ public static class Resample
                         {
                             var from = (startsX[x] + tapX) * 4;
                             var to = x * 4;
-                            destinationRow[to] = sourceRow[from];
-                            destinationRow[to + 1] = sourceRow[from + 1];
-                            destinationRow[to + 2] = sourceRow[from + 2];
-                            destinationRow[to + 3] = sourceRow[from + 3];
+                            // Rgba8 pixel = 4 bytes. One unaligned 32-bit copy replaces four byte
+                            // load/stores; it is a pure bit copy, so the byte sequence is identical on
+                            // every endianness and every SIMD tier (no integer reinterpretation).
+                            // Measured 1.90-1.99x on the inner loop vs the four-byte version
+                            // (`nearest-ablate`), byte-identical across all three shapes.
+                            Unsafe.WriteUnaligned(ref destinationRow[to],
+                                Unsafe.ReadUnaligned<uint>(ref sourceRow[from]));
                         }
                     }
                 }
@@ -421,6 +505,91 @@ public static class Resample
             for (var t = 0; t < tapCount; t++)
                 sum += scratch[rows[t] + i] * tapWeights[t];
             destination[i] = sum;
+        }
+    }
+
+    /// <summary>
+    /// Resize with an explicit sampling contract. <c>options == default</c> delegates to the frozen
+    /// <see cref="Resize"/> path (byte-identical); any option set switches to the unified per-pixel
+    /// core: scale-aware tap plans (downscaling widens the kernel exactly like <see cref="WeightTable"/>
+    /// does), per-sample domain transform, alpha mode, edge policy — Background treats the source as
+    /// surrounded by a constant field of <paramref name="background"/>, and tap weights are deliberately
+    /// <b>not</b> renormalised so in-range pixels keep the <see cref="EdgeMode.Clamp"/> weight sum —
+    /// and out-of-gamut handling.
+    /// <para>The per-pixel path is deliberately simple (no band scratch, no vector tier): its job is
+    /// semantics, not throughput; see docs/known-gaps.md.</para>
+    /// </summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="width">Destination width.</param>
+    /// <param name="height">Destination height.</param>
+    /// <param name="resampler">Any of the five reconstruction kernels.</param>
+    /// <param name="options">Sampling domain, curve, alpha, edge and out-of-gamut contract.</param>
+    /// <param name="background">Colour for taps outside the source under <see cref="EdgeMode.Background"/>.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
+    /// <exception cref="InvalidDataException"><see cref="OutOfGamutPolicy.Throw"/> detected an out-of-range sample.</exception>
+    public static WorkingBuffer ResizeWithOptions(PixelView source, int width, int height,
+        Resampler resampler, SampleOptions options, RgbaColor background = default, IPixelPool? pool = null)
+    {
+        if (width <= 0)
+            throw new ArgumentOutOfRangeException(nameof(width), width, "Width must be positive.");
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height), height, "Height must be positive.");
+
+        if (options == default)
+            return Resize(source, width, height, resampler, pool);
+
+        var (scaleX, filterScaleX, radiusX, tapsX, kernelX) = TapPlanBuilder.Parameters(source.Width, width, resampler);
+        var (scaleY, filterScaleY, radiusY, tapsY, kernelY) = TapPlanBuilder.Parameters(source.Height, height, resampler);
+
+        var bufferX = new double[tapsX];
+        var weightsX = new float[tapsX];
+        var bufferY = new double[tapsY];
+        var weightsY = new float[tapsY];
+
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+        var view = destination.View;
+        var row = new float[width * 4];
+        Span<float> sample = stackalloc float[4];
+        Span<float> backgroundColour = stackalloc float[4];
+        backgroundColour[0] = background.R / 255f;
+        backgroundColour[1] = background.G / 255f;
+        backgroundColour[2] = background.B / 255f;
+        backgroundColour[3] = background.A / 255f;
+
+        try
+        {
+            for (var y = 0; y < height; y++)
+            {
+                // The resize phase convention: a destination pixel centre (i + 0.5) maps back to
+                // (i + 0.5) / scale — the same centres WeightTable.BuildCore is built on.
+                var centreY = (y + 0.5) / scaleY;
+                var startY = TapPlanBuilder.FillAt(bufferY, centreY, source.Height, filterScaleY, radiusY, kernelY);
+                for (var k = 0; k < weightsY.Length; k++)
+                    weightsY[k] = (float)bufferY[k];
+                var planY = new TapPlan(startY, weightsY);
+
+                for (var x = 0; x < width; x++)
+                {
+                    var centreX = (x + 0.5) / scaleX;
+                    var startX = TapPlanBuilder.FillAt(bufferX, centreX, source.Width, filterScaleX, radiusX, kernelX);
+                    for (var k = 0; k < weightsX.Length; k++)
+                        weightsX[k] = (float)bufferX[k];
+                    var planX = new TapPlan(startX, weightsX);
+
+                    SamplingCore.SampleWithOptions(source, planX, planY, options, backgroundColour, sample);
+                    sample.CopyTo(new Span<float>(row, x * 4, 4));
+                }
+
+                Pixels.WriteRowRaw(row, width, source.Format, view.Row(y));
+            }
+
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
         }
     }
 }

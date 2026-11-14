@@ -1,0 +1,28 @@
+{
+  "id": "sample-options-encoded-midpoint",
+  "generator": "generate-vectors.py",
+  "determinism": "D1",
+  "tolerance": null,
+  "input": {
+    "width": 2,
+    "height": 1,
+    "format": "Rgba8",
+    "bytes": "000000FFFFFFFFFF",
+    "sha256": "8E333FBA21F15DDB741ED10958AB5828420EAEB8B24F25A873DE6D410F45D146"
+  },
+  "params": {
+    "op": "WarpWithOptions",
+    "map": "midpoint (source x = 1.0)",
+    "resampler": "Bilinear",
+    "domain": "Encoded",
+    "alpha": "Straight",
+    "phase": "pixel-centre",
+    "expectedWidth": 1,
+    "expectedHeight": 1,
+    "reference": "independent: (0 + 255) / 2 in the encoded domain, round-half-up = 128"
+  },
+  "expected": {
+    "bytes": "808080FF",
+    "sha256": "79DFAD351F79EF0E65A11FFF0A9ED44BF628F9390FF06B92EE4EE5E2477616EA"
+  }
+}

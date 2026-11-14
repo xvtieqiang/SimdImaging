@@ -59,13 +59,21 @@ public static class Transforms
     public static WorkingBuffer Copy(PixelView source, IPixelPool? pool = null)
     {
         var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
-        RowParallel.For(source.Width, source.Height, (firstRow, lastRow) =>
+        try
         {
-            for (var y = firstRow; y < lastRow; y++)
-                source.Row(y).CopyTo(destination.View.Row(y));
-        });
+            RowParallel.For(source.Width, source.Height, (firstRow, lastRow) =>
+            {
+                for (var y = firstRow; y < lastRow; y++)
+                    source.Row(y).CopyTo(destination.View.Row(y));
+            });
 
-        return destination;
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Mirrors left-to-right.</summary>

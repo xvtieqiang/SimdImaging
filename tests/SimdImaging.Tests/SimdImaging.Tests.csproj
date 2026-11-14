@@ -20,4 +20,12 @@
     <ProjectReference Include="..\..\src\SimdImaging.Abstractions\SimdImaging.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Source-shared pixel diff: one definition of the metric, linked by both the test suite
+         and the comparison tool. Never introduce a second implementation of the same ruler. -->
+    <Compile Include="..\..\src\Shared\PixelDiff.cs" Link="Fixtures\PixelDiff.cs" />
+    <Compile Include="..\..\tests\Fixtures\SyntheticCorpus.cs" Link="Fixtures\SyntheticCorpus.cs" />
+    <Compile Include="..\..\tests\Fixtures\SyntheticIccProfiles.cs" Link="Fixtures\SyntheticIccProfiles.cs" />
+  </ItemGroup>
+
 </Project>

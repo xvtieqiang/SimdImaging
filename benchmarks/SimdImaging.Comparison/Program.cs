@@ -2,7 +2,7 @@ using System.Globalization;
 using SimdImaging.Comparison;
 
 // Comparison harness. Usage:
-//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|sizes|cores|peakmem|memsteady|perf16|perfpipe|budget|profile] [WxH]
+//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|sizes|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate] [WxH]
 // Not part of SimdImaging.slnx on purpose: the shipped solution must stay buildable without the
 // git-ignored Six Labors licence file (AGENTS.md clean-room rules).
 
@@ -22,6 +22,30 @@ if (args.Length > 0 && args[0] == "peakmem-child")
 if (args.Length > 0 && args[0] == "memsteady-child")
 {
     MemSteady.Child(args);
+    return;
+}
+
+// M2 steady-state allocation probe. Measures our side only (no oracle, no licence, no report,
+// no golden), so it runs as a child-style early exit before the comparison harness is set up.
+if (args.Length > 0 && args[0] == "allocplan")
+{
+    AllocPlan.Run();
+    return;
+}
+
+// Ablation for the nearest-neighbour inner loop. Pure measurement (no oracle, no shipped-code
+// change), so it exits before the report/oracle setup too.
+if (args.Length > 0 && args[0] == "nearest-ablate")
+{
+    NearestAblation.Run();
+    return;
+}
+
+// Ablation for the colour-matrix records-table rebuild. Pure measurement (no oracle, no shipped-code
+// change), exits before the report/oracle setup.
+if (args.Length > 0 && args[0] == "records-ablate")
+{
+    MatrixRecordsAblation.Run();
     return;
 }
 

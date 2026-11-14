@@ -1,0 +1,7 @@
+# Real-photo quality corpus. Public Domain / CC0 only, downloaded by URL + SHA-256, never committed.
+# Every sha256 below was measured from the actual downloaded bytes on 2026-11-14, not derived.
+# Offline deterministic synthetic fixtures for the remaining tags live in
+# tests/Fixtures/SyntheticCorpus.cs and are generated in-process.
+# id	url	sha256	license	width	height	mime	tags
+cc0-lights	https://upload.wikimedia.org/wikipedia/commons/7/7e/%21_Bright_Lights_Ceiling_%21.jpg	3d827f1b6f588ec1d897d2a52ee5b2f8ea848d0f35736a9377ad0a9760dd5436	CC0	1280	720	image/jpeg	high-frequency,texture,highlights,noise
+cc0-architecture	https://upload.wikimedia.org/wikipedia/commons/b/bf/%21_Russisch-Orthodoxe_Kirche_%28Dresden%29_Glockenturm.jpg	461339a79b83ec3efa58502ac9246a9329fe04d8c0532e00b3ff150d9d6e2cd3	CC0	3069	2653	image/jpeg	fine-detail,diagonal-lines,architecture,texture

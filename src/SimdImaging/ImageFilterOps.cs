@@ -124,4 +124,69 @@ public sealed partial class Image
     /// <exception cref="ArgumentOutOfRangeException">The radius, epsilon or band size is out of range.</exception>
     public Image GuidedFilter(int radius = 4, float epsilon = 1e-4f, int bandRows = 128, IPixelPool? pool = null) =>
         ReplaceBuffer(GuidedFilterOps.GuidedFilter(this[0].Pixels.View, radius, epsilon, bandRows, pool));
+
+    /// <summary>Guided filter with a separate guide: the guide's structure decides where edges are kept, the
+    /// image supplies the colours.</summary>
+    /// <param name="guide">Same size as this image; channel <c>c</c> of the guide filters channel <c>c</c>, so a
+    /// grey guide acts as one scalar guide for all three.</param>
+    /// <param name="radius">Box radius in pixels.</param>
+    /// <param name="epsilon">Variance regulariser; larger smooths more.</param>
+    /// <param name="bandRows">Rows per band; bounds the working set.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="guide"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="guide"/> is a different size.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The radius, epsilon or band size is out of range.</exception>
+    public Image GuidedFilter(Image guide, int radius = 4, float epsilon = 1e-4f, int bandRows = 128,
+        IPixelPool? pool = null)
+    {
+        ArgumentNullException.ThrowIfNull(guide);
+        return ReplaceBuffer(GuidedFilterOps.GuidedFilter(this[0].Pixels.View, guide[0].Pixels.View,
+            radius, epsilon, bandRows, pool));
+    }
+
+    /// <summary>Non-local means denoising: exact patch-similarity average, no pruning.</summary>
+    /// <param name="searchRadius">Half-width of the search window.</param>
+    /// <param name="patchRadius">Half-width of the comparison patch.</param>
+    /// <param name="h">Filtering strength in sample units; 0.1 ≈ 10% of the range.</param>
+    /// <param name="sigma">Expected noise standard deviation for the <c>2σ²</c> weight correction; 0 disables it.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">A radius is negative, or <paramref name="h"/> /
+    /// <paramref name="sigma"/> is out of range.</exception>
+    public Image NonLocalMeans(int searchRadius = 3, int patchRadius = 1, float h = 0.1f, float sigma = 0f,
+        IPixelPool? pool = null) =>
+        ReplaceBuffer(NonLocalMeansOps.NonLocalMeans(this[0].Pixels.View, searchRadius, patchRadius, h, sigma, pool));
+
+    /// <summary>Local Laplacian detail enhancement; <c>alpha = beta = 1</c> is the identity.</summary>
+    /// <param name="levels">Laplacian levels; clamped so the coarsest level stays usable.</param>
+    /// <param name="samples">How many intensities the remap is evaluated at.</param>
+    /// <param name="alpha">Detail exponent inside <c>±sigmaR</c>; below 1 amplifies detail.</param>
+    /// <param name="beta">Edge amplitude beyond <c>sigmaR</c>.</param>
+    /// <param name="sigmaR">Range split between detail and edge.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">A parameter is out of range.</exception>
+    public Image LocalLaplacian(int levels = 5, int samples = 32, float alpha = 0.25f, float beta = 1f,
+        float sigmaR = 0.15f, IPixelPool? pool = null) =>
+        ReplaceBuffer(LocalLaplacianOps.LocalLaplacian(this[0].Pixels.View, levels, samples, alpha, beta, sigmaR, pool));
+
+    /// <summary>Richardson–Lucy deconvolution of a Gaussian blur; runs on straight RGB and leaves alpha
+    /// untouched.</summary>
+    /// <param name="sigma">Standard deviation of the blur being undone, in pixels.</param>
+    /// <param name="iterations">Iterations; the default is the measured PSNR peak for typical content.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sigma"/> is not finite and positive, or
+    /// <paramref name="iterations"/> is negative.</exception>
+    public Image RichardsonLucy(float sigma, int iterations = 10, IPixelPool? pool = null) =>
+        ReplaceBuffer(RichardsonLucyOps.RichardsonLucy(this[0].Pixels.View, sigma, iterations, pool));
+
+    /// <summary>Richardson–Lucy deconvolution of a linear motion blur.</summary>
+    /// <param name="length">Trail length in pixels; 1 is the identity.</param>
+    /// <param name="angleDegrees">Trail direction, clockwise from +x.</param>
+    /// <param name="iterations">Iterations.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> is not positive or the angle is
+    /// not finite.</exception>
+    public Image RichardsonLucyMotion(int length, float angleDegrees, int iterations = 10,
+        IPixelPool? pool = null) =>
+        ReplaceBuffer(RichardsonLucyOps.RichardsonLucyMotion(this[0].Pixels.View, length, angleDegrees,
+            iterations, pool));
 }

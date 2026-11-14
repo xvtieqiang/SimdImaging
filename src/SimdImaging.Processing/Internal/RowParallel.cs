@@ -43,11 +43,18 @@ internal static class RowParallel
 
     /// <summary>Same fixed-band rule for work already divided into coarse bands (blur / resize), where the
     /// band count is small but each band is expensive. Each worker owns its scratch for all its bands.</summary>
-    internal static void ForBands(int count, Action<int, int> body)
+    internal static void ForBands(int count, Action<int, int> body) => ForBands(count, body, DegreeOverride, default);
+
+    /// <summary>Explicit-degree variant: the caller passes the parallelism in (from ExecuteOptions) so a
+    /// configured entry point never re-reads the environment; 0 keeps the machine default. Cancellation is
+    /// cooperative and <b>fails loudly</b>: a cancelled token makes the loop throw rather than skip bands,
+    /// because a skipped band would return a partially written image that looks successful.</summary>
+    internal static void ForBands(int count, Action<int, int> body, int degreeOverride, CancellationToken cancellation)
     {
-        var degree = Degree;
+        var degree = _nesting > 0 ? 1 : degreeOverride > 0 ? degreeOverride : Environment.ProcessorCount;
         if (degree <= 1 || count <= 1)
         {
+            cancellation.ThrowIfCancellationRequested();
             LastWorkerCount = 1;
             body(0, count);
             return;
@@ -56,13 +63,21 @@ internal static class RowParallel
         var workers = Math.Min(degree, count);
         LastWorkerCount = workers;
         var band = (count + workers - 1) / workers;
-        Parallel.For(0, workers, worker =>
+
+        void Run(int worker)
         {
             var start = worker * band;
             if (start >= count)
                 return;
             body(start, Math.Min(start + band, count));
-        });
+        }
+
+        // Only allocate ParallelOptions when there is a token to observe: the uncancellable path is the
+        // hot one (every operator's own band loop) and must not grow an allocation.
+        if (cancellation.CanBeCanceled)
+            Parallel.For(0, workers, new ParallelOptions { CancellationToken = cancellation }, Run);
+        else
+            Parallel.For(0, workers, Run);
     }
 
     internal static void For(int width, int height, Action<int, int> body)

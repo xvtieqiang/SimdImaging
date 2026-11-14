@@ -1,0 +1,28 @@
+{
+  "id": "warp.tap.bilinear-phase",
+  "generator": "generate-vectors.py",
+  "determinism": "D1",
+  "tolerance": null,
+  "input": {
+    "width": 2,
+    "height": 1,
+    "format": "Rgba8",
+    "bytes": "000000FFFFFFFFFF",
+    "sha256": "8E333FBA21F15DDB741ED10958AB5828420EAEB8B24F25A873DE6D410F45D146"
+  },
+  "params": {
+    "op": "WarpWithOptions",
+    "map": "sx = x + 0.37, sy = y (destination 1×1)",
+    "resampler": "Bilinear",
+    "domain": "Encoded",
+    "alpha": "Straight",
+    "phase": "pixel-centre, areal centre 0.5 + f32(0.37)",
+    "expectedWidth": 1,
+    "expectedHeight": 1,
+    "reference": "independent: FillAt weights with double sum exactly 1.0, straight Σw·c, ToByte round-half-up"
+  },
+  "expected": {
+    "bytes": "5E5E5EFF",
+    "sha256": "B356838337D05C972A31D4EB43E2F4FC9D49B826B1463DECFEE5B1663D95322C"
+  }
+}

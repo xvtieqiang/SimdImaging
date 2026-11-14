@@ -389,6 +389,34 @@ public sealed partial class Image
             cancellationToken: cancellationToken);
     }
 
+    /// <summary>
+    /// Turns one already-decoded rendition into one of ours. <see cref="Load(ReadOnlySpan{byte}, LoadOptions?, CancellationToken)"/>
+    /// wraps this with the decode options and the pixel budget; a gain-map pair needs both renditions from
+    /// one file, so it calls this twice instead.
+    /// </summary>
+    internal static Image FromDecodedImage(IDecodedImage decoded, WorkingFormat? format, IPixelPool? pool)
+    {
+        var working = format ?? WorkingFormatExtensions.FromSampleFormat(decoded.SampleFormat);
+        var buffer = WorkingBuffer.Rent(decoded.Width, decoded.Height, working, pool);
+        try
+        {
+            CopyDecoded(decoded, buffer.View);
+            var info = new ImageInfo(decoded.Width, decoded.Height, 4, working.ToSampleFormat())
+            {
+                Orientation = ImageOrientation.Normal,
+                FrameCount = 1,
+                ColorEncoding = decoded.ColorEncoding,
+            };
+
+            return new Image([new ImageFrame(buffer, null)], info, working, decoded.ColorEncoding, decoded.Metadata);
+        }
+        catch
+        {
+            buffer.Dispose();
+            throw;
+        }
+    }
+
     private static void CopyDecoded(IDecodedImage decoded, PixelView destination)
     {
         var pixelCount = checked(decoded.Width * decoded.Height);

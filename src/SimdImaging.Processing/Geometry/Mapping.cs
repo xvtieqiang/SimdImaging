@@ -64,6 +64,106 @@ public static class Mapping
         return destination;
     }
 
+    /// <summary>
+    /// Transforms with an explicit sampling contract. The centre-level rule — anything the inverse
+    /// mapping lands outside the source box (open interval, matching the frozen legacy path) becomes
+    /// background — is Mapping geometry and applies regardless of <see cref="EdgeMode"/>; the edge
+    /// mode only governs taps inside that box.
+    /// <para>With <c>options == default</c> this reproduces the historical Mapping contract
+    /// (premultiplied accumulation, tap-level replication, Σw·c, un-premultiply, <c>a == 0</c>
+    /// zeroes RGB) through the shared <see cref="TapPlanBuilder"/> weights. With any option set the
+    /// unified contract takes over literally (straight alpha, clamp edges unless Background, domain,
+    /// out-of-gamut policy). The legacy <see cref="Transform"/> stays byte-frozen; the TapPlan-driven
+    /// default path may differ from it by at most 1 ULP per Rgba32F channel (JIT FMA-fusion
+    /// asymmetry, registered in docs/known-gaps.md), which quantised formats never surface.</para>
+    /// </summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="forward">Source → destination transform.</param>
+    /// <param name="width">Destination width.</param>
+    /// <param name="height">Destination height.</param>
+    /// <param name="resampler">Any of the five reconstruction kernels.</param>
+    /// <param name="options">Sampling domain, curve, alpha, edge and out-of-gamut contract.</param>
+    /// <param name="background">Colour written where the inverse mapping lands outside the source.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
+    /// <exception cref="ArgumentException"><paramref name="forward"/> is singular.</exception>
+    /// <exception cref="InvalidDataException"><see cref="OutOfGamutPolicy.Throw"/> detected an out-of-range sample.</exception>
+    public static WorkingBuffer TransformWithOptions(PixelView source, AffineMatrix forward, int width, int height,
+        Resampler resampler, SampleOptions options, RgbaColor background = default, IPixelPool? pool = null)
+    {
+        if (width <= 0)
+            throw new ArgumentOutOfRangeException(nameof(width), width, "Width must be positive.");
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height), height, "Height must be positive.");
+        if (!forward.TryInvert(out var inverse))
+            throw new ArgumentException("The transform is singular and cannot be inverted.", nameof(forward));
+
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+        var row = new float[width * 4];
+        Span<float> backgroundColour = stackalloc float[4];
+        backgroundColour[0] = background.R / 255f;
+        backgroundColour[1] = background.G / 255f;
+        backgroundColour[2] = background.B / 255f;
+        backgroundColour[3] = background.A / 255f;
+        Span<float> sample = stackalloc float[4];
+
+        try
+        {
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    var sx = inverse.A * (x + 0.5f) + inverse.B * (y + 0.5f) + inverse.C;
+                    var sy = inverse.D * (x + 0.5f) + inverse.E * (y + 0.5f) + inverse.F;
+                    var o = x * 4;
+
+                    // Centre-level rule is Mapping geometry (open interval like the frozen legacy
+                    // path), deliberately independent of EdgeMode — unlike WarpWithOptions, which
+                    // only backgrounds the centre when Edge == Background.
+                    if (sx < 0f || sy < 0f || sx > source.Width || sy > source.Height)
+                    {
+                        backgroundColour.CopyTo(new Span<float>(row, o, 4));
+                        continue;
+                    }
+
+                    if (options.AaMode == SampleAaMode.Elliptical)
+                    {
+                        // Affine Jacobian: the inverse mapping's 2×2 is constant, computed once above.
+                        SamplingCore.SampleWithOptions(source, sx, sy, resampler, options,
+                            backgroundColour, new SourceJacobian(inverse.A, inverse.B, inverse.D, inverse.E),
+                            out _, sample);
+                        sample.CopyTo(new Span<float>(row, o, 4));
+                    }
+                    else if (options == default)
+                    {
+                        MappingTapSampler.Sample(source, sx - 0.5f, sy - 0.5f, resampler,
+                            out var r, out var g, out var b, out var a);
+                        var inverseAlpha = a > 0f ? 1f / a : 0f;
+                        row[o] = r * inverseAlpha;
+                        row[o + 1] = g * inverseAlpha;
+                        row[o + 2] = b * inverseAlpha;
+                        row[o + 3] = a;
+                    }
+                    else
+                    {
+                        // Coordinates are areal (centre at i + 0.5) for the unified core.
+                        SamplingCore.SampleWithOptions(source, sx, sy, resampler, options,
+                            backgroundColour, sample);
+                        sample.CopyTo(new Span<float>(row, o, 4));
+                    }
+                }
+
+                Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));
+            }
+
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
+    }
     /// <summary>Bilinear sample in pixel-centre coordinates; returns premultiplied colour. Edges replicate.</summary>
     internal static void SampleBilinear(PixelView source, float x, float y, out float r, out float g, out float b, out float a)
     {
@@ -219,6 +319,139 @@ public static class Mapping
         }
 
         return destination;
+    }
+
+    /// <summary>
+    /// Perspective transform with an explicit sampling contract. The centre-level rules — the
+    /// denominator <c>w &lt;= 1e-12</c> (behind the camera) and an inverse mapping landing outside
+    /// the source box (open interval, matching the frozen legacy path) become background — are
+    /// Mapping geometry and apply regardless of <see cref="EdgeMode"/>.
+    /// <para>With <c>options == default</c> this reproduces the historical Mapping contract through
+    /// the shared <see cref="TapPlanBuilder"/> weights; with any option set the unified contract
+    /// takes over literally. See <see cref="TransformWithOptions"/> for the frozen-legacy note.</para>
+    /// </summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="forward">Eight row-major parameters of the forward homography.</param>
+    /// <param name="width">Destination width.</param>
+    /// <param name="height">Destination height.</param>
+    /// <param name="resampler">Any of the five reconstruction kernels.</param>
+    /// <param name="options">Sampling domain, curve, alpha, edge and out-of-gamut contract.</param>
+    /// <param name="background">Colour written where the inverse mapping lands outside the source.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentException">The homography is not eight values or is singular.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
+    /// <exception cref="InvalidDataException"><see cref="OutOfGamutPolicy.Throw"/> detected an out-of-range sample.</exception>
+    public static WorkingBuffer PerspectiveWithOptions(PixelView source, ReadOnlySpan<float> forward, int width, int height,
+        Resampler resampler, SampleOptions options, RgbaColor background = default, IPixelPool? pool = null)
+    {
+        if (forward.Length != 8)
+            throw new ArgumentException("A homography needs eight parameters.", nameof(forward));
+        if (width <= 0 || height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(width), width, "Dimensions must be positive.");
+
+        double a = forward[0], b = forward[1], c = forward[2];
+        double d = forward[3], e = forward[4], f = forward[5];
+        double g = forward[6], h = forward[7];
+
+        var ia = e - f * h;
+        var ib = c * h - b;
+        var ic = b * f - c * e;
+        var id = f * g - d;
+        var ie = a - c * g;
+        var @if = c * d - a * f;
+        var ig = d * h - e * g;
+        var ih = b * g - a * h;
+        var ii = a * e - b * d;
+
+        var determinant = a * ia + b * id + c * ig;
+        if (Math.Abs(determinant) < 1e-12)
+            throw new ArgumentException("The homography is singular.", nameof(forward));
+
+        var scale = 1.0 / determinant;
+        ia *= scale; ib *= scale; ic *= scale;
+        id *= scale; ie *= scale; @if *= scale;
+        ig *= scale; ih *= scale; ii *= scale;
+
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+        var row = new float[width * 4];
+        Span<float> backgroundColour = stackalloc float[4];
+        backgroundColour[0] = background.R / 255f;
+        backgroundColour[1] = background.G / 255f;
+        backgroundColour[2] = background.B / 255f;
+        backgroundColour[3] = background.A / 255f;
+        Span<float> sample = stackalloc float[4];
+
+        try
+        {
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    double px = x + 0.5;
+                    double py = y + 0.5;
+                    var w = ig * px + ih * py + ii;
+                    var o = x * 4;
+
+                    if (w <= 1e-12)
+                    {
+                        backgroundColour.CopyTo(new Span<float>(row, o, 4));
+                        continue;
+                    }
+
+                    var sx = (ia * px + ib * py + ic) / w;
+                    var sy = (id * px + ie * py + @if) / w;
+
+                    if (sx < 0 || sy < 0 || sx > source.Width || sy > source.Height)
+                    {
+                        backgroundColour.CopyTo(new Span<float>(row, o, 4));
+                        continue;
+                    }
+
+                    if (options.AaMode == SampleAaMode.Elliptical)
+                    {
+                        // Perspective Jacobian, analytic: with N = ia·px+ib·py+ic, M = id·px+ie·py+if
+                        // and w = ig·px+ih·py+ii, ∂sx/∂px = (ia·w − N·ig)/w² and friends. All terms are
+                        // already in scope; the double evaluation order is frozen with the main loop.
+                        var w2 = w * w;
+                        var n = ia * px + ib * py + ic;
+                        var m = id * px + ie * py + @if;
+                        var jacobian = new SourceJacobian(
+                            (ia * w - n * ig) / w2, (ib * w - n * ih) / w2,
+                            (id * w - m * ig) / w2, (ie * w - m * ih) / w2);
+                        SamplingCore.SampleWithOptions(source, (float)sx, (float)sy, resampler, options,
+                            backgroundColour, jacobian, out _, sample);
+                        sample.CopyTo(new Span<float>(row, o, 4));
+                    }
+                    else if (options == default)
+                    {
+                        MappingTapSampler.Sample(source, (float)sx - 0.5f, (float)sy - 0.5f, resampler,
+                            out var r, out var gg, out var bl, out var al);
+                        var inverseAlpha = al > 0f ? 1f / al : 0f;
+                        row[o] = r * inverseAlpha;
+                        row[o + 1] = gg * inverseAlpha;
+                        row[o + 2] = bl * inverseAlpha;
+                        row[o + 3] = al;
+                    }
+                    else
+                    {
+                        // The legacy path truncates the double solution to float before sampling; the
+                        // unified core takes the areal float coordinates the same way.
+                        SamplingCore.SampleWithOptions(source, (float)sx, (float)sy, resampler, options,
+                            backgroundColour, sample);
+                        sample.CopyTo(new Span<float>(row, o, 4));
+                    }
+                }
+
+                Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));
+            }
+
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
     }
 
 }

@@ -143,6 +143,13 @@ internal static class Metrics
         if (p.PsnrRgb >= 20) return "偏差明显 (PSNR≥20)";
         return "算法/语义不同";
     }
+
+    /// <summary>Located diff: first mismatch, per-channel error, SHA-256, Top N and a PPM heat map.</summary>
+    public static SimdImaging.Shared.DiffReport Analyze(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b,
+        int width, int height, int topN = 16) => SimdImaging.Shared.PixelDiff.Analyze(a, b, width, height, topN);
+
+    /// <summary>Full SHA-256, upper-case hex, of either side of a comparison.</summary>
+    public static string Sha256(ReadOnlySpan<byte> data) => SimdImaging.Shared.PixelDiff.Sha256(data);
 }
 
 internal sealed record Runner(string Name, Action Run);

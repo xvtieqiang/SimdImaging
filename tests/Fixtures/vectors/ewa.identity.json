@@ -1,0 +1,28 @@
+{
+  "id": "ewa.identity",
+  "generator": "generate-vectors.py",
+  "determinism": "D1",
+  "tolerance": null,
+  "input": {
+    "width": 2,
+    "height": 1,
+    "format": "Rgba8",
+    "bytes": "000000FFFFFFFFFF",
+    "sha256": "8E333FBA21F15DDB741ED10958AB5828420EAEB8B24F25A873DE6D410F45D146"
+  },
+  "params": {
+    "op": "AffineWithOptions",
+    "map": "identity (destination centre areal 0.5 → source areal 0.5)",
+    "resampler": "Bilinear",
+    "aa": "Elliptical (J = I, kernelScale 1, tier budget 8)",
+    "domain": "Encoded",
+    "alpha": "Straight",
+    "expectedWidth": 1,
+    "expectedHeight": 1,
+    "reference": "independent: exp(-0.5·q) weights, double-normalised then f32, straight Σw·c"
+  },
+  "expected": {
+    "bytes": "606060FF",
+    "sha256": "EAC150965089A07A8DE9177EE0FD7A98ADEF5D8F5BBE32D2577A7B87C039CE30"
+  }
+}

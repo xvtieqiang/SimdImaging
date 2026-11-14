@@ -1,0 +1,24 @@
+{
+  "id": "warp-identity-rgba8",
+  "generator": "generate-vectors.py",
+  "determinism": "D0",
+  "tolerance": null,
+  "input": {
+    "width": 5,
+    "height": 4,
+    "format": "Rgba8",
+    "bytes": "0B4885C2306DAAE75592CF0C7AB7F4319FDC1956C4013E7BE92663A00E4B88C53370ADEA5895D20F7DBAF734A2DF1C59C704417EEC2966A3114E8BC83673B0ED5B98D51280BDFA37A5E21F5CCA074481",
+    "sha256": "FB189DF8A73EFF4B41B95D107F2A0FAE7DFDBB772A793EE46D9E60BBFC1988C9"
+  },
+  "params": {
+    "op": "Warp",
+    "map": "identity",
+    "resampler": "Bilinear",
+    "phase": "pixel-centre",
+    "reference": "independent: identity map selects exactly one tap at weight 1.0"
+  },
+  "expected": {
+    "bytes": "0B4885C2306DAAE75592CF0C7AB7F4319FDC1956C4013E7BE92663A00E4B88C53370ADEA5895D20F7DBAF734A2DF1C59C704417EEC2966A3114E8BC83673B0ED5B98D51280BDFA37A5E21F5CCA074481",
+    "sha256": "FB189DF8A73EFF4B41B95D107F2A0FAE7DFDBB772A793EE46D9E60BBFC1988C9"
+  }
+}

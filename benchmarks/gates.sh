@@ -3,6 +3,7 @@
 #
 #   bash benchmarks/gates.sh          # build + tests + public-API snapshot (~1 min)
 #   bash benchmarks/gates.sh --aot    # also the NativeAOT smoke (needs the C++ workload, several minutes)
+#   bash benchmarks/gates.sh --perf   # also the versioned performance-baseline check (opt-in)
 #
 # Every step prints the criterion it enforces and the value it observed. That is deliberate: most of the
 # measurement mistakes in this repo came from reading a green summary without checking what it summarised,
@@ -33,7 +34,7 @@ nope()   { printf 'FAIL  %s\n' "$1"; fail=1; }
 # ---------------------------------------------------------------- 1. build, zero warnings
 # The repo rule is "no new warnings", and there is no suppression budget. A warning count above zero is a
 # gate failure here, not a note.
-report "1/3 build (Release, zero warnings required)"
+report "1/5 build (Release, zero warnings required)"
 build_log="$(dotnet build SimdImaging.slnx -c Release --nologo 2>&1)"
 warn=$(printf '%s' "$build_log" | grep -oE '[0-9]+ Warning\(s\)' | grep -oE '[0-9]+' | tail -1)
 err=$(printf '%s' "$build_log"  | grep -oE '[0-9]+ Error\(s\)'   | grep -oE '[0-9]+' | tail -1)
@@ -48,7 +49,7 @@ fi
 # ---------------------------------------------------------------- 2. full test suite
 # Fails on any failed test, and also on a suspiciously small total — a suite that silently stopped
 # discovering tests would otherwise look like a pass.
-report "2/3 tests (all, none failed)"
+report "2/5 tests (all, none failed)"
 test_log="$(dotnet test tests/SimdImaging.Tests/SimdImaging.Tests.csproj -c Release --no-build --nologo 2>&1)"
 failed=$(printf '%s' "$test_log" | grep -oE 'Failed: +[0-9]+' | grep -oE '[0-9]+' | tail -1)
 passed=$(printf '%s' "$test_log" | grep -oE 'Passed: +[0-9]+' | grep -oE '[0-9]+' | tail -1)
@@ -63,7 +64,7 @@ fi
 # ---------------------------------------------------------------- 3. public API snapshot
 # docs/public-api.txt is the lock. This step must never be "fixed" by regenerating the file inside the gate:
 # the regeneration is a reviewed diff, done by hand with SIMDIMAGING_UPDATE_PUBLIC_API=1.
-report "3/3 public API snapshot (no drift)"
+report "3/5 public API snapshot (no drift)"
 api_log="$(dotnet test tests/SimdImaging.Tests/SimdImaging.Tests.csproj -c Release --no-build --nologo \
     --filter "FullyQualifiedName~PublicApi" 2>&1)"
 if printf '%s' "$api_log" | grep -qE 'Passed: +1|Failed: +0'; then
@@ -73,11 +74,20 @@ else
     nope "public surface drifted — review the diff, then regenerate with SIMDIMAGING_UPDATE_PUBLIC_API=1"
 fi
 
+want_aot=0
+want_perf=0
+for arg in "$@"; do
+    case "$arg" in
+        --aot)  want_aot=1 ;;
+        --perf) want_perf=1 ;;
+    esac
+done
+
 # ---------------------------------------------------------------- 4. optional AOT smoke
 # Two publishes (avx2 and the SSE2 baseline), each compared byte-for-byte against the JIT run. Slow, and
 # needs the C++ workload, so it is opt-in rather than part of the default gate.
-if [ "${1:-}" = "--aot" ]; then
-    report "4/4 NativeAOT smoke (publish twice, compare bytes)"
+if [ "$want_aot" = "1" ]; then
+    report "4/5 NativeAOT smoke (publish twice, compare bytes)"
     if bash tests/SimdImaging.AotSmoke/run.sh; then
         pass "AOT output matches the JIT baseline"
     else
@@ -85,6 +95,22 @@ if [ "${1:-}" = "--aot" ]; then
     fi
 else
     printf '\n(skipping AOT smoke; pass --aot to include it)\n'
+fi
+
+# ---------------------------------------------------------------- 5. optional performance regression
+# Since M15 this compares against benchmarks/baselines/*.json and fails on a regression past the
+# scenario's threshold. It only compares runs it can defend: same machine id, same binary hash, same
+# protocol. Anything else is reported as "not comparable" and skipped, because a cross-machine stopwatch
+# difference is noise. The script prints how many scenarios were actually enforced.
+if [ "$want_perf" = "1" ]; then
+    report "5/5 performance baseline (opt-in; same machine + same binary only)"
+    if bash benchmarks/check-baseline.sh; then
+        pass "performance baseline check"
+    else
+        nope "performance baseline check failed"
+    fi
+else
+    printf '\n(skipping performance baseline; pass --perf to include it)\n'
 fi
 
 printf '\n---------------------------------------------\n'

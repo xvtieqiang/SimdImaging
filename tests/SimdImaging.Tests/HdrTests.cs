@@ -174,4 +174,107 @@ public class HdrTests
 
         Should.Throw<ArgumentException>(() => first.Ssim(second));
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // hdrgm reconstruction. The offsets are the format's own 1/64, so they cancel at headroom 1 and
+    // shift the result everywhere else — which is how the tests tell a correct model from ApplyGainMap.
+    // ---------------------------------------------------------------------------------------------
+
+    private static GainMapParameters Hdrgm(double min = -1, double max = 1, double gamma = 1) =>
+        new(min, max, gamma, 1.0 / 64.0, 1.0 / 64.0, 0, 1, false);
+
+    private static float Pixel0(WorkingBuffer buffer) =>
+        MemoryMarshal.Cast<byte, float>(buffer.View.Span)[0];
+
+    [Fact]
+    public void ReconstructGainMap_AtHeadroomOneReturnsTheLinearBase()
+    {
+        using var baseImage = Float(4, 4, 0.5f, 0.5f, 0.5f);
+        using var gain = Float(4, 4, 1f, 1f, 1f);
+
+        using var result = HdrOps.ReconstructGainMap(baseImage[0].Pixels.View, gain[0].Pixels.View, Hdrgm(), 1f);
+
+        // Capacity is zero at headroom 1, and the two offsets cancel: the answer is the linearised base.
+        Pixel0(result).ShouldBe(ColorMath.SrgbToLinear(0.5f), 1e-6f);
+    }
+
+    [Fact]
+    public void ReconstructGainMap_AtFullCapacityAppliesTheAuthoredGain()
+    {
+        using var baseImage = Float(4, 4, 0.5f, 0.5f, 0.5f);
+        using var gain = Float(4, 4, 1f, 1f, 1f);
+
+        // Headroom 4 is log2 = 2, above HdrCapacityMax = 1, so the full authored gain applies: 2^1.
+        using var result = HdrOps.ReconstructGainMap(baseImage[0].Pixels.View, gain[0].Pixels.View, Hdrgm(), 4f);
+
+        var expected = (ColorMath.SrgbToLinear(0.5f) + 1f / 64f) * 2f - 1f / 64f;
+        Pixel0(result).ShouldBe(expected, 1e-6f);
+    }
+
+    [Fact]
+    public void ReconstructGainMap_TheMinimumGainAppliesToAZeroMap()
+    {
+        using var baseImage = Float(4, 4, 0.5f, 0.5f, 0.5f);
+        using var gain = Float(4, 4, 0f, 0f, 0f);
+
+        using var result = HdrOps.ReconstructGainMap(baseImage[0].Pixels.View, gain[0].Pixels.View, Hdrgm(), 4f);
+
+        var expected = (ColorMath.SrgbToLinear(0.5f) + 1f / 64f) * 0.5f - 1f / 64f;
+        Pixel0(result).ShouldBe(expected, 1e-6f);
+    }
+
+    [Fact]
+    public void ReconstructGainMap_UpsamplesALowResolutionMap()
+    {
+        using var baseImage = Float(8, 6, 0.5f, 0.5f, 0.5f);
+        using var gain = Float(2, 2, 1f, 1f, 1f);
+
+        using var result = HdrOps.ReconstructGainMap(baseImage[0].Pixels.View, gain[0].Pixels.View, Hdrgm(), 4f);
+
+        var pixels = MemoryMarshal.Cast<byte, float>(result.View.Span);
+        var expected = (ColorMath.SrgbToLinear(0.5f) + 1f / 64f) * 2f - 1f / 64f;
+
+        for (var i = 0; i < pixels.Length; i += 4)
+            pixels[i].ShouldBe(expected, 1e-5f);
+    }
+
+    [Fact]
+    public void ReconstructGainMap_LeavesValuesAboveOneUnclamped()
+    {
+        using var baseImage = Float(2, 2, 1f, 1f, 1f);
+        using var gain = Float(2, 2, 1f, 1f, 1f);
+
+        // Two stops of authored gain on white: the whole point of the format.
+        using var result = HdrOps.ReconstructGainMap(baseImage[0].Pixels.View, gain[0].Pixels.View,
+            Hdrgm(min: 0, max: 2), 8f);
+
+        Pixel0(result).ShouldBeGreaterThan(3.5f);
+    }
+
+    [Fact]
+    public void ReconstructGainMap_RejectsIllegalArguments()
+    {
+        using var baseImage = Float(2, 2, 0.5f, 0.5f, 0.5f);
+        using var gain = Float(2, 2, 0.5f, 0.5f, 0.5f);
+        var view = baseImage[0].Pixels.View;
+        var map = gain[0].Pixels.View;
+
+        Should.Throw<ArgumentOutOfRangeException>(() => HdrOps.ReconstructGainMap(view, map, Hdrgm(), 0f));
+        Should.Throw<ArgumentOutOfRangeException>(() => HdrOps.ReconstructGainMap(view, map, Hdrgm(), 4f, weight: 1.5f));
+        Should.Throw<ArgumentException>(() => HdrOps.ReconstructGainMap(view, map, Hdrgm(max: -2), 4f));
+        Should.Throw<ArgumentOutOfRangeException>(() => HdrOps.ReconstructGainMap(view, map, Hdrgm(gamma: 0), 4f));
+    }
+
+    [Fact]
+    public void ApplyGainMap_KeepsItsPublishedFormula()
+    {
+        // Regression on the old simplified model: headroom 4 and a full gain map quadruple the linear
+        // base, with no offsets and no capacity interpolation. ReconstructGainMap must not have moved it.
+        using var baseImage = Float(2, 2, 0.5f, 0.5f, 0.5f);
+        using var gain = Float(2, 2, 1f, 1f, 1f);
+
+        using var result = baseImage.ApplyGainMap(gain, headroom: 4f);
+
+        First(result).ShouldBe(ColorMath.SrgbToLinear(0.5f) * 4f, 1e-6f);
+    }
 }

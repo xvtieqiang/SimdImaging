@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -55,6 +56,12 @@ using (var cropped = image.Crop(new PixelRect(8, 6, 32, 24)))
 using (var resized = image.Resize(31, 19, Resampler.Bicubic))
     Console.WriteLine($"resize.bicubic sha={Hash(resized.WritablePixels)}");
 
+// Nearest's Rgba8 fast path is a 32-bit bit-copy; hash its output directly so the JIT/AOT/tier
+// comparison actually covers the operator whose inner loop was optimised (AGENTS.md: keep the
+// changed operator in the hash list, or a green smoke verifies nothing about it).
+using (var resized = image.Resize(23, 17, Resampler.Nearest))
+    Console.WriteLine($"resize.nearest sha={Hash(resized.WritablePixels)}");
+
 using (var resized = image.Resize(97, 71, Resampler.Lanczos3))
     Console.WriteLine($"resize.lanczos3 sha={Hash(resized.WritablePixels)}");
 
@@ -99,6 +106,135 @@ using (var rotated = image.Rotate(17f, new RgbaColor(0, 0, 0, 255)))
 using (var skewed = image.Perspective(new[] { 1f, 0.2f, 0f, 0f, 1f, 0f, 0.002f, 0f }, 64, 48, new RgbaColor(0, 0, 0, 255)))
     Console.WriteLine($"perspective sha={Hash(skewed.WritablePixels)}");
 
+// The delegate warp and the point-sample chain were absent from this list. Sampling.cs is the
+// precision-critical path, so a green smoke that never hashed it proved nothing about it.
+using (var warped = image.Warp(64, 48,
+    (float x, float y, out float sx, out float sy) => { sx = x; sy = y; },
+    Resampler.Bilinear, new RgbaColor(0, 0, 0, 255)))
+    Console.WriteLine($"warp sha={Hash(warped.WritablePixels)}");
+
+var sampled = image.SamplePixel(3.25f, 5.5f, Resampler.Bilinear);
+Span<byte> sampleBytes = stackalloc byte[4];
+sampleBytes[0] = sampled.R;
+sampleBytes[1] = sampled.G;
+sampleBytes[2] = sampled.B;
+sampleBytes[3] = sampled.A;
+Console.WriteLine($"samplepixel sha={Hash(sampleBytes)}");
+
+// M8 explicit-contract path: linear-light domain, premultiplied alpha and a 5-kernel warp all
+// have to produce the same bytes under ILC as under the JIT.
+using (var linearWarp = image.WarpWithOptions(64, 48,
+    (float x, float y, out float sx, out float sy) => { sx = x; sy = y; },
+    Resampler.Bicubic, new SimdImaging.Abstractions.SampleOptions
+    {
+        Domain = SimdImaging.Abstractions.SampleDomain.LinearLight,
+    }))
+    Console.WriteLine($"warp.linear sha={Hash(linearWarp.WritablePixels)}");
+
+using (var premulWarp = image.WarpWithOptions(64, 48,
+    (float x, float y, out float sx, out float sy) => { sx = x - 0.25f; sy = y; },
+    Resampler.Lanczos3, new SimdImaging.Abstractions.SampleOptions
+    {
+        Alpha = SimdImaging.Abstractions.AlphaMode.Premultiplied,
+        Edge = SimdImaging.Abstractions.EdgeMode.Background,
+    }))
+    Console.WriteLine($"warp.premul sha={Hash(premulWarp.WritablePixels)}");
+
+// M8 second wave: the Mapping/Resize WithOptions entry points (explicit contracts across the
+// remaining geometry chains) must match the JIT byte for byte under ILC too.
+using (var resizeOptions = image.ResizeWithOptions(32, 24, Resampler.Bicubic,
+    new SimdImaging.Abstractions.SampleOptions
+    {
+        Domain = SimdImaging.Abstractions.SampleDomain.LinearLight,
+    }))
+    Console.WriteLine($"resize.options sha={Hash(resizeOptions.WritablePixels)}");
+
+using (var rotateOptions = image.RotateWithOptions(17f, Resampler.Bicubic,
+    new SimdImaging.Abstractions.SampleOptions
+    {
+        Alpha = SimdImaging.Abstractions.AlphaMode.Premultiplied,
+    }, new RgbaColor(0, 0, 0, 255)))
+    Console.WriteLine($"rotate.options sha={Hash(rotateOptions.WritablePixels)}");
+
+using (var perspectiveOptions = image.PerspectiveWithOptions(
+    new[] { 1f, 0.2f, 0f, 0f, 1f, 0f, 0.002f, 0f }, 64, 48, Resampler.Lanczos3,
+    new SimdImaging.Abstractions.SampleOptions
+    {
+        Edge = SimdImaging.Abstractions.EdgeMode.Background,
+    }, new RgbaColor(0, 0, 0, 255)))
+    Console.WriteLine($"perspective.options sha={Hash(perspectiveOptions.WritablePixels)}");
+
+// M9 EWA: the elliptical footprint path must produce the same bytes under ILC as under the JIT.
+using (var ewaRotate = image.RotateWithOptions(17f, Resampler.Bicubic,
+    new SimdImaging.Abstractions.SampleOptions
+    {
+        AaMode = SimdImaging.Abstractions.SampleAaMode.Elliptical,
+    }, new RgbaColor(0, 0, 0, 255)))
+    Console.WriteLine($"ewa.rotate sha={Hash(ewaRotate.WritablePixels)}");
+
+// M10 fusion: a banded chain through ProcessingPlan must produce the same bytes under ILC as under
+// the JIT. The equality to the step-by-step executor is covered by FusedExecutorEquivalenceTests;
+// this entry is what proves the fused window recursion survives AOT.
+using (var planned = image.Apply(new ProcessingPlan { BandRows = 8 }
+    .Add("brightness", OpCategory.Point, PlanSteps.Point(v => PointOps.Brightness(v, 0.05f)))
+    .Add("blur", OpCategory.Neighborhood, PlanSteps.Neighborhood(v => FilterOps.GaussianBlur(v, 1f), 3, 3), 3, 3)
+    .Add("invert", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v)))))
+    Console.WriteLine($"plan.fused sha={Hash(planned.WritablePixels)}");
+
+// M11 photo algorithms: non-local means (integer distances plus Math.Exp weights) and the local
+// Laplacian pyramid (Math.Pow remap table plus the Burt-Adcock kernels) must both match under ILC.
+using (var nlm = image.NonLocalMeans(2, 1, 0.15f))
+    Console.WriteLine($"nlm sha={Hash(nlm.WritablePixels)}");
+
+using (var llf = image.LocalLaplacian(levels: 3, samples: 8, alpha: 0.3f))
+    Console.WriteLine($"ll sha={Hash(llf.WritablePixels)}");
+
+// M12: deconvolution (separable and sparse kernels through PlanarConvolve) and seam carving (integer DP
+// path selection, then pixel moves through the lossless transpose for the horizontal axis).
+using (var rl = image.RichardsonLucy(1.2f, 3))
+    Console.WriteLine($"rl sha={Hash(rl.WritablePixels)}");
+
+using (var rlm = image.RichardsonLucyMotion(7, 30f, 2))
+    Console.WriteLine($"rl.motion sha={Hash(rlm.WritablePixels)}");
+
+using (var seam = image.RemoveSeams(SeamAxis.Vertical, 2))
+    Console.WriteLine($"seam sha={Hash(seam.WritablePixels)}");
+
+// ANL-9: the exact squared EDT (float parabolas on a serial envelope sweep) goes through the facade here,
+// which also proves the Rgba32F result is not relabelled as the 8-bit input.
+using (var mask = Image.Create(Width, Height, WorkingFormat.Rgba8))
+{
+    var maskPixels = mask.WritablePixels;
+    for (var y = 0; y < Height; y++)
+        for (var x = 0; x < Width; x++)
+        {
+            var offset = (y * Width + x) * 4;
+            maskPixels[offset + 3] = ((x / 7) + (y / 5)) % 3 == 0 ? (byte)255 : (byte)0;
+        }
+
+    using var distance = mask.DistanceTransform();
+    Console.WriteLine($"dt sha={Hash(distance.WritablePixels)}");
+}
+
+// M13: the ICC LUT path (integer curves, a tetrahedral CLUT, a float PCS seam) and the hdrgm gain-map
+// reconstruction (gamma and exp2 over a bilinearly upsampled map). Both produce pixels, so both are
+// hashed — otherwise "AOT output == JIT output" would stop covering the newest arithmetic.
+var lutProfile = BuildLut16Profile(3);
+using (var iccLut = image.IccTransform(lutProfile))
+    Console.WriteLine($"icc.lut sha={Hash(iccLut.WritablePixels)}");
+
+using (var gainMapImage = Image.Create(16, 12, WorkingFormat.Rgba8))
+{
+    var gainPixels = gainMapImage.WritablePixels;
+    for (var i = 0; i < gainPixels.Length; i++)
+        gainPixels[i] = (byte)((i * 29 + 3) & 0xFF);
+
+    // The pair owns both images, so it gets a copy: `image` is hashed again below.
+    using var pair = new GainMappedImage(image.Clone(), gainMapImage, GainMapParameters.Default);
+    using var hdr = pair.ToHdr(4f);
+    Console.WriteLine($"gainmap.hdr sha={Hash(hdr.WritablePixels)}");
+}
+
 using (var dithered = image.DitherToPalette(PaletteQuantizer.WebSafe))
     Console.WriteLine($"dither sha={Hash(dithered.WritablePixels)}");
 
@@ -127,6 +263,12 @@ using (var opened = image.Open3x3())
 using (var bilateral = image.GaussianBlur(2f).Bilateral(2, 0f, 0.2f))
     Console.WriteLine($"bilateral sha={Hash(bilateral.WritablePixels)}");
 
+// Cross-guided filter: cov(I, G) and var(G) from a guide that is not the source, so the second box-pass
+// layout is hashed too. The self-guided path is already covered through the one-argument call.
+using (var guide = image.GaussianBlur(1f))
+using (var crossGuided = image.GuidedFilter(guide, 2, 1e-4f))
+    Console.WriteLine($"guided.cross sha={Hash(crossGuided.WritablePixels)}");
+
 using (var canvas = Image.Create(64, 48, WorkingFormat.Rgba8))
 {
     canvas.Fill(new RgbaColor(7, 8, 9, 255));
@@ -153,6 +295,59 @@ using (var baseImage = image.Resize(64, 48, Resampler.Nearest))
 }
 
 static string Hash(ReadOnlySpan<byte> data) => Convert.ToHexString(SHA256.HashData(data))[..16];
+
+
+// A minimal lut16 profile with an identity A2B0 CLUT, hand-written here so the smoke needs no fixture:
+// what it exercises is the parser and the tetrahedral evaluation, not a particular real-world profile.
+static byte[] BuildLut16Profile(byte grid)
+{
+    const int headerSize = 128 + 16;
+    var samples = grid * grid * grid * 3;
+    var tagSize = 48 + 3 * 256 * 2 + samples * 2 + 3 * 256 * 2;
+    var profile = new byte[headerSize + tagSize];
+
+    BinaryPrimitives.WriteInt32BigEndian(profile.AsSpan(0, 4), profile.Length);
+    BinaryPrimitives.WriteUInt32BigEndian(profile.AsSpan(8, 4), 0x02300000);
+    "scnr"u8.CopyTo(profile.AsSpan(12));
+    "RGB "u8.CopyTo(profile.AsSpan(16));
+    "XYZ "u8.CopyTo(profile.AsSpan(20));
+    "acsp"u8.CopyTo(profile.AsSpan(36));
+    BinaryPrimitives.WriteInt32BigEndian(profile.AsSpan(128, 4), 1);
+    "A2B0"u8.CopyTo(profile.AsSpan(132));
+    BinaryPrimitives.WriteInt32BigEndian(profile.AsSpan(136, 4), headerSize);
+    BinaryPrimitives.WriteInt32BigEndian(profile.AsSpan(140, 4), tagSize);
+
+    var tag = profile.AsSpan(headerSize);
+    "mft2"u8.CopyTo(tag);
+    tag[8] = 3;
+    tag[9] = 3;
+    tag[10] = grid;
+    for (var i = 0; i < 9; i++)
+        BinaryPrimitives.WriteInt32BigEndian(tag.Slice(12 + i * 4, 4), i % 4 == 0 ? 65536 : 0);
+
+    var offset = 48;
+    for (var channel = 0; channel < 3; channel++)
+        for (var i = 0; i < 256; i++, offset += 2)
+            BinaryPrimitives.WriteUInt16BigEndian(tag.Slice(offset, 2), (ushort)(i * 257));
+
+    for (var r = 0; r < grid; r++)
+        for (var g = 0; g < grid; g++)
+            for (var b = 0; b < grid; b++)
+            {
+                BinaryPrimitives.WriteUInt16BigEndian(tag.Slice(offset, 2), (ushort)(r * 32768 / (grid - 1)));
+                offset += 2;
+                BinaryPrimitives.WriteUInt16BigEndian(tag.Slice(offset, 2), (ushort)(g * 32768 / (grid - 1)));
+                offset += 2;
+                BinaryPrimitives.WriteUInt16BigEndian(tag.Slice(offset, 2), (ushort)(b * 32768 / (grid - 1)));
+                offset += 2;
+            }
+
+    for (var channel = 0; channel < 3; channel++)
+        for (var i = 0; i < 256; i++, offset += 2)
+            BinaryPrimitives.WriteUInt16BigEndian(tag.Slice(offset, 2), (ushort)(i * 257));
+
+    return profile;
+}
 
 internal static class SmokeAssert
 {

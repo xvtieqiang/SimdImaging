@@ -31,4 +31,9 @@
     <ProjectReference Include="..\..\src\SimdImaging.Abstractions\SimdImaging.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Same source-shared metric as the test suite; the comparison tool must not grow its own ruler. -->
+    <Compile Include="..\..\src\Shared\PixelDiff.cs" Link="Shared\PixelDiff.cs" />
+  </ItemGroup>
+
 </Project>

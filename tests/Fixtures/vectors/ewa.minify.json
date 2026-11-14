@@ -1,0 +1,28 @@
+{
+  "id": "ewa.minify",
+  "generator": "generate-vectors.py",
+  "determinism": "D1",
+  "tolerance": null,
+  "input": {
+    "width": 2,
+    "height": 2,
+    "format": "Rgba8",
+    "bytes": "000000FFFFFFFFFFFFFFFFFF000000FF",
+    "sha256": "F38D522927A4F3EEBE2CC4647870653DE12AD51F6937F0E49FB398A9324EC6D6"
+  },
+  "params": {
+    "op": "AffineWithOptions",
+    "map": "Scale(0.5) forward (destination centre areal 0.5 → source areal (1,1))",
+    "resampler": "Bilinear",
+    "aa": "Elliptical (J = diag(2,2), R = diag(1/4,1/4), tier budget 16)",
+    "domain": "Encoded",
+    "alpha": "Straight",
+    "expectedWidth": 1,
+    "expectedHeight": 1,
+    "reference": "independent: four equal exp(-0.0625) taps normalise to exact 0.25 each; mean = 0.5"
+  },
+  "expected": {
+    "bytes": "808080FF",
+    "sha256": "79DFAD351F79EF0E65A11FFF0A9ED44BF628F9390FF06B92EE4EE5E2477616EA"
+  }
+}

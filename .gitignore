@@ -23,6 +23,9 @@ benchmarks/SimdImaging.Comparison/results/
 # 示例照片是**入库**的（三个 720p jpg，共 388 KB），为的是克隆后开箱即用。它们不是测试夹具——
 # tests/ 下的所有像素都由程序生成，符合"测试图不入库"的规则。生成脚本见 samples/SimdImaging.Lab/README.md。
 
+# CC0 quality corpus: downloaded by URL + SHA-256, never committed (AGENTS.md clean-room rules).
+tests/Fixtures/.cache/
+
 # Archives
 *.tar.gz
 

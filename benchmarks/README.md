@@ -66,6 +66,136 @@ Output is unchanged: every AOT smoke hash (crop / bicubic / Lanczos3 / 16-bit re
 composite) is byte-identical before and after the vector work, and `RowMathTests` compares the vector kernel
 against its scalar twin for widths 1..65 exactly.
 
+## Gates, tiers and baselines (M6, 2026-11-14)
+
+Four scripts now share one ruler:
+
+- `bash benchmarks/gates.sh` — build (0 warnings), full tests, public-API snapshot.
+- `bash benchmarks/gates.sh --aot --perf` — adds the NativeAOT smoke and the versioned baseline check.
+- `bash benchmarks/simd-tiers.sh [--aot]` — runs the **full** suite under `DOTNET_EnableAVX512F=0`,
+  `AVX2=0` and `HWIntrinsic=0`, then diffs the AOT smoke program's operator-output hash bodies.
+  It deliberately does not use `--filter "FullyQualifiedName~Kernel"`: that filter only matched tests
+  whose name happened to contain "Kernel" and never covered the scalar-twin tests.
+- `bash tests/Fixtures/download-corpus.sh --verify` — verifies the CC0 corpus by SHA-256.
+
+Observed 2026-11-14 on the machine line above: `gates.sh` reported `warnings=0 errors=0`,
+`failed=0`, passed above the 500 floor, snapshot unchanged. All three JIT tiers passed the whole
+suite and produced the same operator-body SHA-256
+`4439020325bc2f27a251abd9106e0b07cb181676dc6441da03330428e9067663`, unchanged after the M7 warp
+precision rewrite (the Rgba8 output bytes did not move). The exact pass count is deliberately not
+pinned here — it grows with every milestone; read it from the gate's `observed:` line instead.
+`tests/SimdImaging.AotSmoke/run.sh` additionally diffed JIT / avx2 / SSE2 bodies with no difference
+and now requires `warp` and `samplepixel` hashes. An AOT publish cannot run xUnit, so the fourth
+tier is that smoke rather than a fourth full test-suite run — a scope note, not a claim that four
+full suites were executed.
+
+M8 update (2026-11-14): `AotSmoke/Program.cs` gained two explicit-contract operators
+(`warp.linear`, `warp.premul`), so the operator-body SHA moved to
+`7a7e74fe860e76ebe8c2895dfe80f5d2e730a8778c8cfd140931a26538b10e1f` and all three JIT tiers still
+agree. **Stripping those two new lines reproduces the M7 body SHA
+`4439020325bc2f27a251abd9106e0b07cb181676dc6441da03330428e9067663` exactly** — that is the check
+that no EXISTING operator output byte changed when `WeightTable.BuildCore` moved to the shared
+`TapPlanBuilder`. A body hash moving because new operators were added is not a byte regression;
+do not confuse the two.
+
+M8 second wave (2026-11-14): three more explicit-contract operators joined the smoke
+(`resize.options`, `rotate.options`, `perspective.options`); the body SHA is unchanged at
+`7a7e74fe…` because the new Console lines are part of the same hash they define — **stripping all
+five new lines (`warp.linear`, `warp.premul`, `resize.options`, `rotate.options`,
+`perspective.options`) still reproduces `44390203…6763` exactly**, which is the check that the
+Mapping/Resize WithOptions additions, the `RotationCanvas` extraction and the
+`SamplingCore` plan-injecting refactor changed no existing operator byte.
+
+M9 update (2026-11-14): the `ewa.rotate` operator joined the smoke, so the body SHA moved to
+`2a66d31a2eec905b32bf7b74086456f48413f9c303684654fe88e9d6585da902` across all three JIT tiers.
+**Stripping all six M8+M9 lines (`warp.linear`, `warp.premul`, `resize.options`, `rotate.options`,
+`perspective.options`, `ewa.rotate`) still reproduces `44390203…6763` exactly** — the EWA additions
+(`SampleOptions.AaMode`, `EwaKernel`, the `SamplingCore` Jacobian overload, the analytic Jacobians in
+`Mapping`) changed no existing operator byte.
+
+M9 erratum (2026-11-14): the EWA footprint formula was inverted (`Q = MᵀM` with an extra `k²` made
+minification sharpen instead of blur). After the fix the body SHA is
+`42c595fe324c0af52ec126f3987ce790e612db495de2e2c7a8384852d5594992`; `ewa.rotate` changed because the
+footprint changed, and stripping the same six lines still returns `44390203…6763`. The two `ewa.*`
+reference vectors are unchanged (both are symmetric footprints, where equal weights make the formula
+direction irrelevant).
+
+M10 update (2026-11-14): the `plan.fused` chain (point → 3×3 blur → point through `ProcessingPlan`)
+joined the smoke, so the body SHA is now
+`d6781e6e4b946a69b0b83763d36f2e6b9f30a85c901eda7f1d98d1bee641370b` across all three JIT tiers.
+**Stripping all seven new lines (the six above plus `plan.fused`) still reproduces `44390203…6763`
+exactly** — the fused executor changed no operator byte. `run.sh`'s `REQUIRED` list grew with
+`plan.fused` in the same change (AGENTS.md: every operator whose implementation changes must be in it).
+
+M11 update (2026-11-14): `nlm` (non-local means) and `ll` (local Laplacian) joined the smoke, so the body
+SHA is `3d51c3a6bfd5a9385483b9873b2908e1aff2035a759dc6783b4aee038a54f1c6` across all three JIT tiers.
+**Stripping all nine lines (the seven above plus `nlm` and `ll`) reproduces `44390203…6763` exactly** —
+both new operators sit outside every existing path. `bilateral` had been hashed but missing from
+`REQUIRED`; it is listed there now, which is the first time that hash has actually gated anything.
+
+M12 update (2026-11-14): `rl`, `rl.motion` and `seam` joined the smoke, so the body SHA is
+`cf7dc7f8d060e3d5dd3a039e437367879245e87cbc2db1d6460309f594389838` across all three JIT tiers.
+**Stripping all thirteen lines (the ten above plus `rl`, `rl.motion` and `seam`) reproduces
+`44390203…6763` exactly** — deconvolution and seam carving touch no existing operator.
+
+M12 measured on this machine at 1080p Rgba8: `RichardsonLucy(1.5, 10)` **254 ms**, alloc 95 MiB;
+`RichardsonLucyMotion(15, 25°, 10)` **347 ms**; `RemoveSeams(Vertical, 50)` **502 ms** (≈10 ms per seam),
+alloc 4 MiB. Deconvolution cost is `2 · taps · iterations` per pixel; FFT would need σ ≳ 18 px to win and
+would break cross-tier byte equality — see `docs/fft-evaluation.md`.
+
+M15 (2026-11-14): `gates.sh --perf` stopped being a placeholder. `benchmarks/baselines/windows-10.0.19045-x64-16-m15.json`
+records 29 scenarios from two `best-of-3` runs of the same binary, **15 of them with `thresholdPercent: 15`**,
+and `check-baseline.sh` compares a fresh run against them: `PASS` at worst **+1.9%** and **+3.5%** on two
+validation runs (`enforced=15`), and
+`--self-test` (thresholds forced to 0) exits **1** with all 29 over — a comparison that only ever passes is
+not a gate. A scenario is gated only if **every** recorded pair agreed within 10%, so the 15% threshold keeps
+at least five points of margin: that keeps stroke (23% between runs), gaussian (15.6%), bilateral (21.8%),
+ICC (19.6%), crop (20.5%), `dt` (21.7% in one pair) and resize-Lanczos (25.9%) unenforced rather than turning
+the gate into a coin flip, and it is why RL and seam stay out despite a quiet pair today (29% and 25% earlier).
+Comparability needs the same machine id, binary hash, protocol and repeat count; anything else prints
+"not comparable" and is skipped, because a cross-machine stopwatch difference is noise.
+
+M15 re-record (2026-11-14, same machine and protocol): the file was rewritten twice — first after
+`DistanceTransformOps` and the cross-guided filter landed, then again after the distance transform's column
+pass moved to 64-column tiles — so `binarySha256` matches the current Processing/Abstractions pair and
+`--perf` reports `enforced=15` instead of `comparable-baselines=0`. Membership moved with the rule above
+against the original 14: **+** `resize 4K->1080p bicubic`, `composite 1080p overlay`, `guided.cross 4K r=4`;
+**−** `stroke 4K ellipse`, `gaussian blur 4K` (`clip` stayed in, 4.9% on the defining pair).
+
+M15 smoke update (2026-11-14): `dt` (the exact squared EDT through the facade) and `guided.cross` (the
+cross-guided filter) joined the smoke, so the body SHA is
+`ff856b8bf81f45fbf910a4ea638b7a56b5685dffbbbf33275e516d6c5bfabd4e` across all three JIT tiers.
+**Stripping those two lines reproduces the M13 body SHA `846c1c62…20c6` exactly** — both are new operator
+paths and changed no existing operator byte. `REQUIRED` grew to 49 hashes / 22 gated in the same change.
+
+M13 update (2026-11-14): `icc.lut` (a hand-built lut16 profile through `Image.IccTransform`) and
+`gainmap.hdr` (hdrgm reconstruction of a quarter-size map) joined the smoke, so the body SHA is
+`846c1c62280b8cb6b61fd486356b3f373bb077ab28459c7737355b98038620c6` across all three JIT tiers.
+**Stripping those two lines reproduces the M12 body SHA
+`cf7dc7f8d060e3d5dd3a039e437367879245e87cbc2db1d6460309f594389838` exactly**, and stripping the M12
+list as well reproduces `44390203…6763` — the LUT parser, the CLUT and the gain-map reconstruction
+changed no existing operator byte.
+
+M13 measured on this machine at 1080p Rgba8 (`SimdImaging.Benchmarks`, best of five warm runs):
+`icc 1080p lut16 grid=33` **40.0 ms** / 51.8 MPix/s, `icc 1080p lut16 grid=2` **36.5 ms**,
+`icc 1080p matrix/trc` **34.8 ms** — so the whole 215 KB CLUT (data plus address arithmetic) is worth
+about 3.5 ms, 9% of the call; the rest is format conversion and the sRGB/PCS maths both paths share.
+That is why the LUT path ships scalar with row-band parallelism instead of a vector body: AVX2 has no
+64-bit integer multiply (`vpmullq` is AVX-512DQ) and the accumulator needs 34 bits, so a `Vector256<long>`
+product would be expanded to scalar anyway, on top of the eight-corner gather. `gainmap.reconstruct 1080p`
+**28.4 ms** — 138.6 ms before the row-band split, i.e. 4.9× from parallelism; `gainmap resize 1080p→720p`
+**5.2 ms**.
+
+NLM measured on this machine at 1080p Rgba8 (best of one warm run, `SimdImaging.Benchmarks`):
+`S=3 P=1` (the default) 5.8 s, `S=5 P=2` (quality) 16.1 s. The operator's cost is
+`(2S+1)²·(2P+1)²` distance terms per pixel; after the AVX2 distance the exponential dominates, so lowering
+`h`/radii is the only lever that does not change the result.
+
+`benchmarks/baselines/` is versioned (unlike the git-ignored `results/`). `thresholdPercent` is set for the
+15 of 29 scenarios whose every recorded pair agreed within 10%, which leaves the 15% threshold five points
+of margin; `check-baseline.sh` prints `enforced=15` on a comparable run, and the rest stay `null` so the gate
+is never mistaken for a coin flip. Default `gates.sh` stays at ~1 min; `--aot`, `--perf` and `simd-tiers.sh` are opt-in.
+
 ## What is still slow
 
 97 ms for 4K→1080p is still behind ImageSharp's published class of result. The remaining costs, in order:

@@ -47,6 +47,28 @@ public static class Sampling
     }
 
     /// <summary>
+    /// Reads one colour at a continuous coordinate in the <b>image's own precision</b>. Rgba8 and Rgba16
+    /// are normalised to [0,1] without losing low bits; Rgba32F is returned verbatim, including HDR values
+    /// above 1, negative and out-of-range floats. This is the path geometric operators use.
+    /// </summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="x">Column coordinate.</param>
+    /// <param name="y">Row coordinate.</param>
+    /// <param name="rgba">Destination for four straight-alpha samples; must hold at least four floats.</param>
+    /// <param name="resampler">Nearest or bilinear.</param>
+    /// <param name="options">Sampling domain, alpha and edge contract.</param>
+    /// <exception cref="ArgumentException"><paramref name="rgba"/> is shorter than four samples.</exception>
+    /// <exception cref="NotSupportedException">An unsupported resampler or sampling contract.</exception>
+    public static void SampleRaw(PixelView source, float x, float y, Span<float> rgba,
+        Resampler resampler = Resampler.Bilinear, SampleOptions options = default)
+    {
+        if (rgba.Length < 4)
+            throw new ArgumentException("Destination must hold at least four samples.", nameof(rgba));
+
+        SamplingCore.Sample(source, x, y, resampler, options, rgba);
+    }
+
+    /// <summary>
     /// Warps into a new canvas through a caller-supplied mapping. Points that land outside the source become
     /// <paramref name="background"/> rather than clamping, so a rotation does not smear its edge pixels.
     /// </summary>
@@ -69,37 +91,121 @@ public static class Sampling
         var stride = width * 4;
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var row = new float[stride];
+        Span<float> sample = stackalloc float[4];
+        Span<float> backgroundColour = stackalloc float[4];
+        backgroundColour[0] = background.R / 255f;
+        backgroundColour[1] = background.G / 255f;
+        backgroundColour[2] = background.B / 255f;
+        backgroundColour[3] = background.A / 255f;
 
-        for (var y = 0; y < height; y++)
+        try
         {
-            for (var x = 0; x < width; x++)
+            for (var y = 0; y < height; y++)
             {
-                map(x + 0.5f, y + 0.5f, out var sourceX, out var sourceY);
-
-                var offset = x * 4;
-
-                // Coordinates are areal: pixel i covers [i, i+1), its centre sits at i + 0.5. Anything outside
-                // that box is background, so a warp does not smear the border pixel across the canvas.
-                if (sourceX < 0f || sourceX >= source.Width || sourceY < 0f || sourceY >= source.Height)
+                for (var x = 0; x < width; x++)
                 {
-                    row[offset] = background.R / 255f;
-                    row[offset + 1] = background.G / 255f;
-                    row[offset + 2] = background.B / 255f;
-                    row[offset + 3] = background.A / 255f;
-                    continue;
+                    map(x + 0.5f, y + 0.5f, out var sourceX, out var sourceY);
+
+                    var offset = x * 4;
+
+                    // Coordinates are areal: pixel i covers [i, i+1), its centre sits at i + 0.5. Anything outside
+                    // that box is background, so a warp does not smear the border pixel across the canvas.
+                    if (sourceX < 0f || sourceX >= source.Width || sourceY < 0f || sourceY >= source.Height)
+                    {
+                        backgroundColour.CopyTo(new Span<float>(row, offset, 4));
+                        continue;
+                    }
+
+                    // The old path went through RgbaColor (four bytes): Rgba16 lost its low byte and
+                    // Rgba32F was clamped to [0,1] before it ever reached the writer. SampleRaw keeps
+                    // the working format's precision all the way to Pixels.WriteRowRaw.
+                    SamplingCore.Sample(source, sourceX, sourceY, resampler, default, sample);
+                    sample.CopyTo(new Span<float>(row, offset, 4));
                 }
 
-                var colour = Sample(source, sourceX, sourceY, resampler);
-                row[offset] = colour.R / 255f;
-                row[offset + 1] = colour.G / 255f;
-                row[offset + 2] = colour.B / 255f;
-                row[offset + 3] = colour.A / 255f;
+                Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));
             }
 
-            Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));
+            return destination;
         }
+        catch
+        {
+            // `map` is caller code; a throwing mapping must not leak the rented frame.
+            destination.Dispose();
+            throw;
+        }
+    }
 
-        return destination;
+    /// <summary>
+    /// Warps with an explicit sampling contract: all five reconstruction kernels, an encoded or
+    /// linear-light domain, straight or premultiplied alpha, clamp or background edges, and an
+    /// out-of-gamut policy. The historical <see cref="Warp"/> overload is untouched and still uses
+    /// its frozen <c>Lerp</c> point-sampling path.
+    /// </summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="width">Destination width.</param>
+    /// <param name="height">Destination height.</param>
+    /// <param name="map">Destination → source coordinate mapping.</param>
+    /// <param name="resampler">Any of the five reconstruction kernels.</param>
+    /// <param name="options">Sampling domain, curve, alpha, edge and out-of-gamut contract.</param>
+    /// <param name="background">Colour used for taps outside the source under <see cref="EdgeMode.Background"/>.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
+    /// <exception cref="InvalidDataException"><see cref="OutOfGamutPolicy.Throw"/> detected an out-of-range sample.</exception>
+    public static WorkingBuffer WarpWithOptions(PixelView source, int width, int height, PixelWarp map,
+        Resampler resampler, SampleOptions options, RgbaColor background = default, IPixelPool? pool = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        ArgumentNullException.ThrowIfNull(map);
+
+        // A caller lambda has no analytic derivative: elliptical AA is impossible, not "best effort".
+        if (options.AaMode != SampleAaMode.None)
+            throw new NotSupportedException(
+                "SampleAaMode.Elliptical needs an analytic Jacobian; a warp mapping is a caller lambda. " +
+                "Use Affine / Perspective / Rotate WithOptions instead.");
+
+        var stride = width * 4;
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+        var row = new float[stride];
+        Span<float> sample = stackalloc float[4];
+        Span<float> backgroundColour = stackalloc float[4];
+        backgroundColour[0] = background.R / 255f;
+        backgroundColour[1] = background.G / 255f;
+        backgroundColour[2] = background.B / 255f;
+        backgroundColour[3] = background.A / 255f;
+
+        try
+        {
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    map(x + 0.5f, y + 0.5f, out var sourceX, out var sourceY);
+                    var offset = x * 4;
+
+                    if (options.Edge == EdgeMode.Background &&
+                        (sourceX < 0f || sourceX >= source.Width || sourceY < 0f || sourceY >= source.Height))
+                    {
+                        backgroundColour.CopyTo(new Span<float>(row, offset, 4));
+                        continue;
+                    }
+
+                    SamplingCore.SampleWithOptions(source, sourceX, sourceY, resampler, options,
+                        backgroundColour, sample);
+                    sample.CopyTo(new Span<float>(row, offset, 4));
+                }
+
+                Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));
+            }
+
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
     }
 
     private static RgbaColor Nearest(PixelView source, float x, float y)

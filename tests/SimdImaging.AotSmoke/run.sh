@@ -51,6 +51,19 @@ fi
 grep -q 'dynamic-code-supported=True' jit.txt || { echo "FAIL: the JIT baseline reports no dynamic code." >&2; exit 1; }
 grep -q 'dynamic-code-supported=False' avx2.txt || { echo "FAIL: the AOT build does not look AOT-compiled." >&2; exit 1; }
 
+# An operator whose implementation changed but is missing from this list makes a green smoke
+# meaningless. Extend REQUIRED in the same commit that changes an operator (AGENTS.md:156-160).
+REQUIRED="icc.lut gainmap.hdr rl rl.motion seam dt nlm ll bilateral guided.cross warp samplepixel warp.linear warp.premul resize.options rotate.options perspective.options ewa.rotate plan.fused resize.bicubic resize.nearest rotate17 perspective"
+for key in $REQUIRED; do
+  for f in jit avx2 base; do
+    grep -q "^${key} sha=" "$f.txt" || {
+      echo "FAIL: '$key' hash absent from $f.txt — the AOT smoke would not cover it." >&2
+      exit 1
+    }
+  done
+done
+echo "PASS: required operator hashes present in jit / avx2 / base"
+
 for f in jit avx2 base; do
   grep -v -e '^tier' -e '^dynamic-code-supported' "$f.txt" > "$f.body.txt"
 done

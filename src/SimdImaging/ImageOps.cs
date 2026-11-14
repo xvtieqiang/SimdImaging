@@ -72,6 +72,35 @@ public sealed partial class Image
         RgbaColor background = default, IPixelPool? pool = null) =>
         ReplaceBuffer(Sampling.Warp(this[0].Pixels.View, width, height, map, resampler, background, pool));
 
+    /// <summary>Warps with an explicit sampling contract: all five kernels, encoded or linear-light
+    /// domain, straight or premultiplied alpha, clamp or background edges, out-of-gamut policy.</summary>
+    /// <param name="width">Destination width.</param>
+    /// <param name="height">Destination height.</param>
+    /// <param name="map">Destination → source coordinate mapping.</param>
+    /// <param name="resampler">Any of the five reconstruction kernels.</param>
+    /// <param name="options">Sampling domain, curve, alpha, edge and out-of-gamut contract.</param>
+    /// <param name="background">Colour outside the source under <see cref="EdgeMode.Background"/>.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image WarpWithOptions(int width, int height, PixelWarp map, Resampler resampler,
+        SampleOptions options, RgbaColor background = default, IPixelPool? pool = null) =>
+        ReplaceBuffer(Sampling.WarpWithOptions(this[0].Pixels.View, width, height, map, resampler,
+            options, background, pool));
+
+    /// <summary>Resamples with an explicit sampling contract. <c>options == default</c> is the frozen
+    /// <see cref="Image.Resize(int, int, SimdImaging.Processing.Resampler, SimdImaging.Abstractions.IPixelPool?)"/>
+    /// path byte for byte; any option set switches to the unified per-pixel core
+    /// (domain, alpha, edge policy including Background, out-of-gamut).</summary>
+    /// <param name="width">Destination width (&gt; 0).</param>
+    /// <param name="height">Destination height (&gt; 0).</param>
+    /// <param name="resampler">The reconstruction filter.</param>
+    /// <param name="options">Sampling domain, curve, alpha, edge and out-of-gamut contract.</param>
+    /// <param name="background">Colour for taps outside the source under <see cref="EdgeMode.Background"/>.</param>
+    /// <param name="pool">Where the destination buffer is rented from.</param>
+    public Image ResizeWithOptions(int width, int height, Resampler resampler, SampleOptions options,
+        RgbaColor background = default, IPixelPool? pool = null) =>
+        ReplaceBuffer(Resample.ResizeWithOptions(this[0].Pixels.View, width, height, resampler,
+            options, background, pool));
+
     /// <summary>Multiplies colour by alpha. Filters do this internally; expose it for callers that hand pixels to
     /// a compositor expecting associated alpha.</summary>
     public Image Premultiply(IPixelPool? pool = null) =>

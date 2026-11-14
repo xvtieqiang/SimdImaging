@@ -88,6 +88,11 @@ public static class HdrOps
     /// <summary>
     /// Applies a gain map to an SDR base: <c>linear(base) · 2^(gain · log2(headroom) · weight)</c>. The result
     /// is linear light and may exceed one — that is the point of a gain map.
+    /// <para>
+    /// This is the simplified model, kept byte-for-byte and semantics-for-semantics as it was: one fixed
+    /// headroom, no black offsets, no gamma, and no display-capacity interpolation. A file's own gain map
+    /// carries all four, so reconstruct one with <see cref="ReconstructGainMap"/> instead.
+    /// </para>
     /// </summary>
     /// <param name="source">The SDR base, read as sRGB.</param>
     /// <param name="gainMap">The gain map; its luma is the log2 gain, normalised to 0..1.</param>
@@ -134,6 +139,162 @@ public static class HdrOps
         }
 
         return destination;
+    }
+
+    /// <summary>
+    /// Reconstructs HDR from a gain-map pair the way the <c>hdrgm</c> metadata defines it:
+    /// <c>(linear(base) + OffsetSdr) · 2^(logBoost · capacity · weight) − OffsetHdr</c>, where the gain
+    /// map's sample picks <c>logBoost</c> between <see cref="GainMapParameters.GainMapMin"/> and
+    /// <see cref="GainMapParameters.GainMapMax"/> after the metadata's gamma, and <c>capacity</c> is how
+    /// much of that range a display at <paramref name="displayHeadroom"/> can show.
+    /// </summary>
+    /// <param name="source">The SDR base, read as sRGB.</param>
+    /// <param name="gainMap">The gain map. Its samples are the encoded gain, not a colour: they are read
+    /// raw, with no transfer function. A map of a different size is bilinearly upsampled onto the base.</param>
+    /// <param name="parameters">The reconstruction metadata that travelled with the map.</param>
+    /// <param name="displayHeadroom">The display's peak in multiples of SDR white: 1 leaves the base
+    /// untouched, above <see cref="GainMapParameters.HdrCapacityMax"/> applies the full authored gain.</param>
+    /// <param name="weight">Dial the gain down, 0..1. 1 is what the file describes.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <returns>Linear light in <see cref="WorkingFormat.Rgba32F"/>. Values above one are expected and
+    /// are not clamped; negatives are, because light cannot be negative.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The headroom, weight or a metadata field is out of range.</exception>
+    /// <exception cref="ArgumentException">The gain map is empty.</exception>
+    public static WorkingBuffer ReconstructGainMap(PixelView source, PixelView gainMap,
+        GainMapParameters parameters, float displayHeadroom, float weight = 1f, IPixelPool? pool = null)
+    {
+        parameters.Validate();
+        if (!(displayHeadroom > 0f) || float.IsInfinity(displayHeadroom))
+            throw new ArgumentOutOfRangeException(nameof(displayHeadroom), displayHeadroom,
+                "Display headroom must be finite and positive.");
+        if (!(weight >= 0f) || weight > 1f)
+            throw new ArgumentOutOfRangeException(nameof(weight), weight, "Weight must be in [0, 1].");
+        if (gainMap.Width <= 0 || gainMap.Height <= 0)
+            throw new ArgumentException($"Gain map is {gainMap.Width}x{gainMap.Height}.", nameof(gainMap));
+
+        var width = source.Width;
+        var height = source.Height;
+        var destination = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba32F, pool);
+
+        // How much of the authored log-gain this display may use: the capacity range is the display's
+        // own scaling in log2, clamped at both ends, and the caller's weight dials it further.
+        var stops = Math.Log2(displayHeadroom);
+        double capacity;
+        if (parameters.HdrCapacityMax > parameters.HdrCapacityMin)
+        {
+            capacity = (stops - parameters.HdrCapacityMin) / (parameters.HdrCapacityMax - parameters.HdrCapacityMin);
+            capacity = Math.Clamp(capacity, 0.0, 1.0);
+        }
+        else
+        {
+            capacity = stops >= parameters.HdrCapacityMax ? 1.0 : 0.0;
+        }
+
+        capacity *= weight;
+
+        var gainMin = (float)parameters.GainMapMin;
+        var gainSpan = (float)(parameters.GainMapMax - parameters.GainMapMin);
+        var gamma = (float)parameters.Gamma;
+        var sdrOffset = (float)parameters.OffsetSdr;
+        var hdrOffset = (float)parameters.OffsetHdr;
+        var capacityScale = (float)capacity;
+
+        var gainWidth = gainMap.Width;
+        var gainHeight = gainMap.Height;
+        var sameSize = gainWidth == width && gainHeight == height;
+
+        try
+        {
+            // Per-pixel independent, so the worker count cannot change a byte; the row buffers are
+            // per-worker scratch, which is what makes the bands free of sharing.
+            RowParallel.For(width, height, (start, end) =>
+            {
+                var row = FloatScratch.Rent(width * 4);
+                var gainRowTop = FloatScratch.Rent(gainWidth * 4);
+                var gainRowNext = sameSize ? null : FloatScratch.Rent(gainWidth * 4);
+
+                try
+                {
+                    for (var y = start; y < end; y++)
+                    {
+                        Pixels.ReadRowRaw(source.Row(y), width, source.Format, row);
+
+                        if (sameSize)
+                        {
+                            Pixels.ReadRowRaw(gainMap.Row(y), width, gainMap.Format, gainRowTop);
+                            for (var x = 0; x < width; x++)
+                            {
+                                Reconstruct(row, x * 4, Luma(gainRowTop, x * 4), gainMin, gainSpan, gamma,
+                                    sdrOffset, hdrOffset, capacityScale);
+                            }
+                        }
+                        else
+                        {
+                            // Pixel centres map proportionally; clamping the centre keeps the border rows
+                            // and columns from extrapolating past the gain map.
+                            var gy = Math.Clamp((y + 0.5f) * gainHeight / height - 0.5f, 0f, gainHeight - 1f);
+                            var y0 = (int)gy;
+                            var fy = gy - y0;
+                            var y1 = Math.Min(y0 + 1, gainHeight - 1);
+
+                            Pixels.ReadRowRaw(gainMap.Row(y0), gainWidth, gainMap.Format, gainRowTop);
+                            Pixels.ReadRowRaw(gainMap.Row(y1), gainWidth, gainMap.Format, gainRowNext!);
+
+                            for (var x = 0; x < width; x++)
+                            {
+                                var gx = Math.Clamp((x + 0.5f) * gainWidth / width - 0.5f, 0f, gainWidth - 1f);
+                                var x0 = (int)gx;
+                                var fx = gx - x0;
+                                var x1 = Math.Min(x0 + 1, gainWidth - 1);
+
+                                var top = Luma(gainRowTop, x0 * 4) + (Luma(gainRowTop, x1 * 4) - Luma(gainRowTop, x0 * 4)) * fx;
+                                var bottom = Luma(gainRowNext!, x0 * 4) + (Luma(gainRowNext!, x1 * 4) - Luma(gainRowNext!, x0 * 4)) * fx;
+                                var gain = top + (bottom - top) * fy;
+
+                                Reconstruct(row, x * 4, gain, gainMin, gainSpan, gamma, sdrOffset, hdrOffset, capacityScale);
+                            }
+                        }
+
+                        Pixels.WriteRowRaw(row, width, WorkingFormat.Rgba32F, destination.View.Row(y));
+                    }
+                }
+                finally
+                {
+                    FloatScratch.Return(row);
+                    FloatScratch.Return(gainRowTop);
+                    if (gainRowNext is not null)
+                        FloatScratch.Return(gainRowNext);
+                }
+            });
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
+
+        return destination;
+    }
+
+    /// <summary>The gain map's own luma weights, shared with <see cref="ApplyGainMap"/> so the two agree.</summary>
+    private static float Luma(float[] row, int offset) =>
+        0.299f * row[offset] + 0.587f * row[offset + 1] + 0.114f * row[offset + 2];
+
+    private static void Reconstruct(float[] row, int offset, float gain, float gainMin, float gainSpan,
+        float gamma, float sdrOffset, float hdrOffset, float capacity)
+    {
+        var encoded = MathF.Pow(Math.Clamp(gain, 0f, 1f), gamma);
+        var logBoost = gainMin + encoded * gainSpan;
+        var boost = MathF.Pow(2f, logBoost * capacity);
+
+        row[offset] = (ColorMath.SrgbToLinear(row[offset]) + sdrOffset) * boost - hdrOffset;
+        row[offset + 1] = (ColorMath.SrgbToLinear(row[offset + 1]) + sdrOffset) * boost - hdrOffset;
+        row[offset + 2] = (ColorMath.SrgbToLinear(row[offset + 2]) + sdrOffset) * boost - hdrOffset;
+
+        // Light cannot be negative; the upper bound is deliberately left open.
+        row[offset] = MathF.Max(row[offset], 0f);
+        row[offset + 1] = MathF.Max(row[offset + 1], 0f);
+        row[offset + 2] = MathF.Max(row[offset + 2], 0f);
     }
 
     private static float Map(float value, ToneMapCurve curve, float whitePoint)

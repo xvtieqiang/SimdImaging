@@ -88,4 +88,27 @@ public sealed partial class Image
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="threshold"/> is outside 0..1.</exception>
     public Image EntropyCrop(float threshold = 0.25f, IPixelPool? pool = null) =>
         ReplaceBuffer(Processing.Geometry.EntropyCrop.Crop(this[0].Pixels.View, threshold, pool));
+
+    /// <summary>Removes connected low-energy seams, shrinking the image by one column or row each.</summary>
+    /// <param name="axis">Which way the seams run.</param>
+    /// <param name="count">How many to remove; at least one column or row must remain.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> would remove the whole image.</exception>
+    public Image RemoveSeams(SeamAxis axis, int count, IPixelPool? pool = null) =>
+        ReplaceBuffer(SeamCarving.RemoveSeams(this[0].Pixels.View, axis, count, pool));
+
+    /// <summary>Repeats connected low-energy seams, growing the image by one column or row each.</summary>
+    /// <param name="axis">Which way the seams run.</param>
+    /// <param name="count">How many to insert.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image InsertSeams(SeamAxis axis, int count, IPixelPool? pool = null) =>
+        ReplaceBuffer(SeamCarving.InsertSeams(this[0].Pixels.View, axis, count, pool));
+
+    /// <summary>Resizes to an exact size by content-aware seam removal or insertion on each axis.</summary>
+    /// <param name="width">Target width, at least 1.</param>
+    /// <param name="height">Target height, at least 1.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">A target dimension is not positive.</exception>
+    public Image SeamCarve(int width, int height, IPixelPool? pool = null) =>
+        ReplaceBuffer(SeamCarving.CarveTo(this[0].Pixels.View, width, height, pool));
 }
