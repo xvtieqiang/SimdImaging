@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Internal;
@@ -24,6 +25,9 @@ namespace SimdImaging.Processing.Geometry;
 /// </summary>
 public static class SeamCarving
 {
+    /// <summary>Test hook: forces the scalar DP row so a test can compare the two paths on real data.</summary>
+    internal static bool ForceScalarVector;
+
     /// <summary>
     /// Removes <paramref name="count"/> connected seams, shrinking the image by one column or row each.
     /// <para><b>Why the energy is recomputed rather than updated.</b> Removing a seam moves every pixel to its
@@ -250,6 +254,9 @@ public static class SeamCarving
         /// </summary>
         private float[]? _luma;
 
+        /// <summary>Four lanes of double, and the caller did not ask for scalar.</summary>
+        private static bool Vectorized => Vector256.IsHardwareAccelerated && !ForceScalarVector;
+
         public Workspace(int width, int height)
         {
             _capacity = width;
@@ -297,25 +304,23 @@ public static class SeamCarving
                 ReadLuma(view, Math.Min(y + 1, _height - 1), width, below);
 
                 var row = y * _capacity;
-                for (var x = 0; x < width; x++)
+                var x = 0;
+
+                if (Vectorized && !blocked)
                 {
-                    var best = previous[x];
-                    var direction = (byte)1;
-                    if (x > 0 && previous[x - 1] < best)
-                    {
-                        best = previous[x - 1];
-                        direction = 0;
-                    }
+                    // Column 0 reads centre[-1] and previous[-1] through clamps, so it stays scalar.
+                    WriteCell(width, 0, row, previous, current, above, centre, below, blocked, y);
+                    x = 1;
 
-                    if (x + 1 < width && previous[x + 1] < best)
-                    {
-                        best = previous[x + 1];
-                        direction = 2;
-                    }
+                    for (; x + 4 < width; x += 4)
+                        WriteRow4(x, row, previous, current, above, centre, below);
 
-                    current[x] = Energy(width, x, above, centre, below, blocked, y) + best;
-                    _back[row + x] = direction;
+                    if (x > width)
+                        x = width;
                 }
+
+                for (; x < width; x++)
+                    WriteCell(width, x, row, previous, current, above, centre, below, blocked, y);
 
                 (previous, current) = (current, previous);
             }
@@ -364,6 +369,75 @@ public static class SeamCarving
                 var at = seam[y] * bytesPerPixel;
                 row.Slice(at + bytesPerPixel).CopyTo(row[at..]);
             }
+        }
+
+        /// <summary>Four DP cells at once: the three-way minimum and the gradient energy.</summary>
+        /// <remarks>
+        /// <para>
+        /// The vector axis is <i>pixels</i> and the arithmetic mirrors <see cref="WriteCell"/> operand for
+        /// operand, which is what keeps the bytes identical rather than merely close. In particular the
+        /// horizontal term is a <c>float</c> subtraction converted to double afterwards, because that is the
+        /// order the scalar twin evaluates <c>(double)Math.Abs(right - left)</c> in; converting first would
+        /// round differently. The vertical term subtracts in double, as the scalar does.
+        /// </para>
+        /// <para>
+        /// Ties follow the scalar rule by construction: the comparisons are strict, a tie on the left keeps
+        /// the centre, and a tie on the right keeps whatever the left comparison chose.
+        /// </para>
+        /// </remarks>
+        private void WriteRow4(int x, int row, double[] previous, double[] current,
+            float[] above, float[] centre, float[] below)
+        {
+            var prevLeft = Vector256.LoadUnsafe(ref previous[x - 1]);
+            var prevMid = Vector256.LoadUnsafe(ref previous[x]);
+            var prevRight = Vector256.LoadUnsafe(ref previous[x + 1]);
+
+            var takeLeft = Vector256.LessThan(prevLeft, prevMid);
+            var bestLeft = Vector256.ConditionalSelect(takeLeft, prevLeft, prevMid);
+            var direction = Vector256.ConditionalSelect(takeLeft, Vector256<double>.Zero, Vector256.Create(1.0));
+
+            var takeRight = Vector256.LessThan(prevRight, bestLeft);
+            var best = Vector256.ConditionalSelect(takeRight, prevRight, bestLeft);
+            direction = Vector256.ConditionalSelect(takeRight, Vector256.Create(2.0), direction);
+
+            var left = Vector128.LoadUnsafe(ref centre[x - 1]);
+            var right = Vector128.LoadUnsafe(ref centre[x + 1]);
+            var (horizontalLow, horizontalHigh) = Vector128.Widen(Vector128.Abs(right - left));
+            var horizontal = Vector256.Create(horizontalLow, horizontalHigh);
+
+            var (downLow, downHigh) = Vector128.Widen(Vector128.LoadUnsafe(ref below[x]));
+            var (upLow, upHigh) = Vector128.Widen(Vector128.LoadUnsafe(ref above[x]));
+            var vertical = Vector256.Abs(
+                Vector256.Create(downLow, downHigh) - Vector256.Create(upLow, upHigh));
+
+            (horizontal + vertical + best).StoreUnsafe(ref current[x]);
+
+            Span<double> directions = stackalloc double[4];
+            direction.StoreUnsafe(ref MemoryMarshal.GetReference(directions));
+            for (var i = 0; i < 4; i++)
+                _back[row + x + i] = (byte)directions[i];
+        }
+
+        /// <summary>One DP cell, the scalar twin both paths have to agree with.</summary>
+        private void WriteCell(int width, int x, int row, double[] previous, double[] current,
+            float[] above, float[] centre, float[] below, bool blocked, int y)
+        {
+            var best = previous[x];
+            var direction = (byte)1;
+            if (x > 0 && previous[x - 1] < best)
+            {
+                best = previous[x - 1];
+                direction = 0;
+            }
+
+            if (x + 1 < width && previous[x + 1] < best)
+            {
+                best = previous[x + 1];
+                direction = 2;
+            }
+
+            current[x] = Energy(width, x, above, centre, below, blocked, y) + best;
+            _back[row + x] = direction;
         }
 
         private double Energy(int width, int x, float[] above, float[] centre, float[] below, bool blocked, int y)
