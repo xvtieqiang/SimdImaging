@@ -85,6 +85,9 @@ dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- seamprofile
 两条自检列是这张表存在的条件：**Σ相位/总 = 99.7–99.9%**（漏了括号点就会掉下来），
 **同尺寸冷热 SHA 相同**（不同尺寸的 SHA 本来就不同，拿它们互比是错的——第一版就是这么错的）。
 
+**2026-11-16 更新**：整数 DP（8 lane）后 FindSeam 占比从 82% 降到 72%，总时长 1080p 457 → 277 ms；
+luma 改 `ushort` 后 8K 峰值 RSS 从 415 降到 **352 MiB**（正好是 luma 减半），`ShiftLuma` 从 25.4 降到 15.6 ms。
+
 结论：**85% 的时间在 `FindSeam`**，Cut/Shift 各 5%。所以「减少数据搬移」（Cut/Shift）天花板是 10%，
 真正的空间在能量与 DP 内部。内存侧 8K 峰值 416 MiB 里，`Workspace` 推算约 199 MiB（其中 `_blocked`
 33 MiB 在删除路径上从不被读）。

@@ -340,10 +340,10 @@ public static class SeamCarving
         // lets the row body run eight lanes at once instead of four.
         private readonly int[] _rowIntA;
         private readonly int[] _rowIntB;
-        private readonly int[] _intAbove;
-        private readonly int[] _intCentre;
-        private readonly int[] _intBelow;
-        private int[]? _lumaInt;
+        private readonly ushort[] _shortAbove;
+        private readonly ushort[] _shortCentre;
+        private readonly ushort[] _shortBelow;
+        private ushort[]? _lumaShort;
         private readonly float[] _straight;
         private readonly int[] _seam;
 
@@ -370,9 +370,9 @@ public static class SeamCarving
             _rowB = new double[width];
             _rowIntA = new int[width];
             _rowIntB = new int[width];
-            _intAbove = new int[width];
-            _intCentre = new int[width];
-            _intBelow = new int[width];
+            _shortAbove = new ushort[width];
+            _shortCentre = new ushort[width];
+            _shortBelow = new ushort[width];
             _above = new float[width];
             _centre = new float[width];
             _below = new float[width];
@@ -509,13 +509,13 @@ public static class SeamCarving
         {
             var previous = _rowIntA;
             var current = _rowIntB;
-            var above = _intAbove;
-            var centre = _intCentre;
-            var below = _intBelow;
+            var above = _shortAbove;
+            var centre = _shortCentre;
+            var below = _shortBelow;
 
-            ReadLumaInt(view, 0, width, above);
-            ReadLumaInt(view, 0, width, centre);
-            ReadLumaInt(view, Math.Min(1, _height - 1), width, below);
+            ReadLumaShort(view, 0, width, above);
+            ReadLumaShort(view, 0, width, centre);
+            ReadLumaShort(view, Math.Min(1, _height - 1), width, below);
 
             for (var x = 0; x < width; x++)
             {
@@ -529,7 +529,7 @@ public static class SeamCarving
                 above = centre;
                 centre = below;
                 below = spare;
-                ReadLumaInt(view, Math.Min(y + 1, _height - 1), width, below);
+                ReadLumaShort(view, Math.Min(y + 1, _height - 1), width, below);
 
                 var row = y * _capacity;
                 var x = 0;
@@ -571,7 +571,7 @@ public static class SeamCarving
         }
 
         private void WriteRow8(int x, int row, int[] previous, int[] current,
-            int[] above, int[] centre, int[] below)
+            ushort[] above, ushort[] centre, ushort[] below)
         {
             var prevLeft = Vector256.LoadUnsafe(ref previous[x - 1]);
             var prevMid = Vector256.LoadUnsafe(ref previous[x]);
@@ -585,10 +585,10 @@ public static class SeamCarving
             var best = Vector256.ConditionalSelect(takeRight, prevRight, bestLeft);
             direction = Vector256.ConditionalSelect(takeRight, Vector256.Create(2), direction);
 
-            var horizontal = Vector256.Abs(
-                Vector256.LoadUnsafe(ref centre[x + 1]) - Vector256.LoadUnsafe(ref centre[x - 1]));
-            var vertical = Vector256.Abs(
-                Vector256.LoadUnsafe(ref below[x]) - Vector256.LoadUnsafe(ref above[x]));
+            // Eight samples widen to eight int lanes: the widening is a register move, and the arithmetic after it
+            // is the same integer arithmetic the scalar body does.
+            var horizontal = Vector256.Abs(Widen(ref centre[x + 1]) - Widen(ref centre[x - 1]));
+            var vertical = Vector256.Abs(Widen(ref below[x]) - Widen(ref above[x]));
 
             (horizontal + vertical + best).StoreUnsafe(ref current[x]);
 
@@ -598,8 +598,15 @@ public static class SeamCarving
                 _back[row + x + i] = (byte)directions[i];
         }
 
+        /// <summary>Eight <c>ushort</c> samples as eight <c>int</c> lanes; the values are non-negative and fit.</summary>
+        private static Vector256<int> Widen(ref ushort source)
+        {
+            var (low, high) = Vector128.Widen(Vector128.LoadUnsafe(ref source));
+            return Vector256.Create(low, high).AsInt32();
+        }
+
         private void WriteCellInt(int width, int x, int row, int[] previous, int[] current,
-            int[] above, int[] centre, int[] below)
+            ushort[] above, ushort[] centre, ushort[] below)
         {
             var best = previous[x];
             var direction = (byte)1;
@@ -619,7 +626,7 @@ public static class SeamCarving
             _back[row + x] = direction;
         }
 
-        private static int EnergyInt(int width, int x, int[] above, int[] centre, int[] below)
+        private static int EnergyInt(int width, int x, ushort[] above, ushort[] centre, ushort[] below)
         {
             var left = centre[x > 0 ? x - 1 : 0];
             var right = centre[x + 1 < width ? x + 1 : width - 1];
@@ -702,9 +709,9 @@ public static class SeamCarving
         {
             if (UseIntegerPath(view))
             {
-                _lumaInt = new int[(long)_capacity * _height];
+                _lumaShort = new ushort[(long)_capacity * _height];
                 for (var y = 0; y < _height; y++)
-                    LumaInt(view, y, view.Width, _lumaInt.AsSpan(y * _capacity, view.Width));
+                    LumaShort(view, y, view.Width, _lumaShort.AsSpan(y * _capacity, view.Width));
                 return;
             }
 
@@ -722,8 +729,8 @@ public static class SeamCarving
             {
                 var at = seam[y];
                 var row = y * _capacity;
-                if (_lumaInt is not null)
-                    Array.Copy(_lumaInt, row + at + 1, _lumaInt, row + at, width - at - 1);
+                if (_lumaShort is not null)
+                    Array.Copy(_lumaShort, row + at + 1, _lumaShort, row + at, width - at - 1);
                 else if (_luma is not null)
                     Array.Copy(_luma, row + at + 1, _luma, row + at, width - at - 1);
             }
@@ -731,7 +738,7 @@ public static class SeamCarving
 
         /// <summary>Integer twin of <see cref="Luma"/> for 8- and 16-bit sources; the weights are the same
         /// <c>(54R + 183G + 19B) &gt;&gt; 8</c>.</summary>
-        private void LumaInt(PixelView view, int y, int width, Span<int> destination)
+        private void LumaShort(PixelView view, int y, int width, Span<ushort> destination)
         {
             var row = view.Row(y);
 
@@ -741,7 +748,7 @@ public static class SeamCarving
                 for (var x = 0; x < width; x++)
                 {
                     var o = x * 4;
-                    destination[x] = (54 * samples[o] + 183 * samples[o + 1] + 19 * samples[o + 2]) >> 8;
+                    destination[x] = (ushort)((54 * samples[o] + 183 * samples[o + 1] + 19 * samples[o + 2]) >> 8);
                 }
 
                 return;
@@ -750,20 +757,20 @@ public static class SeamCarving
             for (var x = 0; x < width; x++)
             {
                 var o = x * 4;
-                destination[x] = (54 * row[o] + 183 * row[o + 1] + 19 * row[o + 2]) >> 8;
+                destination[x] = (ushort)((54 * row[o] + 183 * row[o + 1] + 19 * row[o + 2]) >> 8);
             }
         }
 
         /// <summary>Integer rows: cached when primed, converted from the float cache otherwise.</summary>
-        private void ReadLumaInt(PixelView view, int y, int width, int[] destination)
+        private void ReadLumaShort(PixelView view, int y, int width, ushort[] destination)
         {
-            if (_lumaInt is not null)
+            if (_lumaShort is not null)
             {
-                Array.Copy(_lumaInt, (long)y * _capacity, destination, 0, width);
+                Array.Copy(_lumaShort, (long)y * _capacity, destination, 0, width);
                 return;
             }
 
-            LumaInt(view, y, width, destination);
+            LumaShort(view, y, width, destination);
         }
 
         /// <summary>Cached row when primed, a fresh conversion otherwise.</summary>
