@@ -9,6 +9,30 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks [iterations]
 ```
 
 
+
+## 内存占用（`mem` 模式，2026-11-15）
+
+`dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- mem 3840x2160`：**先预热一次**，再连续跑 5 次，
+报「峰值增量 / 调用后常驻 / 每次分配」。
+
+| 算子（4K） | 每次分配 | 调用后常驻 |
+|---|---|---|
+| resize-bicubic / gaussian-blur | 0 | 0 |
+| **seam-50** | **47.6 MiB** | 0 |
+| guided-filter / guided.cross | 10.6 MiB | 0 |
+| quantize-64 | 1.8 MiB | 0 |
+| oilpaint | 1.5 MiB | 0 |
+
+**结论一：不涨。** 除第一支之外，重复调用后 `GC.GetTotalMemory(forceFullCollection)` 相对基线为 0，
+说明 `FloatScratch` 与 `ArrayPixelPool` 的保留是有限的、不是泄漏。
+
+**结论二：seam 的 47.6 MiB 里约 33 MiB 是 luma 平面**——那是当天为 −17% 加的（每条缝只算一次 luma，
+而不是 50 次）。换来的时间是真的，代价是这个平面本身。**下一个该改的正是它**：8/16 位下 luma 恒为 0..255 的整数，
+用 `byte[]` 存放即 4 倍缩减到 8.3 MiB，DP 读入时再展开成 float，字节不变。
+
+**这个模式测不了峰值**：冷进程试过，七项全读 0 MiB——夹具已经把堆提交好了，17 MiB 的平面落在已驻留页里，
+工作集不再增长。绝对峰值仍以 `peakmem`（真子进程）为准。
+
 ## 尺寸 × 工作格式矩阵（`matrix` 模式，2026-11-15）
 
 `dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- matrix` 跑三个尺寸 × 两种工作格式，

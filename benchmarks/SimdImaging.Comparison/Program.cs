@@ -2,7 +2,7 @@ using System.Globalization;
 using SimdImaging.Comparison;
 
 // Comparison harness. Usage:
-//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|sizes|matrix|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate] [WxH]
+//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|sizes|mem|matrix|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate] [WxH]
 // Not part of SimdImaging.slnx on purpose: the shipped solution must stay buildable without the
 // git-ignored Six Labors licence file (AGENTS.md clean-room rules).
 
@@ -164,6 +164,11 @@ try
     {
         Console.WriteLine($"[memsteady] fresh-process peak/live at {width}x{height}, 1/3/10 calls...");
         MemSteady.Write(report, width, height);
+    }
+
+    if (mode is "mem")
+    {
+        MemoryProbe.Write(report, width, height);
     }
 
     if (mode is "matrix")
