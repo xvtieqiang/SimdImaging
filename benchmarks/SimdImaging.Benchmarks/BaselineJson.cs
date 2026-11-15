@@ -17,19 +17,28 @@ namespace SimdImaging.Benchmarks;
 /// The machine id is deliberately coarse — OS, architecture, core count — and the comparison also requires
 /// the same binary hash: a number is only comparable with itself.
 /// </para>
+/// <para>
+/// Since 2026-11-15 the file also carries the <c>calibration</c> block. The check divides each scenario by
+/// the probe scale, because the machine itself drifts 1.2–1.8× within a day and an absolute reading cannot
+/// tell that drift apart from a regression (<c>Calibration.cs</c> has the measurement that established it).
+/// </para>
 /// </summary>
 internal static class BaselineJson
 {
-    public static void Write(string path, IReadOnlyList<Result> results, int repeats, bool slow)
+    public static void Write(string path, IReadOnlyList<Result> results, int repeats, bool slow,
+        CalibrationResult calibration)
     {
         var builder = new StringBuilder();
         builder.AppendLine("{");
         builder.AppendLine($"  \"machine\": \"{Escape(Machine)}\",");
-        builder.AppendLine($"  \"date\": \"{DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}\",");
+        builder.AppendLine($"  \"date\": \"{LocalDate()}\",");
         builder.AppendLine($"  \"gitSha\": \"{Escape(Environment.GetEnvironmentVariable("SIMDIMAGING_GIT_SHA") ?? "unknown")}\",");
         builder.AppendLine($"  \"binarySha256\": \"{Sha256Of(typeof(ProcessingPlan))}:{Sha256Of(typeof(PixelView))}\",");
-        builder.AppendLine($"  \"protocol\": \"best-of-N warm single process; SimdImaging.Benchmarks; slow={(slow ? 1 : 0)}\",");
+        builder.AppendLine($"  \"protocol\": \"best-of-N warm single process; SimdImaging.Benchmarks; slow={(slow ? 1 : 0)}; norm=max(mem,alu)\",");
         builder.AppendLine($"  \"repeats\": {repeats},");
+        builder.AppendLine("  \"calibration\": { " +
+                           $"\"memory\": {calibration.MemoryMs.ToString("0.###", CultureInfo.InvariantCulture)}, " +
+                           $"\"alu\": {calibration.AluMs.ToString("0.###", CultureInfo.InvariantCulture)} }},");
         builder.AppendLine("  \"entries\": [");
 
         for (var i = 0; i < results.Count; i++)
@@ -57,6 +66,12 @@ internal static class BaselineJson
     /// <summary>The identity a baseline is keyed on. Documented in <c>benchmarks/README.md</c>.</summary>
     public static string Machine =>
         $"{RuntimeInformation.OSDescription}|{RuntimeInformation.ProcessArchitecture}|{Environment.ProcessorCount}";
+
+    /// <summary>
+    /// Local calendar date, not UTC: a recording made at 07:00 +08:00 is not "yesterday", and a baseline
+    /// file whose date contradicts the day it was taken is a trap for whoever reads the ledger next.
+    /// </summary>
+    private static string LocalDate() => DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     private static string Sha256Of(Type type)
     {

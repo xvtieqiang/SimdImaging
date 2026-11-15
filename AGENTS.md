@@ -57,9 +57,12 @@ bash benchmarks/gates.sh --aot --perf             # also the versioned performan
 bash benchmarks/simd-tiers.sh [--aot]             # SIMD tier matrix: full suite + operator-output SHA-256 diff
 ```
 
-`--perf` judges only runs whose `machine`, `binarySha256` and `protocol` all match a stored baseline,
-and prints the enforced count when they do; a different binary prints "not comparable" and passes, which
-is the design, not a pass that proved anything. Re-record the baseline whenever the binary changes.
+`--perf` judges only runs whose `machine`, `binarySha256` and `protocol` all match a stored baseline.
+It does not compare raw milliseconds: each scenario is divided by how much slower the two calibration
+probes say the machine is than when the baseline was taken (`max` of the memory and ALU ratios), because
+the same source measured 1.2–1.8× apart within four hours on this box and the black-box reference drifted
+with it. A different binary prints "not comparable" and passes — the design, not a pass that proved
+anything. Re-record whenever the binary changes.
 `tests/Fixtures/` holds the CC0 corpus manifest (URL + measured SHA-256, cache never committed),
 the independent reference vectors and the deterministic synthetic offline substitute.
 

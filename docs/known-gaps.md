@@ -29,7 +29,7 @@
 | 公开参考向量包 | 已实现（M6，2026-11-14）：`tests/Fixtures/vectors/` 固定输入 / 期望 / SHA-256 + 独立高精度生成脚本；初始 3 条 `warp-identity-*`，`VectorTests` 独立重算哈希。新增向量允许，为过测试改已有 `expected` 禁止 |
 | 像素差异工具 | 已实现（M6）：`src/Shared/PixelDiff.cs` 单一源码共享，测试项目与 Comparison 工程链接复用，不造第二把尺子；补首个不匹配位置、每通道误差、Top N、SHA-256、P6 差异热图，分级沿用 `Metrics.Grade` |
 | SIMD 档位自动化 | 已实现（M6）：`benchmarks/simd-tiers.sh` 三档 JIT 全量测试 + 算子输出 body SHA-256 逐档比对。修正了 §7.5 设计稿的 `--filter "FullyQualifiedName~Kernel"` —— 它实际只匹配名字里恰好带 Kernel 的用例，不匹配 scalar-twin 测试，现改为跑全量 |
-| 性能回退门禁 | **M15 起真的会判**：`benchmarks/baselines/windows-10.0.19045-x64-16-m15.json` 存了 29 个场景，其中 **15 个** `thresholdPercent=15`（2026-11-14 两次重录，最近一次随 DT 分块；`comparable-baselines=1`、校验最差 +1.9%）。只比对 `machine` + `binarySha256` + `protocol` 全同的运行，否则打印 "not comparable" 并跳过。`--self-test` 把阈值压到 0 并**要求失败**（29 条全报超），证明比较逻辑有牙。仍未覆盖的是 short/noisy 场景（ICC / gainmap / RL / seam / bilateral / stroke / gaussian / dt / crop / lanczos）：同 binary 两跑差 6–26%，分层编译与调度噪声主导，设门槛只会做出随机失败的绿灯 |
+| 性能回退门禁 | **M15 起真的会判，判的是机器校正后的读数**：29 个场景里 **24 个设闸**（阈值 15–48%，由三次运行归一化后的偏差 `max(15, ceil(2.5×S))` 推出），`value` 取三次 `best-of-3` 均值。只比对 `machine` + `binarySha256` + `protocol` 全同的运行，否则打印 "not comparable" 并跳过。校正是每跑自带两个探针（`degradation = max(mem, alu)` 相对基线）；负载验证：4 核抢占下探针报 x1.59、校正后最差 −1.2% 全过，而未校正的原始读数均值 +40%。`--self-test` 把阈值压到 0 并**要求失败**（29 条纳入、exit=1）。仍留 `null` 的是 crop / fill / clip / ICC 两条——归一化后三次偏差 >20%，这台机器的分辨率不够 |
 | CC0 语料 | 已实现（M6）：`tests/Fixtures/corpus.tsv` 2 条 Wikimedia Commons `Category:CC-Zero` 真实照片，URL + 实测 SHA-256（2026-11-14 下载校验）；`.cache/` git-ignored 不入库；离线由 `SyntheticCorpus.cs` 的 9 类确定性合成图兜底。实验台 3 张 Unsplash 演示图仍非测试夹具 |
 | AOT smoke 覆盖 | M6 补 `warp` / `samplepixel` 两条 hash 与 `REQUIRED` 必需项检查，防止「绿的 gate 什么都没验」；全量 31+ 条目核对留 M15 |
 
@@ -141,15 +141,18 @@
 | 实测（2026-11-14，`SimdImaging.Benchmarks` 的 `memory:` 行） | 1080p 连续 40 个各不相同的尺寸 → 权重缓存**顶到 64 条 / 1.98 MB**（字节预算生效，24 次淘汰），命中率 8.3%；随后 12 个尺寸重复 4 轮 → 累计命中率 **41.7%**。scratch 侧：保留 **14.65 MB / 5 块**、命中率 **98.8%**；`Trim()` 之后两项都归 0 |
 | 仍缺 | `Glow` / `GuidedFilter` / `NLM` / `LL` 还没有 `ScratchBytes` 声明；直接调用算子（不进 plan）时没有预估入口，只有 `RichardsonLucyOps.ScratchBytes` 这类公开函数可自己算 |
 
-## M15 性能回退门禁（部分完成，2026-11-14）
+## M15 性能回退门禁（判定口径于 2026-11-15 重做）
 
 | 项 | 现状 |
 |---|---|
-| 基线文件 | `benchmarks/baselines/windows-10.0.19045-x64-16-m15.json`：**29 个场景，15 个设 15% 阈值**，值取同一 binary 两次 `best-of-3` 的均值。2026-11-14 两次重录（cross guide 落地、DT 列遍改 tile 各一次）：`binarySha256` 与当前 Processing+Abstractions 一致，`--perf` 报 `comparable-baselines=1`。设门槛的条件是「每一对记录都 ≤10%」——15% 因此至少留 5 个点给噪声；任何一次摆动越过 15% 的场景一律 `null`。成员：resize bicubic / quantize×3 / reduce / fill / clip / oil / guided / `guided.cross` / chroma / NLM×2 / LL / composite；**不设**的是 stroke（23%）、gaussian（15.6%）、bilateral（21.8%）、`dt`（21.7%）、RL / seam（历史 29% / 25%）、ICC（37%）、gainmap（22%）、crop（20.5%）、lanczos（25.9%） |
-| 可比性 | `machine`（`OS|arch|核数`）+ `binarySha256`（Processing 与 Abstractions 两个 dll 的 SHA-256）+ `protocol`（含 `slow=` 标记）+ `repeats` 全部相同才算可比。任一不同就跳过并打印原因——**跨机器的秒表读数不是门禁** |
-| 判据 | `observed > baseline × 1.15` 判失败，逐条打印 `基线 → 实测（+x%，允许 15%）` |
-| 自检 | `--self-test`：阈值全部压到 0，要求**非零退出**。实测 exit=1、**29 个场景全部报超**（最差 `oil paint 4K` +3.7%——这一跑本身很稳）；正常模式 exit=0、**15 个强制**，两次校验最差 **+1.9%**（`ll 1080p`）/ **+3.5%**（`nlm S=3`） |
-| 实测重复性（这是阈值只给 15 个场景的原因） | 重录用的一对（同一 binary 连跑两次，相对均值）：量化 7.7 / 1.0 / 3.3%、reduce 3.1%、fill 3.1%、clip 4.9%、oil 5.7%、guided 2.0%、cross 2.4%、chroma 1.9%、NLM 5.3 / 0.2%、LL 0.3%、composite 0.2%、resize 3.5%；而同一天另外几对里 stroke 到过 **23.0%**、gaussian **15.6%**、bilateral **21.8%**、crop **20.5%**、lanczos **25.9%**、icc **19.6%**、`dt` **21.7%**，更早一对里 rl **+29%**、seam **+25%**、icc grid=2 **+37%**。门槛取「每对都 ≤10%」，就是给 15% 留 5 个点；越过 15% 的一律 `null` |
+| 基线文件 | `benchmarks/baselines/windows-10.0.19045-x64-16-m15.json`：29 个场景，**24 个设闸**（15–48%），`value` 取同一 binary **三次** `best-of-3` 的均值，并带一个 `calibration` 块。2026-11-15 重录，指纹 `6042a84c…` : `93cabe0a…` |
+| 为什么不再判绝对毫秒 | 2026-11-15 实测：同一份源码、同一台机器，04:00 与 07:00 两跑，**黑盒参照 ImageSharp 4.1.3 的 resize-bicubic 从 12.5 → 19.3 ms（1.54×）**，我方同项 4.97 → 7.91 ms（1.59×），29 场景整表慢 1.2–1.8×。参照不受本库代码影响，故变的是机器。绝对毫秒在这种漂移下只能二选一：误报，或把真回退埋在膨胀的基线里 |
+| 归一化 | 每跑在首尾各测一次两个**不调用本库**的探针（256 MB 并行流式求和 / 32M 次 xorshift），各取 best-of-7、再取两端更快的读数。判定用 `got_raw / degradation` 对 `baseline.value`，`degradation = max(run.mem/base.mem, run.alu/base.alu)`——哪种资源被抢就按哪种校正；探针不动时 `degradation = 1`，等价于按原始读数判。失败行同时打印 raw 与 normalised，读的人能分清「机器漂」与「代码回退」 |
+| 阈值来源 | 三次运行各自先按自己的 calibration 归一化，取三次的最大相对偏差 `S`；`threshold = max(15, ceil(2.5 × S))`，即门槛至少是实测噪声的 2.5 倍；`S > 20%` 留 `null`（crop / fill / clip / icc grid=33 / icc matrix-trc 五个）。11-14 那版「一对记录 ≤10% 才设 15%」已废弃——它用**一对**记录把当天恰好安静的 15 个场景当成稳定场景；同一份代码在 11-15 的三次运行里，bicubic 的归一化偏差就到 15% |
+| 自检 | `--self-test` 把阈值压到 0 并要求**非零退出**：实测 `comparable-baselines=1 enforced=29`、exit=1、6 条报超（最差 +34.4%）。正常模式 exit=0、`enforced=24`、最差 +4.1% |
+| 负载验证（整套设计成立与否的判据） | 人为起 4 个忙循环抢占 4/16 核：`alu` 探针报 **x1.59**，门禁按 x1.59 校正，**24 条设闸场景最差 −1.2%、全部通过**；同一负载下未校正的原始读数均值 **+40%** |
+| 可比性 | `machine`（`OS|arch|核数`）+ `binarySha256`（Processing 与 Abstractions 两个 dll）+ `protocol`（含 `slow=` 与 `norm=max(mem,alu)`）全同才算可比；`repeats` 只在读取基线时决定本次跑几次，**不参与比较**（脚本头注释旧称「含 repeat count」，以实现为准）。任一不同就跳过并打印原因——跨机器的秒表读数不是门禁 |
+| 已知局限 | 校正只消掉「跟探针同向退化」的机器状态。若退化只影响某类访存而两个探针都不动，仍会误报——失败行里 raw 与 normalised 的差值就是识别它的线索。探针不调用本库，所以「代码慢到把探针一起拖慢」不会发生 |
 | 已知近似 | `machine` 不含 CPU 型号，两台同 OS/同核数的机器会撞 id；`binarySha256` 因此成为第二道闸，但换编译器版本后旧基线同样会"not comparable"而静默跳过——**基线需要随 binary 一起更新**，这是设计而非疏漏 |
 | 第四档（AVX-512） | **已出评估，未出数**：`docs/simd-tiers-evaluation.md`。关键结论是今天的代码在有 AVX-512 的机器上跑的仍是同一套 `Vector256` 内核（`Vector512.IsHardwareAccelerated` 未用），所以"四档一致"不构成任何 512 位验证。值得写 512 位的只有 `Median3x3` 与 `Convolve2D`（NLM 次之，ICC CLUT 明确不做），且必须运行时分派，`IlcInstructionSet=avx2` 不能动 |
 | AotSmoke 全量核对 | **已核对**：53 条 hash，`REQUIRED` 23 条，**无悬空项**（`REQUIRED ⊆ hashed`，0 条 REQUIRED 没有对应 hash）。M15 点名的六类都在闸内：`warp` / `ewa.rotate` / `nlm` / `gainmap.hdr` / `icc.lut` / `plan.fused`；`dt` 与 `guided.cross` 于 2026-11-14 补入。其余 30 条只 hash 不设闸，属信息性覆盖 |

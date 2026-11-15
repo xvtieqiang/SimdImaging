@@ -48,6 +48,10 @@ Console.WriteLine($"tier: avx512={System.Runtime.Intrinsics.Vector512.IsHardware
 Console.WriteLine($"source: {Width}x{Height} Rgba8 = {Width * Height / 1_000_000.0:F1} MPix");
 Console.WriteLine();
 
+// Measured at both ends of the run and averaged: a session that heats up mid-run would otherwise apply
+// the opening state to timings taken in a slower one. See Calibration.cs for why this exists at all.
+var calibrationStart = Calibration.Measure(iterations);
+
 Measure("resize 4K->1080p bicubic", () =>
 {
     using var result = source.Resize(1920, 1080, Resampler.Bicubic);
@@ -323,8 +327,21 @@ void Measure(string name, Func<long> body)
     Console.WriteLine($"{name,-30} {best,8:F1} ms   {megapixelsPerSecond,7:F1} MPix/s   alloc {allocated / 1024.0,8:F0} KiB");
 }
 
+var calibrationEnd = Calibration.Measure(iterations);
+
+// The faster of the two readings, per probe, for the same reason a scenario takes its best of N: the
+// reading we want is what the machine can do, not what it managed while something else was running.
+var calibration = new CalibrationResult(
+    Math.Round(Math.Min(calibrationStart.MemoryMs, calibrationEnd.MemoryMs), 3),
+    Math.Round(Math.Min(calibrationStart.AluMs, calibrationEnd.AluMs), 3));
+
+Console.WriteLine();
+Console.WriteLine($"calibration: memory {calibration.MemoryMs,7:F2} ms   alu {calibration.AluMs,7:F2} ms   " +
+                  $"(start->end memory x{calibrationEnd.MemoryMs / calibrationStart.MemoryMs:F3} " +
+                  $"alu x{calibrationEnd.AluMs / calibrationStart.AluMs:F3})");
+
 if (jsonPath is not null)
-    BaselineJson.Write(jsonPath, results, iterations, includeSlow);
+    BaselineJson.Write(jsonPath, results, iterations, includeSlow, calibration);
 
 // A minimal lut16 profile with an identity A2B0 CLUT, built here rather than shipped as a fixture:
 // the benchmark needs a realistic grid size, not a file.

@@ -162,6 +162,19 @@ pass moved to 64-column tiles — so `binarySha256` matches the current Processi
 against the original 14: **+** `resize 4K->1080p bicubic`, `composite 1080p overlay`, `guided.cross 4K r=4`;
 **−** `stroke 4K ellipse`, `gaussian blur 4K` (`clip` stayed in, 4.9% on the defining pair).
 
+M15 gate rework (2026-11-15): absolute milliseconds are no longer what gets judged. The same source measured
+1.2–1.8× apart four hours apart, and the black-box ImageSharp reference drifted by the same factor
+(resize-bicubic 12.5 → 19.3 ms at 1920×1080), so that drift belongs to the machine — and an absolute baseline
+recorded in one state either false-alarms or hides a real regression in another.
+`SimdImaging.Benchmarks` now carries two probes that never call this library (a 256 MB parallel streaming sum
+and 32M xorshift rounds, both best-of-7, measured at the start and end of the run), and `check-baseline.sh`
+divides each scenario by `max(run/baseline)` of the two — whichever resource was contended, the correction
+covers it. Thresholds are derived from **three** runs rather than one pair: each run is normalised by its own
+calibration, the largest relative deviation `S` across the three sets `threshold = max(15, ceil(2.5·S))`, and
+`S > 20%` stays `null`. Result: **24 of 29 gated, at 15–48%**. Proven under deliberate load: four busy cores
+drove the `alu` probe to ×1.59, the gate corrected by ×1.59, and every gated scenario passed with a worst
+delta of **−1.2%** while the raw readings averaged **+40%**. `--self-test` still exits 1.
+
 M15 smoke update (2026-11-14): `dt` (the exact squared EDT through the facade) and `guided.cross` (the
 cross-guided filter) joined the smoke, so the body SHA is
 `ff856b8bf81f45fbf910a4ea638b7a56b5685dffbbbf33275e516d6c5bfabd4e` across all three JIT tiers.
@@ -192,9 +205,11 @@ NLM measured on this machine at 1080p Rgba8 (best of one warm run, `SimdImaging.
 `h`/radii is the only lever that does not change the result.
 
 `benchmarks/baselines/` is versioned (unlike the git-ignored `results/`). `thresholdPercent` is set for the
-15 of 29 scenarios whose every recorded pair agreed within 10%, which leaves the 15% threshold five points
-of margin; `check-baseline.sh` prints `enforced=15` on a comparable run, and the rest stay `null` so the gate
-is never mistaken for a coin flip. Default `gates.sh` stays at ~1 min; `--aot`, `--perf` and `simd-tiers.sh` are opt-in.
+24 of 29 scenarios whose normalised spread over three runs stayed under 20%, at `max(15, 2.5×spread)` — always
+above the measured noise, never a round number chosen to make today green. `check-baseline.sh` prints
+`enforced=24` plus the machine correction it applied; the five that stay `null` (crop, both path fills,
+two ICC entries) are below the resolution this box can offer. Default `gates.sh` stays at ~1 min; `--aot`,
+`--perf` and `simd-tiers.sh` are opt-in.
 
 ## What is still slow
 

@@ -5,6 +5,11 @@
 # count. When no stored baseline matches, this script says so and passes — a cross-machine comparison of
 # stopwatch readings is noise, not a gate.
 #
+# Absolute milliseconds are not judged, the machine-corrected reading is: each scenario is divided by how
+# much slower the calibration probes say the machine is than when the baseline was taken. The machine
+# drifts 1.2-1.8x within a day and the black-box reference drifts with it, so an absolute threshold would
+# either false-alarm or hide a real regression. Failures print the raw swing beside the normalised one.
+#
 #   bash benchmarks/check-baseline.sh               # compare against the stored baseline
 #   bash benchmarks/check-baseline.sh --self-test   # prove the comparison fails on a regression
 #
@@ -76,6 +81,24 @@ with open(observed_path, encoding="utf-8-sig") as handle:
 
 by_scenario = {entry["scenario"]: entry for entry in run["entries"]}
 
+
+def scale_of(doc):
+    """Both probe readings, or None when the file predates them."""
+    cal = doc.get("calibration")
+    if not cal:
+        return None
+    memory = float(cal["memory"])
+    alu = float(cal["alu"])
+    if memory <= 0 or alu <= 0:
+        return None
+    return (memory, alu)
+
+
+run_probes = scale_of(run)
+if run_probes is None:
+    print("FAIL  this run carried no calibration block; cannot normalise", file=sys.stderr)
+    sys.exit(1)
+
 comparable = []
 for path in sorted(glob.glob("benchmarks/baselines/*.json")):
     with open(path, encoding="utf-8-sig") as handle:
@@ -90,6 +113,9 @@ for path in sorted(glob.glob("benchmarks/baselines/*.json")):
     if doc["protocol"] != run["protocol"]:
         print(f"skip  {os.path.basename(path)}: protocol differs (not comparable)")
         continue
+    if scale_of(doc) is None:
+        print(f"skip  {os.path.basename(path)}: no calibration block (not comparable)")
+        continue
     comparable.append((path, doc))
 
 if not comparable:
@@ -102,6 +128,17 @@ failures = []
 worst = None
 
 for path, doc in comparable:
+    base_probes = scale_of(doc)
+    # How much slower is the machine than when the baseline was taken? Take the worse of the two probes:
+    # whichever resource was contended, the correction covers it. Over-correcting only makes the gate more
+    # forgiving on a degraded machine; it never invents a regression, because a probe that stays fast
+    # leaves the ratio at 1.0 and the scenario is judged on its own movement.
+    memory_ratio = run_probes[0] / base_probes[0]
+    alu_ratio = run_probes[1] / base_probes[1]
+    degradation = max(memory_ratio, alu_ratio)
+    print(f"observed: machine vs {os.path.basename(path)}: memory x{memory_ratio:.2f} "
+          f"alu x{alu_ratio:.2f} -> correcting by x{degradation:.2f}")
+
     for entry in doc["entries"]:
         threshold = entry["thresholdPercent"]
         if strict:
@@ -115,15 +152,23 @@ for path, doc in comparable:
             sys.exit(1)
 
         enforced += 1
-        base = float(entry["value"])
-        got = float(by_scenario[name]["value"])
+        base_raw = float(entry["value"])
+        got_raw = float(by_scenario[name]["value"])
+
+        # Judge the machine-corrected reading and print the raw swing beside it: the distance between the
+        # two numbers is how much of the movement belongs to the machine rather than to the code.
+        base = base_raw
+        got = got_raw / degradation
         delta = (got - base) / base * 100.0 if base else 0.0
+        raw_delta = (got_raw - base_raw) / base_raw * 100.0 if base_raw else 0.0
 
         if worst is None or delta > worst[1]:
             worst = (name, delta)
 
         if delta > threshold:
-            failures.append(f"{name}: {base:.1f} ms -> {got:.1f} ms (+{delta:.1f}%, allowed {threshold:.1f}%)")
+            failures.append(
+                f"{name}: {base_raw:.1f} -> {got_raw:.1f} ms (raw {raw_delta:+.1f}%), "
+                f"normalised {delta:+.1f}% (allowed {threshold:.1f}%)")
 
 print(f"observed: comparable-baselines={len(comparable)} enforced={enforced}")
 if worst is not None:
