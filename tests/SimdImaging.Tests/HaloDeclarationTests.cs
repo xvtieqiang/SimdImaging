@@ -123,6 +123,28 @@ public class HaloDeclarationTests
         failures.ShouldBeEmpty(string.Join("\n", failures));
     }
 
+    /// <summary>
+    /// The form a caller actually writes: three steps, no halo, no categories — the same bytes as calling them
+    /// one at a time.
+    /// </summary>
+    [Fact]
+    public void Pipeline_WithThreeSteps_MatchesCallingThemSeparately()
+    {
+        using var source = Pattern();
+
+        using var piped = source.Pipe()
+            .Brightness(0.05f)
+            .Sharpen()
+            .Grayscale()
+            .Run();
+
+        using var first = source.Brightness(0.05f);
+        using var second = first.Sharpen();
+        using var third = second.Grayscale();
+
+        piped.WritablePixels.ToArray().ShouldBe(third.WritablePixels.ToArray());
+    }
+
     /// <summary>The declared values: what the library's own documentation says each operator needs.</summary>
     private static (Func<PixelView, WorkingBuffer> Op, int Halo) Build(string id) => id switch
     {

@@ -399,6 +399,25 @@
   SimdImaging.ImageFrame.Dispose() -> System.Void
   SimdImaging.ImageFrame.Duration : System.TimeSpan? { get; }
   SimdImaging.ImageFrame.Pixels : SimdImaging.Abstractions.WorkingBuffer { get; }
+  SimdImaging.ImagePipeline.BandRows(System.Int32 rows) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.BoxBlur(System.Int32 radius) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Brightness(System.Single amount) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Contrast(System.Single amount) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Emboss() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Equalize() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Gamma(System.Single gamma) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.GaussianBlur(System.Single sigma) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Grayscale() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Invert() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Pixelate(System.Int32 blockSize) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Posterize(System.Int32 levels) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Run() -> SimdImaging.Image
+  SimdImaging.ImagePipeline.Saturation(System.Single amount) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Sepia(System.Single amount) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Sharpen(System.Single amount, System.Single sigma) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Sobel() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipelineExtensions.Pipe(SimdImaging.Image image) -> SimdImaging.ImagePipeline
   SimdImaging.NormalizedWarp.#ctor(System.Object object, System.IntPtr method)
   SimdImaging.NormalizedWarp.BeginInvoke(System.Single u, System.Single v, System.Single& sourceU, System.Single& sourceV, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
   SimdImaging.NormalizedWarp.EndInvoke(System.Single& sourceU, System.Single& sourceV, System.IAsyncResult result) -> System.Void
@@ -966,6 +985,8 @@ class SimdImaging.GainMappedImage
 class SimdImaging.Image
 class SimdImaging.ImageChain
 class SimdImaging.ImageFrame
+class SimdImaging.ImagePipeline
+class SimdImaging.ImagePipelineExtensions
 class SimdImaging.Processing.AlphaOps
 class SimdImaging.Processing.AnalysisOps
 class SimdImaging.Processing.BackgroundOps
