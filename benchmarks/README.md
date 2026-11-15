@@ -108,6 +108,27 @@ luma 改 `ushort` 后 8K 峰值 RSS 从 415 降到 **352 MiB**（正好是 luma 
 这条实验同时说明 `known-gaps.md` 里原来的否决理由（「受影响列无上界」）**不成立**——按原始坐标存时每行只
 变 1–2 格；结论仍然是不做，但依据换成了这个数字。
 
+
+### seam 的 8K 内存账（2026-11-16）
+
+峰值 **352 MiB** 的构成，以及每一块能不能动：
+
+| 块 | 8K 字节 | 能不能省 |
+|---|---|---|
+| 源图副本（`Transforms.Copy` 进工作缓冲） | 133 MiB | **不能**：carve 就地改像素，不能改调用者的图 |
+| `Crop` 的结果缓冲 | 132 MiB | **不能**（见下） |
+| Workspace：luma `ushort` | 66 MiB | 已减半（原 float 132） |
+| Workspace：`_back` | 33 MiB | 能，但见下 |
+| Workspace：行缓冲 / `_seam` | <1 MiB | — |
+
+**为什么 `Crop` 不能省**：`PixelView.Span` 返回的是 `Stride × Height` 字节。如果让结果直接复用工作缓冲、
+只把 `Width` 改小，那么每个用 `WritablePixels` / `ToArray()` 的调用者都会读到**被删掉的那些列**（陈旧字节）。
+Crop 存在的理由就是这个契约；去掉它等于允许「非紧凑结果」，那是公共 API 的设计变更，不是局部优化。
+
+**为什么 2-bit parent 现在不做**：`_back` 33 MiB → 8 MiB 是真的，但写入点在 DP 内层（占 72% 的时间），
+而按 4 格打包会引入跨字节的读改写（`row + x` 从 x=1 起步，不保证 4 对齐）。**用最热的那条循环换 25 MiB**，
+在现在的性能曲线上不划算。等有独立需求（比如 16K）再评估。
+
 ## 尺寸 × 工作格式矩阵（`matrix` 模式，2026-11-15）
 
 `dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- matrix` 跑三个尺寸 × 两种工作格式，
