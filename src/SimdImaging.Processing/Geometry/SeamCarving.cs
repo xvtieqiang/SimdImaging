@@ -310,7 +310,12 @@ public static class SeamCarving
         private readonly int _capacity;
         private readonly int _height;
         private readonly byte[] _back;
-        private readonly bool[] _blocked;
+        /// <summary>
+        /// The insert path's "already used" mask, allocated on first use: only <see cref="FindSeam"/> with
+        /// <c>blocked: true</c> reads it, and removal never does, so a carve was paying W·H bytes for a mask it
+        /// could not touch — 33 MiB at 8K.
+        /// </summary>
+        private bool[]? _blocked;
         private readonly double[] _rowA;
         private readonly double[] _rowB;
         private readonly float[] _above;
@@ -338,7 +343,6 @@ public static class SeamCarving
             _capacity = width;
             _height = height;
             _back = new byte[(long)width * height];
-            _blocked = new bool[(long)width * height];
             _rowA = new double[width];
             _rowB = new double[width];
             _above = new float[width];
@@ -422,6 +426,8 @@ public static class SeamCarving
         }
 
         /// <summary>Marks the newly duplicated path as used, shifting the mask that later insertions read.</summary>
+        private bool[] BlockedMask => _blocked ??= new bool[(long)_capacity * _height];
+
         public void BlockSeam(int[] seam, int width)
         {
             for (var y = 0; y < _height; y++)
@@ -429,9 +435,9 @@ public static class SeamCarving
                 var row = y * _capacity;
                 var x = seam[y];
                 for (var c = width; c > x + 1; c--)
-                    _blocked[row + c] = _blocked[row + c - 1];
-                _blocked[row + x] = true;
-                _blocked[row + x + 1] = true;
+                    BlockedMask[row + c] = BlockedMask[row + c - 1];
+                BlockedMask[row + x] = true;
+                BlockedMask[row + x + 1] = true;
             }
         }
 
@@ -521,7 +527,7 @@ public static class SeamCarving
             var left = centre[x > 0 ? x - 1 : 0];
             var right = centre[x + 1 < width ? x + 1 : width - 1];
             var residual = (double)Math.Abs(right - left) + Math.Abs((double)below[x] - above[x]);
-            return blocked && _blocked[y * _capacity + x] ? double.PositiveInfinity : residual;
+            return blocked && BlockedMask[(y * _capacity) + x] ? double.PositiveInfinity : residual;
         }
 
         /// <summary>Luma of one row: exact integers for 8/16-bit, BT.709 floats for Rgba32F.</summary>

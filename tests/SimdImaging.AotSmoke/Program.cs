@@ -200,6 +200,11 @@ using (var rlm = image.RichardsonLucyMotion(7, 30f, 2))
 using (var seam = image.RemoveSeams(SeamAxis.Vertical, 2))
     Console.WriteLine($"seam sha={Hash(seam.WritablePixels)}");
 
+// Insertion shares FindSeam with removal but is the only user of the blocked mask, and it had no hash entry
+// at all - so nothing covered the path the mask change touches.
+using (var inserted = image.InsertSeams(SeamAxis.Vertical, 3))
+    Console.WriteLine($"seam.insert sha={Hash(inserted.WritablePixels)}");
+
 // ANL-9: the exact squared EDT (float parabolas on a serial envelope sweep) goes through the facade here,
 // which also proves the Rgba32F result is not relabelled as the 8-bit input.
 using (var mask = Image.Create(Width, Height, WorkingFormat.Rgba8))
