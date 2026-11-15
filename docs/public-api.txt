@@ -400,17 +400,28 @@
   SimdImaging.ImageFrame.Duration : System.TimeSpan? { get; }
   SimdImaging.ImageFrame.Pixels : SimdImaging.Abstractions.WorkingBuffer { get; }
   SimdImaging.ImagePipeline.BandRows(System.Int32 rows) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Bilateral(System.Int32 radius, System.Single sigmaRange) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.BokehBlur(System.Int32 radius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.BoxBlur(System.Int32 radius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Brightness(System.Single amount) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Close3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Contrast(System.Single amount) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Crop(Sdcb.SimdCodecs.Abstractions.PixelRect region) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Dilate3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Emboss() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Equalize() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Erode3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Gamma(System.Single gamma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.GaussianBlur(System.Single sigma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Grayscale() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Invert() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Median3x3() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.MotionBlur(System.Int32 length, System.Single angleDegrees) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.NonLocalMeans(System.Int32 searchRadius, System.Int32 patchRadius, System.Single h) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.OilPaint(System.Int32 radius, System.Int32 levels) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Open3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Pixelate(System.Int32 blockSize) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Posterize(System.Int32 levels) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Resize(System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler) -> SimdImaging.ImagePipeline
@@ -824,16 +835,27 @@
   SimdImaging.Processing.PlanObserver.BeginInvoke(System.Int32 index, System.String name, SimdImaging.Abstractions.PixelView result, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
   SimdImaging.Processing.PlanObserver.EndInvoke(System.IAsyncResult result) -> System.Void
   SimdImaging.Processing.PlanObserver.Invoke(System.Int32 index, System.String name, SimdImaging.Abstractions.PixelView result) -> System.Void
+  SimdImaging.Processing.PlanOps.Bilateral(System.Int32 radius, System.Single sigmaRange) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.BokehBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BoxBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Brightness(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Close3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Contrast(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Dilate3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Emboss() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Equalize() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Erode3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Gamma(System.Single gamma) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.GaussianBlur(System.Single sigma) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Grayscale() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Invert() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Median3x3() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.MotionBlur(System.Int32 length, System.Single angleDegrees) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.NonLocalMeans(System.Int32 searchRadius, System.Int32 patchRadius, System.Single h) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.OilPaint(System.Int32 radius, System.Int32 levels) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Open3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Pixelate(System.Int32 blockSize) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Posterize(System.Int32 levels) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Saturation(System.Single amount) -> SimdImaging.Processing.ImageOp

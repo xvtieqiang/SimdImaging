@@ -79,6 +79,48 @@ public static class PlanOps
     public static ImageOp Sobel() => Neighborhood("sobel", 1, v => FilterOps.Sobel(v));
 
     /// <summary>
+    /// <summary>3x3 median; one row and one column of context.</summary>
+    public static ImageOp Median3x3() => Neighborhood("median", 1, v => FilterOps.Median3x3(v));
+
+    /// <summary>3x3 erosion; one row and one column.</summary>
+    public static ImageOp Erode3x3() => Neighborhood("erode", 1, v => FilterOps.Erode3x3(v));
+
+    /// <summary>3x3 dilation; one row and one column.</summary>
+    public static ImageOp Dilate3x3() => Neighborhood("dilate", 1, v => FilterOps.Dilate3x3(v));
+
+    /// <summary>Erosion then dilation, so two rows and two columns.</summary>
+    public static ImageOp Open3x3() => Neighborhood("open", 2, v => FilterOps.Open3x3(v));
+
+    /// <summary>Dilation then erosion, so two rows and two columns.</summary>
+    public static ImageOp Close3x3() => Neighborhood("close", 2, v => FilterOps.Close3x3(v));
+
+    /// <summary>Edge-preserving bilateral filter; its window is the radius.</summary>
+    public static ImageOp Bilateral(int radius, float sigmaRange = 0.1f) =>
+        Neighborhood("bilateral", radius, v => FilterOps.Bilateral(v, radius, 0f, sigmaRange));
+
+    /// <summary>Directional blur; its taps span half the length either side.</summary>
+    public static ImageOp MotionBlur(int length, float angleDegrees = 0f) =>
+        Neighborhood("motion", Math.Max(1, (length + 1) / 2), v => FilterOps.MotionBlur(v, length, angleDegrees));
+
+    /// <summary>Disc-shaped bokeh; its offsets stay inside the radius.</summary>
+    public static ImageOp BokehBlur(int radius) => Neighborhood("bokeh", radius, v => FilterOps.BokehBlur(v, radius));
+
+    /// <summary>Guided filter; its window is the radius.</summary>
+    public static ImageOp GuidedFilter(int radius, float epsilon = 1e-4f) =>
+        Neighborhood("guided", radius, v => GuidedFilterOps.GuidedFilter(v, radius, epsilon));
+
+    /// <summary>
+    /// Non-local means. Each output compares patches of radius <paramref name="patchRadius"/> inside a search
+    /// window of <paramref name="searchRadius"/>, so it reads the sum of the two — not either one alone.
+    /// </summary>
+    public static ImageOp NonLocalMeans(int searchRadius, int patchRadius = 1, float h = 0.1f) =>
+        Neighborhood("nlm", searchRadius + patchRadius,
+            v => NonLocalMeansOps.NonLocalMeans(v, searchRadius, patchRadius, h));
+
+    /// <summary>Oil paint; its histogram window is the radius.</summary>
+    public static ImageOp OilPaint(int radius, int levels = 20) =>
+        Neighborhood("oilpaint", radius, v => OilPaintOps.OilPaint(v, radius, levels));
+
     /// Block-aligned mosaic. A block spans rows that a band boundary can cut anywhere, so no halo is correct —
     /// whole-image is the only category that reproduces the single-image result.
     /// </summary>

@@ -98,6 +98,20 @@ public class HaloDeclarationTests
             ("sobel", PlanOps.Sobel(), v => FilterOps.Sobel(v)),
             ("pixelate", PlanOps.Pixelate(5), v => FilterOps.Pixelate(v, 5)),
             ("equalize", PlanOps.Equalize(), v => HistogramOps.Equalize(v)),
+
+            // The rest of the neighbourhood family, classified by reading each kernel's radius out of its
+            // implementation rather than by measuring behaviour.
+            ("median", PlanOps.Median3x3(), v => FilterOps.Median3x3(v)),
+            ("erode", PlanOps.Erode3x3(), v => FilterOps.Erode3x3(v)),
+            ("dilate", PlanOps.Dilate3x3(), v => FilterOps.Dilate3x3(v)),
+            ("open", PlanOps.Open3x3(), v => FilterOps.Open3x3(v)),
+            ("close", PlanOps.Close3x3(), v => FilterOps.Close3x3(v)),
+            ("bilateral", PlanOps.Bilateral(2), v => FilterOps.Bilateral(v, 2, 0f, 0.1f)),
+            ("motion", PlanOps.MotionBlur(5), v => FilterOps.MotionBlur(v, 5, 0f)),
+            ("bokeh", PlanOps.BokehBlur(3), v => FilterOps.BokehBlur(v, 3)),
+            ("guided", PlanOps.GuidedFilter(3), v => GuidedFilterOps.GuidedFilter(v, 3, 1e-4f)),
+            ("oilpaint", PlanOps.OilPaint(2, 12), v => OilPaintOps.OilPaint(v, 2, 12)),
+            ("nlm", PlanOps.NonLocalMeans(2), v => NonLocalMeansOps.NonLocalMeans(v, 2, 1, 0.1f)),
         };
 
         var failures = new List<string>();

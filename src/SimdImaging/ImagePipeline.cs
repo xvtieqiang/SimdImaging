@@ -103,6 +103,43 @@ public sealed class ImagePipeline
     /// <summary>3x3 Sobel magnitude.</summary>
     public ImagePipeline Sobel() => Step(PlanOps.Sobel());
 
+    /// <summary>3x3 median.</summary>
+    public ImagePipeline Median3x3() => Step(PlanOps.Median3x3());
+
+    /// <summary>3x3 erosion.</summary>
+    public ImagePipeline Erode3x3() => Step(PlanOps.Erode3x3());
+
+    /// <summary>3x3 dilation.</summary>
+    public ImagePipeline Dilate3x3() => Step(PlanOps.Dilate3x3());
+
+    /// <summary>Erosion then dilation.</summary>
+    public ImagePipeline Open3x3() => Step(PlanOps.Open3x3());
+
+    /// <summary>Dilation then erosion.</summary>
+    public ImagePipeline Close3x3() => Step(PlanOps.Close3x3());
+
+    /// <summary>Edge-preserving bilateral filter.</summary>
+    public ImagePipeline Bilateral(int radius, float sigmaRange = 0.1f) =>
+        Step(PlanOps.Bilateral(radius, sigmaRange));
+
+    /// <summary>Directional blur.</summary>
+    public ImagePipeline MotionBlur(int length, float angleDegrees = 0f) =>
+        Step(PlanOps.MotionBlur(length, angleDegrees));
+
+    /// <summary>Disc-shaped bokeh.</summary>
+    public ImagePipeline BokehBlur(int radius) => Step(PlanOps.BokehBlur(radius));
+
+    /// <summary>Guided filter.</summary>
+    public ImagePipeline GuidedFilter(int radius, float epsilon = 1e-4f) =>
+        Step(PlanOps.GuidedFilter(radius, epsilon));
+
+    /// <summary>Non-local means.</summary>
+    public ImagePipeline NonLocalMeans(int searchRadius, int patchRadius = 1, float h = 0.1f) =>
+        Step(PlanOps.NonLocalMeans(searchRadius, patchRadius, h));
+
+    /// <summary>Oil paint.</summary>
+    public ImagePipeline OilPaint(int radius, int levels = 20) => Step(PlanOps.OilPaint(radius, levels));
+
     /// <summary>Block mosaic.</summary>
     public ImagePipeline Pixelate(int blockSize) => Step(PlanOps.Pixelate(blockSize));
 
