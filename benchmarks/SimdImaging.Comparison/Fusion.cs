@@ -24,55 +24,103 @@ namespace SimdImaging.Comparison;
 /// </remarks>
 internal static class Fusion
 {
+    /// <summary>Four sizes, because the per-band cost is a fixed one and only a sweep shows it being amortised.</summary>
+    private static readonly (int Width, int Height)[] Sizes =
+        [(640, 360), (1920, 1080), (3840, 2160), (7680, 4320)];
+
     public static void Write(Report report, int width, int height)
     {
-        report.Heading(2, "G 组 · 融合是否发生：按租用次数判定");
-        report.Line($"> 输入 {width}×{height} `Rgba8`。**判定不看时间，看 `IPixelPool.Rent` 的次数**：");
-        report.Line("> 融合的行带窗口只租一块输出、边读源边算；逐步执行会在每一级之间落一张中间图。");
-        report.Line("> 计时用 `Timing.Time`（≥300 ms 热身 + 7 轮交错取中位），与其它表同一口径。");
+        report.Heading(2, "G 组 · 融合是否发生，以及它的代价随尺寸怎么变");
+        report.Line("> **判定不看时间，看托管分配与 `IPixelPool.Rent`**：融合的行带窗口只租输出、边读源边算；");
+        report.Line("> 逐步执行会在每一级之间落一张中间图。计时用 `Timing.Time`（≥300 ms 热身 + 7 轮交错取中位）。");
+        report.Line("> 质量维度取**链长**（1 / 3 / 5 个点算子）与**模糊半径**（σ=1 / 3 / 8）：链越长、半径越大，");
+        report.Line("> 融合省下的中间图越多，而每带的固定成本被摊得越薄——这两件事必须分尺寸看。");
         report.Line();
 
-        var data = Fixture.Make(width, height);
-        using var source = Fixture.Ours(data, width, height);
-
-        var threePoint = new ProcessingPlan()
-            .Add("brightness", OpCategory.Point, PlanSteps.Point(v => PointOps.Brightness(v, 0.05f)))
-            .Add("contrast", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 1.1f)))
-            .Add("invert", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v)));
-
-        var blurThenPoint = new ProcessingPlan()
-            .Add("blur", OpCategory.Neighborhood,
-                PlanSteps.Neighborhood(v => FilterOps.GaussianBlur(v, 1f), 3, 3), 3, 3)
-            .Add("brightness", OpCategory.Point, PlanSteps.Point(v => PointOps.Brightness(v, 0.05f)))
-            .Add("contrast", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 1.1f)));
-
-        var rows = new List<string[]>
+        foreach (var (w, h) in Sizes)
         {
-            Measure("3 个点算子（计划）", pool => source.Apply(threePoint, pool)),
-            Measure("模糊 + 2 点算子（计划）", pool => source.Apply(blurThenPoint, pool)),
-            Measure("同样三级，逐次调用", pool =>
-            {
-                using var a = source.GaussianBlur(1f, pool);
-                using var b = a.Brightness(0.05f, pool);
-                return b.Contrast(1.1f, pool);
-            }),
-            Measure("3 个点算子，逐次调用", pool =>
-            {
-                using var a = source.Brightness(0.05f, pool);
-                using var b = a.Contrast(1.1f, pool);
-                return b.Invert(pool);
-            }),
-        };
+            Console.WriteLine($"[fusion] {w}x{h}...");
+            var data = Fixture.Make(w, h);
+            using var source = Fixture.Ours(data, w, h);
 
-        report.Table(["链条", "Rent 次数", "租用总量", "每帧 ms", "托管分配/次"], rows);
+            var rows = new List<string[]>();
+            rows.Add(Measure(source, "点算子 ×1", PointPlan(1), pool => source.Apply(PointPlan(1), pool), pool => source.Brightness(0.05f, pool)));
+            rows.Add(Measure(source, "点算子 ×3", PointPlan(3), pool => source.Apply(PointPlan(3), pool),
+                pool => { using var a = source.Brightness(0.05f, pool); using var b = a.Contrast(1.1f, pool); return b.Invert(pool); }));
+            rows.Add(Measure(source, "点算子 ×5", PointPlan(5), pool => source.Apply(PointPlan(5), pool),
+                pool =>
+                {
+                    using var a = source.Brightness(0.05f, pool);
+                    using var b = a.Contrast(1.1f, pool);
+                    using var c = b.Invert(pool);
+                    using var d = c.Brightness(0.05f, pool);
+                    return d.Contrast(1.1f, pool);
+                }));
 
-        report.Line($"> 判读：「模糊 + 2 点算子」的计划租了 **{rows[1][1]}** 次，逐次调用是 **{rows[2][1]}** 次。"
-                  + "若两者相同，说明这一串**没有融合**，融合省下的内存往返并不存在；若计划是 1 次，融合成立。");
+            foreach (var sigma in new[] { 1f, 3f, 8f })
+            {
+                var plan = BlurPlan(sigma);
+                rows.Add(Measure(source, $"模糊 σ={sigma} + 2 点", plan, pool => source.Apply(plan, pool), pool =>
+                {
+                    using var a = source.GaussianBlur(sigma, pool);
+                    using var b = a.Brightness(0.05f, pool);
+                    return b.Contrast(1.1f, pool);
+                }));
+            }
+
+            report.Heading(3, $"{w}×{h}");
+            report.Table(
+                ["链条", "计划 ms", "逐次 ms", "计划 ÷ 逐次", "计划分配", "逐次分配", "Rent（计划 / 逐次）"],
+                rows);
+        }
+
+        report.Line("> 判读：**计划分配到 KiB 级、逐次到 MB 级**就是融合成立。比值列若随尺寸下滑，说明每带的固定成本");
+        report.Line("> 正被摊薄；稳态比值才是融合的时间代价，小图那一列不是。");
     }
 
-    private static string[] Measure(string name, Func<IPixelPool?, OurImage> run)
+    private static ProcessingPlan PointPlan(int steps)
     {
-        // Warm once so the pool is populated and the count reflects the steady state rather than first-touch.
+        var plan = new ProcessingPlan();
+        for (var i = 0; i < steps; i++)
+        {
+            // Three different point operators, cycled, so a five-step chain is not one kernel repeated.
+            plan = (i % 3) switch
+            {
+                0 => plan.Add($"step{i}", OpCategory.Point, PlanSteps.Point(v => PointOps.Brightness(v, 0.05f))),
+                1 => plan.Add($"step{i}", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 1.1f))),
+                _ => plan.Add($"step{i}", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v))),
+            };
+        }
+
+        return plan;
+    }
+
+    private static ProcessingPlan BlurPlan(float sigma) => new ProcessingPlan()
+        .Add("blur", OpCategory.Neighborhood,
+            PlanSteps.Neighborhood(v => FilterOps.GaussianBlur(v, sigma), 3, 3), 3, 3)
+        .Add("brightness", OpCategory.Point, PlanSteps.Point(v => PointOps.Brightness(v, 0.05f)))
+        .Add("contrast", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 1.1f)));
+
+    private static string[] Measure(OurImage source, string name, ProcessingPlan plan,
+        Func<IPixelPool?, OurImage> fused, Func<IPixelPool?, OurImage> separate)
+    {
+        var (fusedRents, fusedAlloc, fusedMs) = One(fused);
+        var (separateRents, separateAlloc, separateMs) = One(separate);
+
+        return
+        [
+            name,
+            Timing.F(fusedMs),
+            Timing.F(separateMs),
+            (fusedMs / separateMs).ToString("F2", CultureInfo.InvariantCulture) + "×",
+            KiB(fusedAlloc),
+            KiB(separateAlloc),
+            $"{fusedRents} / {separateRents}",
+        ];
+    }
+
+    private static (int Rents, long Allocated, double Ms) One(Func<IPixelPool?, OurImage> run)
+    {
         using (var warm = run(null))
         {
         }
@@ -89,16 +137,13 @@ internal static class Fusion
 
         var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
         var times = Timing.Time([new Runner("run", () => { using var r = run(null); })]);
-
-        return
-        [
-            name,
-            spy.Rents.ToString(CultureInfo.InvariantCulture),
-            (spy.Bytes / 1024.0 / 1024.0).ToString("F2", CultureInfo.InvariantCulture) + " MiB",
-            Timing.F(times["run"]),
-            (allocated / 1024.0).ToString("F0", CultureInfo.InvariantCulture) + " KiB",
-        ];
+        return (spy.Rents, allocated, times["run"]);
     }
+
+    private static string KiB(long bytes) =>
+        bytes >= 1024 * 1024
+            ? (bytes / 1024.0 / 1024.0).ToString("F1", CultureInfo.InvariantCulture) + " MiB"
+            : (bytes / 1024.0).ToString("F0", CultureInfo.InvariantCulture) + " KiB";
 
     /// <summary>Delegates to the default pool and counts what passes through it.</summary>
     private sealed class CountingPool : IPixelPool
