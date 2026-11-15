@@ -17,7 +17,9 @@ public class PointLut16Tests
     [InlineData("grayscale")]
     public void Rgba16_PointOperators_TableMatchesTheFloatPath(string op)
     {
-        using var source = Pattern(97, 41);
+        // Above PointOps.Lut16PixelFloor, or both sides would take the float path and the comparison would
+        // prove nothing.
+        using var source = Pattern(768, 700);
 
         var table = WithScalar(false, () => Run(op, source));
         var scalar = WithScalar(true, () => Run(op, source));
@@ -29,7 +31,7 @@ public class PointLut16Tests
     public void Rgba16_BelowTheFloor_StillMatches()
     {
         // Under Lut16PixelFloor the table is not built at all; the two sides must still agree.
-        using var source = Pattern(64, 40);   // 2560 pixels
+        using var source = Pattern(64, 40);   // 2560 pixels, well under the floor
 
         WithScalar(false, () => Run("invert", source)).ShouldBe(WithScalar(true, () => Run("invert", source)));
     }

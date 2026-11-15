@@ -164,7 +164,14 @@ public static class PointOps
     }
 
     /// <summary>Pixels below which the 16-bit table costs more to build than it saves.</summary>
-    internal const long Lut16PixelFloor = 16 * 1024;
+    /// <remarks>
+    /// Building the table is 65536 transform invocations - about 2.3 ms, and it is paid on every call because the
+    /// table is a reused buffer, not a cached result. The float row path costs roughly 5 ns per pixel, so the
+    /// crossover sits near half a million pixels. The first value here was 16384, which is four times too low:
+    /// at 640x360 invert read 0.19x against the oracle, six runs out of six, because a 230K-pixel image paid
+    /// 2.3 ms to save 1.2.
+    /// </remarks>
+    internal const long Lut16PixelFloor = 512 * 1024;
 
     private static WorkingBuffer Apply(PixelView source, IPixelPool? pool, RowTransform transform)
     {
