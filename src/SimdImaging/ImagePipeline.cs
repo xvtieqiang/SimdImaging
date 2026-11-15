@@ -166,12 +166,20 @@ public sealed class ImagePipeline
     public ImagePipeline Equalize() => Step(PlanOps.Equalize());
 
     /// <summary>
-    /// Runs the chain and returns the image. The source is not modified.
+    /// Runs the chain and returns a new image. The source is not modified; the result belongs to the caller.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A terminal call is unavoidable: the chain has to stay lazy until the last step is added, and only the
     /// caller knows when that is. It is named for what it returns rather than for what it does, the way
     /// <c>ToArray</c> ends a LINQ query — <c>Run</c> reads like it returns nothing.
+    /// </para>
+    /// <para>
+    /// <b>Dispose the result.</b> It holds a buffer leased from a pool, and nothing in this library has a
+    /// finalizer, so <c>Dispose</c> is the only thing that gives that buffer back. An image that is dropped
+    /// instead is still collected by the GC, but the pool never sees it again: the next call rents a fresh
+    /// buffer, and at 8K that is 132 MiB a time.
+    /// </para>
     /// </remarks>
     public Image ToImage()
     {
