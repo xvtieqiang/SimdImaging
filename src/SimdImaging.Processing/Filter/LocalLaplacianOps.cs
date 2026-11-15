@@ -78,7 +78,7 @@ public static class LocalLaplacianOps
             heights[l] = Pyramid.DownsampledLength(heights[l - 1]);
         }
 
-        var estimate = EstimateBytes(widths, heights, levelCount);
+        var estimate = EstimateBytes(widths, heights, levelCount, samples);
         if (estimate > MaxScratchBytes)
             throw new InvalidOperationException(
                 $"Local Laplacian would need an estimated {estimate} bytes, above the {MaxScratchBytes}-byte limit.");
@@ -129,6 +129,13 @@ public static class LocalLaplacianOps
             var step = samples > 1 ? (maximum - minimum) / (samples - 1) : 0.0;
             var lut = BuildRemapTable(source.Format, samples, minimum, step, alpha, beta, sigmaR);
 
+            // Which sample a pixel belongs to depends on the level's own gaussian plane and the sample grid —
+            // neither of which the sample loop changes. Recomputing it inside that loop meant evaluating the
+            // same double division 32 times for the same pixel (the default `samples`), and the whole
+            // assignment costs about a third more than one level's pixels.
+            var assignments = BuildAssignments(gaussian, widths, heights, effectiveLevels, minimum, step,
+                samples, out var assignmentOffsets);
+
             // current holds R_l, next holds R_{l+1}; no swapping, because a swap would hand the level-0
             // remap a level-1-sized buffer on the next sample.
             var current = new float[3][];
@@ -158,11 +165,23 @@ public static class LocalLaplacianOps
                             continue; // the base band is the original residual, set before the sample loop
 
                         var coefficient = laplacian[c][l];
-                        var reference = gaussian[c][l];
-                        for (var p = 0; p < coefficient.Length; p++)
+                        if (assignments is null)
                         {
-                            if (NearestIndex(reference[p], minimum, step, samples) == s)
-                                coefficient[p] = current[c][p] - upsampled[c][p];
+                            var reference = gaussian[c][l];
+                            for (var p = 0; p < coefficient.Length; p++)
+                            {
+                                if (NearestIndex(reference[p], minimum, step, samples) == s)
+                                    coefficient[p] = current[c][p] - upsampled[c][p];
+                            }
+                        }
+                        else
+                        {
+                            var offset = assignmentOffsets[(c * effectiveLevels) + l];
+                            for (var p = 0; p < coefficient.Length; p++)
+                            {
+                                if (assignments[offset + p] == s)
+                                    coefficient[p] = current[c][p] - upsampled[c][p];
+                            }
                         }
                     }
 
@@ -194,13 +213,20 @@ public static class LocalLaplacianOps
             buffer = new float[length];
     }
 
-    private static long EstimateBytes(int[] widths, int[] heights, int levelCount)
+    private static long EstimateBytes(int[] widths, int[] heights, int levelCount, int samples)
     {
         long bytes = 0;
         for (var l = 0; l < levelCount; l++)
             bytes += 4L * widths[l] * heights[l];
 
         bytes += 12L * widths[0] * heights[0];
+
+        // The per-pixel sample assignment, when one is built. Reporting less than the truth here would let a
+        // call through the ceiling and then allocate above it anyway.
+        if (samples <= MaxByteIndex)
+            for (var l = 0; l < levelCount; l++)
+                bytes += 3L * widths[l] * heights[l];
+
         return bytes;
     }
 
@@ -341,6 +367,53 @@ public static class LocalLaplacianOps
             return centre + sign * sigmaR * Math.Pow(magnitude / sigmaR, alpha);
 
         return centre + sign * (sigmaR + (double)beta * (magnitude - sigmaR));
+    }
+
+    /// <summary>Largest sample count a byte can index.</summary>
+    private const int MaxByteIndex = 256;
+
+    /// <summary>
+    /// Assigns every (channel, level, pixel) to its nearest sampled intensity, once.
+    /// </summary>
+    /// <remarks>
+    /// Returns null when <paramref name="samples"/> does not fit in a byte; the caller then keeps the
+    /// per-pixel path rather than growing to two bytes per pixel for a case that never appears in practice.
+    /// The values are the same <see cref="NearestIndex"/> results the loop used to recompute, so nothing
+    /// downstream can tell the difference.
+    /// </remarks>
+    private static byte[]? BuildAssignments(float[][][] gaussian, int[] widths, int[] heights, int levelCount,
+        double minimum, double step, int samples, out int[] offsets)
+    {
+        if (samples > MaxByteIndex)
+        {
+            offsets = [];
+            return null;
+        }
+
+        offsets = new int[3 * levelCount];
+        long total = 0;
+        for (var c = 0; c < 3; c++)
+        {
+            for (var l = 0; l < levelCount; l++)
+            {
+                offsets[(c * levelCount) + l] = (int)total;
+                total += (long)widths[l] * heights[l];
+            }
+        }
+
+        var table = new byte[total];
+        for (var c = 0; c < 3; c++)
+        {
+            for (var l = 0; l < levelCount; l++)
+            {
+                var offset = offsets[(c * levelCount) + l];
+                var plane = gaussian[c][l];
+                for (var p = 0; p < plane.Length; p++)
+                    table[offset + p] = (byte)NearestIndex(plane[p], minimum, step, samples);
+            }
+        }
+
+        return table;
     }
 
     private static int NearestIndex(double value, double minimum, double step, int samples)

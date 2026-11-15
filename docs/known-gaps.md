@@ -41,7 +41,7 @@
 |---|---|---|---|
 | nlm 1080p S=5 | 16126 | AVX2（距离平方和向量化，其余标量） | `Filter/NonLocalMeansOps.cs` |
 | nlm 1080p S=3 | 5729 | 同上 | 同上 |
-| ll 1080p L=5 S=32 | 1798 | **标量**：金字塔逐级重映射，索引由像素值决定（gather） | `Filter/LocalLaplacianOps.cs` |
+| ll 1080p L=5 S=32 | **1464–1493**（原 1798–1960） | **标量**：金字塔逐级重映射；已做「样本分配表」预计算（见下） | `Filter/LocalLaplacianOps.cs` |
 | guided.cross 4K | 770 | AVX2 | `Filter/GuidedFilterOps.cs` |
 | reduce colors 4K（抖动） | 614 | **标量**：误差扩散天然串行，前一像素决定后一像素 | `Filter/DitherOps.cs` |
 | guided filter 4K | 577 | AVX2 | `Filter/GuidedFilterOps.cs` |
@@ -75,6 +75,11 @@
    （`0xRRGGBB < 2²⁴`，float 可精确表示）按源行算一次，内层退化为「2 次读取 + 4 次整数 RMW」
    （186–194 → 117–141 ms）。
 3. **`FloatScratch` 替换每 worker 每次调用的 `new float[]`**：分配 363 KiB → 97 KiB。
+
+**Local Laplacian 的 −18%（同日）**：`NearestIndex(gaussian[c][l][p], ...)` 夹在 `samples` 循环最内层，对同一个
+`(channel, level, pixel)` 被重复求值 **32 次**（默认 `samples=32`），而 `gaussian` 与采样网格在整个样本循环里都不变。
+改成循环外建一张 `byte` 分配表（`samples ≤ 256` 时），内层只做一次数组比较；表大小约 1.33×W×H×3 字节，
+已计入 `EstimateBytes`（估算器少报会让调用越过 `MaxScratchBytes` 上限后仍分配）。1798–1960 → **1464–1493 ms**。
 
 **同批试过但回滚的**：`chroma 4:2:0`（228 ms）把 `ColorMath.Coefficients(ycbcr)` 从逐像素提到每次调用——
 **没有任何变化**（228 → 235–239 ms，落在噪声内），按纪律回滚，不留「看起来更干净但没收益」的改动。
