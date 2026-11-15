@@ -89,6 +89,22 @@ dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- seamprofile
 真正的空间在能量与 DP 内部。内存侧 8K 峰值 416 MiB 里，`Workspace` 推算约 199 MiB（其中 `_blocked`
 33 MiB 在删除路径上从不被读）。
 
+
+### 能量在 `FindSeam` 里只占 17%（消融，2026-11-16）
+
+`FindSeam` 占整次切割的 80–85%，所以「增量能量更新」看着像大机会。**消融说不是**：把 `Energy()`
+在标量路径与 `WriteRow4` 里同时短路（只测时间，字节必然变，用完即回滚），1080p 删 50 列：
+
+| | FindSeam | 总时长 |
+|---|---|---|
+| 原样 | 400.5 ms | 487.2 ms |
+| 能量短路 | **331.4 ms** | 447.6 ms |
+
+**能量 = 69 ms = `FindSeam` 的 17%、总时长的 14%。** 即使缓存命中率 100% 也只值这么多，而增量实现
+还要为「逻辑列 → 原始列」付 gather 的代价。结论：瓶颈是 **DP 递推本身**，那条 O(W·H) 且已向量化的链。
+这条实验同时说明 `known-gaps.md` 里原来的否决理由（「受影响列无上界」）**不成立**——按原始坐标存时每行只
+变 1–2 格；结论仍然是不做，但依据换成了这个数字。
+
 ## 尺寸 × 工作格式矩阵（`matrix` 模式，2026-11-15）
 
 `dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- matrix` 跑三个尺寸 × 两种工作格式，
