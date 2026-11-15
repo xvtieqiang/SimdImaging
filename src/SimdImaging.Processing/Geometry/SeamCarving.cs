@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using Sdcb.SimdCodecs.Abstractions;
@@ -27,6 +28,46 @@ public static class SeamCarving
 {
     /// <summary>Test hook: forces the scalar DP row so a test can compare the two paths on real data.</summary>
     internal static bool ForceScalarVector;
+
+    /// <summary>
+    /// Phase timing, off by default: six counters written once per phase per call, and four per seam.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The same shape as <c>PlanarConvolve.ForceScalar</c>: internal, no <c>#if</c>, read in the
+    /// shipped path as a branch that is never taken. What it costs when off is the branch — it never touches a
+    /// value that takes part in the arithmetic, so it cannot change a byte.
+    /// </para>
+    /// <para>
+    /// The brackets deliberately sit outside the per-pixel loops: a timing check inside <c>WriteRow4</c> would
+    /// stop the four lanes from being one block. <see cref="Interlocked"/> rather than <c>+=</c> because the
+    /// concurrency tests run the operator on several threads at once.
+    /// </para>
+    /// </remarks>
+    internal static bool ProfilePhases;
+
+    internal static long TicksCopy;
+    internal static long TicksPrime;
+    internal static long TicksFind;
+    internal static long TicksCut;
+    internal static long TicksShift;
+    internal static long TicksCrop;
+    internal static long TicksTranspose;
+
+    /// <summary>Zeroes every phase counter; call before the run being measured.</summary>
+    internal static void ResetProfile()
+    {
+        TicksCopy = 0;
+        TicksPrime = 0;
+        TicksFind = 0;
+        TicksCut = 0;
+        TicksShift = 0;
+        TicksCrop = 0;
+        TicksTranspose = 0;
+    }
+
+    private static void Close(long startTicks, ref long counter) =>
+        Interlocked.Add(ref counter, Stopwatch.GetTimestamp() - startTicks);
 
     /// <summary>
     /// Removes <paramref name="count"/> connected seams, shrinking the image by one column or row each.
@@ -127,21 +168,46 @@ public static class SeamCarving
             throw new ArgumentOutOfRangeException(nameof(count), count,
                 $"Cannot remove {count} of {width} columns; at least one must remain.");
 
+        var start = Stopwatch.GetTimestamp();
         var work = Transforms.Copy(source, pool);
+        if (ProfilePhases)
+            Close(start, ref TicksCopy);
+
         try
         {
+            start = Stopwatch.GetTimestamp();
             var workspace = new Workspace(width, height);
             workspace.PrimeLuma(work.View);
+            if (ProfilePhases)
+                Close(start, ref TicksPrime);
+
             var logical = width;
             for (var i = 0; i < count; i++)
             {
+                start = Stopwatch.GetTimestamp();
                 var seam = workspace.FindSeam(work.View, logical);
+                if (ProfilePhases)
+                    Close(start, ref TicksFind);
+
+                start = Stopwatch.GetTimestamp();
                 Workspace.CutSeam(work.View, seam);
+                if (ProfilePhases)
+                    Close(start, ref TicksCut);
+
+                start = Stopwatch.GetTimestamp();
                 workspace.ShiftLuma(seam, logical);
+                if (ProfilePhases)
+                    Close(start, ref TicksShift);
+
                 logical--;
             }
 
-            return Transforms.Crop(work.View, new PixelRect(0, 0, logical, height), pool);
+            start = Stopwatch.GetTimestamp();
+            var cropped = Transforms.Crop(work.View, new PixelRect(0, 0, logical, height), pool);
+            if (ProfilePhases)
+                Close(start, ref TicksCrop);
+
+            return cropped;
         }
         finally
         {
@@ -199,11 +265,18 @@ public static class SeamCarving
 
     private static WorkingBuffer RemoveHorizontal(PixelView source, int count, IPixelPool? pool)
     {
+        var start = Stopwatch.GetTimestamp();
         var transposed = Orientation.Transpose(source, false, pool);
+        if (ProfilePhases)
+            Close(start, ref TicksTranspose);
         try
         {
             using var carved = RemoveVertical(transposed.View, count, pool);
-            return Orientation.Transpose(carved.View, false, pool);
+            start = Stopwatch.GetTimestamp();
+            var result = Orientation.Transpose(carved.View, false, pool);
+            if (ProfilePhases)
+                Close(start, ref TicksTranspose);
+            return result;
         }
         finally
         {
@@ -213,7 +286,10 @@ public static class SeamCarving
 
     private static WorkingBuffer InsertHorizontal(PixelView source, int count, IPixelPool? pool)
     {
+        var start = Stopwatch.GetTimestamp();
         var transposed = Orientation.Transpose(source, false, pool);
+        if (ProfilePhases)
+            Close(start, ref TicksTranspose);
         try
         {
             using var carved = InsertVertical(transposed.View, count, pool);

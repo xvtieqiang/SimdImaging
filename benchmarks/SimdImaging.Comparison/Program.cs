@@ -2,11 +2,17 @@ using System.Globalization;
 using SimdImaging.Comparison;
 
 // Comparison harness. Usage:
-//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|sizes|mem|matrix|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate] [WxH]
+//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|sizes|mem|seamprofile|matrix|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate] [WxH]
 // Not part of SimdImaging.slnx on purpose: the shipped solution must stay buildable without the
 // git-ignored Six Labors licence file (AGENTS.md clean-room rules).
 
 // A fresh-process worker for peak working-set measurement (SimdCodecs' PeakMemory protocol).
+if (args.Length > 0 && args[0] == "seamprofile-child")
+{
+    SeamProfile.Child(args);
+    return;
+}
+
 if (args.Length > 0 && args[0] == "cores-child")
 {
     Cores.Child(args);
@@ -164,6 +170,11 @@ try
     {
         Console.WriteLine($"[memsteady] fresh-process peak/live at {width}x{height}, 1/3/10 calls...");
         MemSteady.Write(report, width, height);
+    }
+
+    if (mode is "seamprofile")
+    {
+        SeamProfile.Write(report);
     }
 
     if (mode is "mem")

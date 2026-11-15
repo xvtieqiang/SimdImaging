@@ -57,6 +57,30 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks [iterations]
 **这个模式测不了峰值**：冷进程试过，七项全读 0 MiB——夹具已经把堆提交好了，17 MiB 的平面落在已驻留页里，
 工作集不再增长。绝对峰值仍以 `peakmem`（真子进程）为准。
 
+
+## Seam Carving 分段剖析（`seamprofile`，2026-11-15）
+
+```
+dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- seamprofile
+```
+
+相位读数来自**产品算子自己**的 `SeamCarving.ProfilePhases` 计数器（每阶段一次、每缝四次，默认关、
+关闭时只剩一个不跳转的分支），不是复刻件的计时——铁律 4 在这里同样适用。每格是**全新子进程**：
+三遍 GC 取基线、1 ms 采样 `WorkingSet64`，冷格只调一次、热格 3 次中位。
+
+| 尺寸 | 冷启动总 ms | FindSeam | CutSeam | ShiftLuma | Copy+Prime+Crop | ms/缝 | 峰值 RSS | 调用后 live |
+|---|---|---|---|---|---|---|---|---|
+| 1920×1080，50 缝 | 456.7 | **374.2（82%）** | 26.6（5.8%） | 24.0（5.3%） | 28.9（6.3%） | 9.1 | 28.4 MiB | 16.0 MiB |
+| 3840×2160，50 缝 | 1722.9 | **1455.4（84%）** | 101.6（5.9%） | 102.9（6.0%） | 60.3（3.5%） | 34.5 | 107.5 MiB | 64.0 MiB |
+| 7680×4320，10 缝 | 1526.9 | **1196.0（78%）** | 73.3（4.8%） | 73.8（4.8%） | 180.9（11.8%） | 152.7 | **416.3 MiB** | 254.0 MiB |
+
+两条自检列是这张表存在的条件：**Σ相位/总 = 99.7–99.9%**（漏了括号点就会掉下来），
+**同尺寸冷热 SHA 相同**（不同尺寸的 SHA 本来就不同，拿它们互比是错的——第一版就是这么错的）。
+
+结论：**85% 的时间在 `FindSeam`**，Cut/Shift 各 5%。所以「减少数据搬移」（Cut/Shift）天花板是 10%，
+真正的空间在能量与 DP 内部。内存侧 8K 峰值 416 MiB 里，`Workspace` 推算约 199 MiB（其中 `_blocked`
+33 MiB 在删除路径上从不被读）。
+
 ## 尺寸 × 工作格式矩阵（`matrix` 模式，2026-11-15）
 
 `dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- matrix` 跑三个尺寸 × 两种工作格式，
