@@ -178,6 +178,15 @@ public static class Transforms
             return destination;
         }
 
+        // 32-bit float per channel is sixteen bytes, and it was falling through to the per-pixel Slice+CopyTo
+        // loop below: measured 0.39x against the oracle at 1080p and 0.43x at 8K, against 1.7-2.1x for every
+        // other float operator. A 16-byte move per pixel is the same permutation, just not one byte at a time.
+        if (bytesPerPixel == 16)
+        {
+            Transpose<Vector128<byte>>(source, destination.View, clockwise);
+            return destination;
+        }
+
         for (var y = 0; y < destination.Height; y++)
         {
             var to = destination.View.Row(y);

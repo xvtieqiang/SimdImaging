@@ -202,6 +202,17 @@ using (var seam = image.RemoveSeams(SeamAxis.Vertical, 2))
 
 // Insertion shares FindSeam with removal but is the only user of the blocked mask, and it had no hash entry
 // at all - so nothing covered the path the mask change touches.
+// Thirty-two-bit float takes the sixteen-byte transpose arm, which the Rgba8 image above cannot reach.
+using (var floatImage = Image.Create(37, 23, WorkingFormat.Rgba32F))
+{
+    var samples = MemoryMarshal.Cast<byte, float>(floatImage.WritablePixels);
+    for (var i = 0; i < samples.Length; i++)
+        samples[i] = (i * 7919 % 1000) / 1000f;
+
+    using var turned = floatImage.Rotate90();
+    Console.WriteLine($"rotate90.f32 sha={Hash(turned.WritablePixels)}");
+}
+
 using (var inserted = image.InsertSeams(SeamAxis.Vertical, 3))
     Console.WriteLine($"seam.insert sha={Hash(inserted.WritablePixels)}");
 
