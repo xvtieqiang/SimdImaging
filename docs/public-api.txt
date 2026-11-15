@@ -313,6 +313,7 @@
   SimdImaging.Image.Metadata : Sdcb.SimdCodecs.Abstractions.ImageMetadata { get; }
   SimdImaging.Image.MinMax() -> System.ValueTuple<SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange>
   SimdImaging.Image.MotionBlur(System.Int32 length, System.Single angleDegrees, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
+  SimdImaging.Image.Mutate(System.Action<SimdImaging.ImageChain> steps, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Noise(System.Single amount, SimdImaging.Processing.NoiseKind kind, System.UInt32 seed, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.NonLocalMeans(System.Int32 searchRadius, System.Int32 patchRadius, System.Single h, System.Single sigma, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Normalize(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
@@ -798,14 +799,14 @@
   SimdImaging.Processing.PlanObserver.EndInvoke(System.IAsyncResult result) -> System.Void
   SimdImaging.Processing.PlanObserver.Invoke(System.Int32 index, System.String name, SimdImaging.Abstractions.PixelView result) -> System.Void
   SimdImaging.Processing.PlanReport.#ctor()
-  SimdImaging.Processing.PlanReport.BandCount : System.Int32 { get; set; }
-  SimdImaging.Processing.PlanReport.ElapsedTicks : System.Int64 { get; set; }
-  SimdImaging.Processing.PlanReport.FallbackReason : SimdImaging.Processing.FusionFallbackReason { get; set; }
-  SimdImaging.Processing.PlanReport.PoolRentCount : System.Int32 { get; set; }
-  SimdImaging.Processing.PlanReport.PoolReturnCount : System.Int32 { get; set; }
-  SimdImaging.Processing.PlanReport.SegmentCount : System.Int32 { get; set; }
-  SimdImaging.Processing.PlanReport.Segments : System.Collections.Generic.IReadOnlyList<SimdImaging.Processing.PlanSegment> { get; set; }
-  SimdImaging.Processing.PlanReport.WorkerCount : System.Int32 { get; set; }
+  SimdImaging.Processing.PlanReport.BandCount : System.Int32 { get; }
+  SimdImaging.Processing.PlanReport.ElapsedTicks : System.Int64 { get; }
+  SimdImaging.Processing.PlanReport.FallbackReason : SimdImaging.Processing.FusionFallbackReason { get; }
+  SimdImaging.Processing.PlanReport.PoolRentCount : System.Int32 { get; }
+  SimdImaging.Processing.PlanReport.PoolReturnCount : System.Int32 { get; }
+  SimdImaging.Processing.PlanReport.SegmentCount : System.Int32 { get; }
+  SimdImaging.Processing.PlanReport.Segments : System.Collections.Generic.IReadOnlyList<SimdImaging.Processing.PlanSegment> { get; }
+  SimdImaging.Processing.PlanReport.WorkerCount : System.Int32 { get; }
   SimdImaging.Processing.PlanSegment.#ctor(System.Int32 FirstStep, System.Int32 StepCount, System.Boolean Fused, System.String Name)
   SimdImaging.Processing.PlanSegment.Deconstruct(System.Int32& FirstStep, System.Int32& StepCount, System.Boolean& Fused, System.String& Name) -> System.Void
   SimdImaging.Processing.PlanSegment.Equals(SimdImaging.Processing.PlanSegment other) -> System.Boolean
@@ -887,8 +888,19 @@
   SimdImaging.Processing.Resampler.Bicubic = 3
   SimdImaging.Processing.Resampler.Bilinear = 2
   SimdImaging.Processing.Resampler.Box = 1
+  SimdImaging.Processing.Resampler.CatmullRom = 6
+  SimdImaging.Processing.Resampler.Hermite = 9
+  SimdImaging.Processing.Resampler.Lanczos2 = 13
   SimdImaging.Processing.Resampler.Lanczos3 = 4
+  SimdImaging.Processing.Resampler.Lanczos5 = 14
+  SimdImaging.Processing.Resampler.Lanczos8 = 15
+  SimdImaging.Processing.Resampler.MitchellNetravali = 8
   SimdImaging.Processing.Resampler.Nearest = 0
+  SimdImaging.Processing.Resampler.Robidoux = 11
+  SimdImaging.Processing.Resampler.RobidouxSharp = 12
+  SimdImaging.Processing.Resampler.Spline = 7
+  SimdImaging.Processing.Resampler.Triangle = 5
+  SimdImaging.Processing.Resampler.Welch = 10
   SimdImaging.Processing.RichardsonLucyOps.RequiredHalo(System.Single sigma, System.Int32 iterations) -> System.Int32
   SimdImaging.Processing.RichardsonLucyOps.RequiredHaloMotion(System.Int32 length, System.Int32 iterations) -> System.Int32
   SimdImaging.Processing.RichardsonLucyOps.RichardsonLucy(SimdImaging.Abstractions.PixelView source, System.Single sigma, System.Int32 iterations, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer

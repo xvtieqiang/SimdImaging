@@ -14,7 +14,7 @@ namespace SimdImaging;
 /// </summary>
 public sealed partial class Image : IDisposable
 {
-    private readonly ImageFrame[] _frames;
+    private ImageFrame[] _frames;
     private int _disposed;
 
     private Image(ImageFrame[] frames, ImageInfo info, WorkingFormat format,
@@ -34,19 +34,20 @@ public sealed partial class Image : IDisposable
     public int Height => Info.Height;
 
     /// <summary>The layout every frame is stored in.</summary>
-    public WorkingFormat Format { get; }
+    public WorkingFormat Format { get; private set; }
 
     /// <summary>Number of frames. One in this milestone; multi-frame arrives with the frame reader.</summary>
     public int FrameCount => _frames.Length;
 
     /// <summary>Header information: format, real bit depth, orientation, resolution, colour encoding.</summary>
-    public ImageInfo Info { get; }
+    /// <remarks>Private setter only so <see cref="Mutate"/> can adopt a result; callers see a getter.</remarks>
+    public ImageInfo Info { get; private set; }
 
     /// <summary>How the samples encode colour. Informational: no operator rescales pixels because of it.</summary>
-    public ColorEncoding ColorEncoding { get; }
+    public ColorEncoding ColorEncoding { get; private set; }
 
     /// <summary>The Exif / XMP / ICC blocks the file carried, for passing on to an encoder.</summary>
-    public ImageMetadata Metadata { get; }
+    public ImageMetadata Metadata { get; private set; }
 
     /// <summary>One frame.</summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is outside the image.</exception>
@@ -147,6 +148,70 @@ public sealed partial class Image : IDisposable
     }
 
     /// <summary>Turns an operator's output buffer into a new image with this image's metadata and colour signalling.</summary>
+    /// <summary>
+    /// Runs a chain and applies the result to <em>this</em> image, the way a mutating call site expects.
+    /// </summary>
+    /// <remarks>
+    /// Every other operator returns a new image and leaves the source untouched; this one deliberately does the
+    /// opposite, because ported call sites read <c>image.Mutate(x =&gt; x.Resize(...))</c> and then keep using
+    /// <c>image</c>. Returning a new image from that shape would be a silent trap: the call compiles, the
+    /// original never changes, and the bug surfaces far away.
+    /// <para>
+    /// The old buffers are released to the pool once the new ones are in place, so the peak is the same two
+    /// buffers <see cref="Clone(Action{ImageChain}, IPixelPool?)"/> needs. If the chain throws, the image is
+    /// left exactly as it was.
+    /// </para>
+    /// </remarks>
+    /// <param name="steps">Records the operations; the same methods <see cref="ImageChain"/> exposes.</param>
+    /// <param name="pool">Optional pool for the intermediate and destination buffers.</param>
+    /// <returns>This image, so the call can be chained or ignored.</returns>
+    /// <exception cref="NotSupportedException">The image has more than one frame.</exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    public Image Mutate(Action<ImageChain> steps, IPixelPool? pool = null)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (_frames.Length > 1)
+            throw new NotSupportedException(
+                $"The image has {_frames.Length} frames and a chain edits one; select a frame with KeepFrames first.");
+
+        var chain = new ImageChain();
+        steps(chain);
+
+        var buffer = chain.Run(_frames[0].Pixels.View, pool);
+        Image replacement;
+        try
+        {
+            replacement = ReplaceBuffer(buffer, Metadata, Info.Orientation);
+        }
+        catch
+        {
+            buffer.Dispose();
+            throw;
+        }
+
+        Adopt(replacement);
+        return this;
+    }
+
+    /// <summary>
+    /// Takes over another image's frames and header, releasing the ones held here. The donor is left empty, so
+    /// disposing it afterwards is harmless.
+    /// </summary>
+    private void Adopt(Image donor)
+    {
+        var previous = _frames;
+        _frames = donor._frames;
+        donor._frames = [];
+        Info = donor.Info;
+        Format = donor.Format;
+        ColorEncoding = donor.ColorEncoding;
+        Metadata = donor.Metadata;
+
+        foreach (var frame in previous)
+            frame.Dispose();
+    }
+
     internal Image ReplaceBuffer(WorkingBuffer buffer) => ReplaceBuffer(buffer, Metadata, Info.Orientation);
 
     /// <summary>Same, with the metadata and orientation replaced — what a transcode or an auto-orient needs.</summary>

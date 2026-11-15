@@ -109,8 +109,10 @@ bash tests/SimdImaging.AotSmoke/run.sh            # needs the C++ workload (see 
 
 ## Status (2026-11-15)
 
-**Milestone status: M0, M1 and M6–M14 complete and verified. M15 in progress. M5 (the acceptance report)
-not started. M2–M4 implemented, exit criteria only partly verified.**
+**Milestone status: M0, M1, M5 and M6–M14 complete and verified. M15 in progress. M2–M4 implemented,
+exit criteria only partly verified.** M5 closed on 2026-11-15 with all seven §1.3 criteria carrying a
+number or a stated reason why they cannot be measured — two are not met (steady-state allocation,
+8K peak), three are partial. Closing M5 does not mean the seven are met.
 Each milestone has acceptance criteria in `docs/architecture.md` §11; M2's blur criterion (1.61–1.86× at
 1080p), M3's quantisation PSNR, M4's 8K memory, and the M6–M14 rows carry measured numbers. M2's
 "zero allocation after point fusion" was re-measured on the M10 fused path on 2026-11-15 and is now
@@ -122,7 +124,7 @@ coverage and M4's HEIF endpoint remain unjudged for the reasons recorded in `doc
 Do not call a milestone done until its row has numbers **and they meet the criterion**.
 
 M2–M4 in code: `SimdImaging.Processing` has geometry (Crop, Pad, Trim, Flip, Rotate 90/180/arbitrary, affine, perspective, Resize with
-five resamplers and the five resize modes, canvas pad/crop, tiling, rounded corners, entropy crop, transposes, combined rotate-flip, delegate warping, point sampling, aspect-preserving resize by one axis), point operators (Brightness, Contrast, Saturation, Grayscale, Invert, Gamma, Threshold, Posterize,
+sixteen named resamplers (fifteen kernels; `Triangle` is `Bilinear` and `CatmullRom` is `Bicubic`) and the five resize modes, canvas pad/crop, tiling, rounded corners, entropy crop, transposes, combined rotate-flip, delegate warping, point sampling, aspect-preserving resize by one axis), point operators (Brightness, Contrast, Saturation, Grayscale, Invert, Gamma, Threshold, Posterize,
 Levels, colour matrices, hue rotation, sepia, normalize,
 vibrance, temperature, tint, colour balance, channel swap,
 black/white, curves, opacity), blurs

@@ -89,8 +89,10 @@ public class PublicApiTests
                     if (property.Name.Contains('<'))
                         continue;
 
-                    var accessors = (property.GetMethod is not null ? "get; " : string.Empty)
-                                    + (property.SetMethod is not null ? "set; " : string.Empty);
+                    // IsPublic matters: a private setter is not part of the shipped surface, and recording it
+                    // as "set;" would make an internal refactor read like a breaking API change.
+                    var accessors = (property.GetMethod?.IsPublic == true ? "get; " : string.Empty)
+                                    + (property.SetMethod?.IsPublic == true ? "set; " : string.Empty);
                     lines.Add($"  {Name(type)}.{property.Name} : {Friendly(property.PropertyType)} {{ {accessors}}}");
                 }
 

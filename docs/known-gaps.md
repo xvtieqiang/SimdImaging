@@ -33,6 +33,25 @@
 | CC0 语料 | 已实现（M6）：`tests/Fixtures/corpus.tsv` 2 条 Wikimedia Commons `Category:CC-Zero` 真实照片，URL + 实测 SHA-256（2026-11-14 下载校验）；`.cache/` git-ignored 不入库；离线由 `SyntheticCorpus.cs` 的 9 类确定性合成图兜底。实验台 3 张 Unsplash 演示图仍非测试夹具 |
 | AOT smoke 覆盖 | M6 补 `warp` / `samplepixel` 两条 hash 与 `REQUIRED` 必需项检查，防止「绿的 gate 什么都没验」；全量 31+ 条目核对留 M15 |
 
+## M5 验收（完成，2026-11-15）
+
+出口条件是「§1.3 七条全部出数，输的条目写清原因」。下表即那七条：**每条都有数字，或有明确的「测不了」理由**。
+判定口径不修饰：达标就是达标，没达标就写没达标，测不了的写明为什么测不了。
+
+| # | 维度 | 目标 | 实测（本机，2026-11-15） | 判定 |
+|---|---|---|---|---|
+| 1 | 端到端吞吐 | 19 个固定场景 ≥ 4.1.3，其中 resize/模糊/合成 ≥ 1.5× | 1080p **19/19 领先、几何均值 2.1632×**（cold 1.7513×）；resize 2.09–2.77×、gaussian-blur 1.75×、equalize 7.20×。**640×360 的历史读数是 12/17**（11-07，最小缩放 0.22×）；**「合成」没有单列对拍场景**，只有本库自己的 composite 计时 | ✅ 达标（按 1080p 记账）；两处口径缺口已写明：小尺寸不达标、合成无对拍 |
+| 2 | 稳态分配 | 池化 + 计划复用后 **0 B/op** | 融合路径最强链 `AddPointLut`×3 稳态 **≈4.3 KiB/op**（每线程尺）/ **≈6.0 KiB/op**（进程级）；`degree=1` 仍 2144 B/op。残余是 per-call 计划重建，不是像素缓冲 | ❌ **未达标**（已判定，三次独立运行可复现） |
+| 3 | 峰值内存 | 8K ≤ 2.5× 单帧（316.4 MiB） | 4 场景 **0.74 / 2.68 / 1.01 / 1.01×**；`gaussian-blur` 339.0 MiB **超 7.1%**，对手同项 265.9 MiB | ❌ **3/4 达标**，`gaussian-blur` 未达标 |
+| 4 | 位深保真 | 10/16 bit 全链路不塌到 8 bit | 16-bit PNG 往返**逐字节精确**（`Png_Rgba16_RoundTripsByteExact`）；10-bit HEIF 端点**测不了**：HEIF 是独立包且需手动注册，本库不接入，也没有 10-bit 语料 | ⚠ 部分：16-bit 端点达标，HEIF 端点按「架构下不可测」记账 |
+| 5 | 确定性 | 四档 SIMD 逐字节一致 | **三档**（AVX2 / V128 / 标量）今日实测：各 **963 例全绿**，算子输出 body SHA 同一 `9bd6c8df…`；第四档 `src/` 内 0 处 `Vector512`，未实现 | ⚠ 部分：三档达标，第四档是预留 |
+| 6 | 色彩 | ICC→ICC 与 4.1.3 对拍，ΔE2000 ≤ 1（矩阵/TRC）、≤ 2（CLUT） | 尺子已落地：ΔE2000 对 Sharma 34 组全部 ≤1e-4；ICC 1080p 实测 40.0 ms（grid=33）/ 34.8 ms（matrix-TRC）。**与 4.1.3 的同图对拍未做**（对拍场景集里没有 ICC 项） | ⚠ 部分：尺子达标，对拍缺一项 |
+| 7 | AOT | 全库 NativeAOT + 零 trim 警告作为构建门禁 | `IsAotCompatible` 全库开启，构建 0 警告；AOT 双档（AVX2 / SSE2）与 JIT **逐字节一致**，55 条 hash / 23 条设闸 | ✅ 达标 |
+
+**总账：2 条达标、3 条部分、2 条未达标。** 两条未达标（0 B/op、8K 峰值）不是「没测」，是「测了、输了」；
+三条部分各有明确的缺口：HEIF 端点不可测、AVX-512 未实现、ICC 缺对手对拍。
+M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此关闭；**但这不等于七条都达标**——那是产品目标，不是本里程碑的门槛。
+
 ## M8 采样三链统一（完成，2026-11-14）
 
 | 项 | 现状 |
@@ -319,7 +338,7 @@
 |---|---|
 | EXR / TGA / CgBI PNG / ANI | ImageSharp 4.x 有，`Sdcb.SimdCodecs` 侧没有；属 codec 层缺口，不在本项目范围 |
 | 文字 | ImageSharp 靠 `SixLabors.Fonts`；我们不做 |
-| 重采样器 | 设计 16 种，`Resampler` 枚举**只实现 5 种**（Nearest / Box / Bilinear / Bicubic / Lanczos3）；4.1.3 公开 16 个 `KnownResamplers` 名称。属功能缺口，不假装覆盖 |
+| 重采样器 | ~~只实现 5 种~~ **2026-11-15 补齐**：16 个成员 / 15 个核，覆盖 4.1.3 全部 15 个 `KnownResamplers` 名称（实测反射是 15 个，此前写 16 是错的）。数值各自实现、不逐位对齐，属 B2 口径 |
 | Brightness 参数语义 | 本库**自有设计**是加性偏移（0.2 = +0.2×满量程）；参照实现同名 API 是另一套语义，同参数对拍 PSNR 仅 **4.23 dB**。这是功能对比时发现的「名称相同、语义不同」事实，**不是缺陷**：本项目按自己的语义文档使用，**不为兼容其他项目改 API、不提供兼容模式/兼容参数**。对标表必须写出口径，不得据同名宣称覆盖 |
 | 4.1.3 同进程 A/B | 已解决：`docs/sixlabors.lic` 在位，对比工程通过 `SixLaborsLicenseFile` 按路径引用，Release 构建与 4.1.3 黑盒 A/B 均已跑通（见 `docs/compare-4.1.3-2026-11-06.md` 与 `docs/optimization-4.1.3-2026-11-06.md`） |
 
@@ -798,10 +817,10 @@ B = `GC.GetTotalAllocatedBytes(precise:false)`（`Infrastructure.Timing` 的进�
 
 | 事实 | 出处 | 迁移影响 | 处置 |
 |---|---|---|---|
-| `Mutate` 无实现；设计稿写了 `image.Mutate(x => ...)`，公开 API 里没有 | `architecture.md:366`、`known-gaps.md:25`、`docs/public-api.txt` | ImageSharp 绝大多数惯用调用点要重写 | 兼容外观，内部映射到现有算子 + `ProcessingPlan.Apply`；验收用 `AotOracle/Program.cs:11` 那行对手代码能编译并产出可对拍结果 |
+| ~~`Mutate` 无实现~~ **已补（2026-11-15）** | `Image.Mutate(Action<ImageChain>)` 真正原地生效（返回 `this`，旧缓冲回池），因为移植过来的调用点写 `image.Mutate(x => x.Resize(...))` 之后继续用 `image`；返回新图会让它编译通过却什么都不改。**仍是源码差异**：lambda 参数类型是 `ImageChain` 而不是 ImageSharp 的 `IImageProcessingContext`，链上没有的操作要改 | 调用点改写成 `image.Mutate(x => x.Resize(w, h))`；`Resize`/`Crop`/`Rotate90`/`Flip` 等同名方法直接可用。7 例 `ImageMutateTests` 钉住原地语义、异常不改图、缓冲回收 |
 | `Image` 无泛型 `Image<TPixel>`，只有三个 `WorkingFormat` | `architecture.md:230`、`docs/public-api.txt` | 依赖像素类型的泛型代码要重写 | **不追**（§5.1 是核心设计），列为迁移成本 |
 | `Save/Encode` 是静态方法且参数顺序不同（`Image.Save(image, path)` vs `image.Save(path)`） | `docs/public-api.txt:157`、`:226` | 每个保存点改 | 加实例方法薄封装，只加不改 |
-| `Resampler` 只有 5 种，4.1.3 公开 16 个 `KnownResamplers` 名称 | `src/SimdImaging.Processing/Geometry/Resampler.cs:5`、`known-gaps.md:161` | 用了 Mitchell / Lanczos5 / Spline36 等的代码编译不过 | 按 `operators.md:66` 的 16 种表逐项实现或**显式抛** `NotSupportedException`（不得静默回落） |
+| ~~`Resampler` 只有 5 种~~ **已补（2026-11-15）** | 现为 **16 个成员 / 15 个核**，覆盖 ImageSharp 4.1.3 全部 15 个 `KnownResamplers` 名称（实测反射该包是 15 个，不是 16）。`ResamplerCatalogTests` 37 例 | 用了 Mitchell / Lanczos5 / Lanczos8 / Spline / Welch / Robidoux 的代码现在编得过；**数值不与对手逐位对齐**（各自实现，见 B2 口径） |
 
 ### B2 能编译但结果不同 —— 最危险，会静默出偏差
 

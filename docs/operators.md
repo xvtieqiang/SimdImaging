@@ -62,22 +62,37 @@
 `SeamCarving` 依据逐像素梯度能量、移除的是一条**逐行连通的像素路径**、结果不是矩形子区，用于改变画幅比例
 同时保住主体。两者不可互相替代：扫描件留白用前者，改宽高比用后者。
 
-### GEO-5 的 16 种重采样器（设计目标）
+### GEO-5 的重采样器全集（2026-11-15 补齐）
 
-> **实现状态（2026-11-06 核实）**：`Resampler` 枚举当前只有 **5 种** —— `Nearest` / `Box` / `Bilinear` /
-> `Bicubic`（Catmull-Rom, B=0 C=0.5）/ `Lanczos3`。下表其余 11 种是**设计目标，尚未实现**。
-> 对标报告与 README 不得按 16 种宣称功能覆盖；ImageSharp 4.1.3 公开了 16 个 `KnownResamplers` 名称。
+> **实现状态（2026-11-15 核实）**：`Resampler` 枚举 **16 个成员全部落地**——首发的 5 个
+> （`Nearest` / `Box` / `Bilinear` / `Bicubic` / `Lanczos3`）字节值不变，M16 追加 11 个。
+> 其中 `Triangle`≡`Bilinear`、`CatmullRom`≡`Bicubic` 是同核双名（便于照搬别处的叫法），
+> 因此 16 个成员覆盖 **15 个不同的核**。
+>
+> **勘误（2026-11-15）**：此前本文写「ImageSharp 4.1.3 公开了 16 个 `KnownResamplers` 名称」，
+> 实测反射该包只有 **15 个**公开静态属性（Bicubic / Box / CatmullRom / Hermite / Lanczos2 / Lanczos3 /
+> Lanczos5 / Lanczos8 / MitchellNetravali / NearestNeighbor / Robidoux / RobidouxSharp / Spline / Triangle /
+> Welch）。本库的 16 个成员与它们一一对应（多出的一个是 `Bilinear` 这个历史名）。
 
 | 家族                       | 核            | 用途             |
 | ------------------------ | ------------ | -------------- |
 | NearestNeighbor          | 1 邻域         | 像素画、掩膜、索引图     |
 | Box                      | 面积平均         | 大比例下采样（无振铃）    |
 | Bilinear / Triangle      | 三角           | 通用快速           |
-| Bicubic (B,C 可调)         | 三次           | 通用高质量默认        |
-| CatmullRom               | B=0, C=0.5   | 锐利放大           |
+| Bicubic / CatmullRom     | B=0, C=0.5   | 锐利放大（默认）       |
 | MitchellNetravali        | B=1/3, C=1/3 | 无振铃平衡          |
-| CubicBSpline             | B=1, C=0     | 最平滑            |
+| Spline（CubicBSpline）     | B=1, C=0     | 最平滑，绝不振铃       |
+| Hermite                  | B=0, C=0，支撑 1 | 插值、比 Catmull-Rom 软 |
+| Welch                    | 1−x²，支撑 1    | 便宜平滑           |
+| Robidoux                 | B≈0.378, C≈0.311 | 按自然图误差调参    |
+| RobidouxSharp            | B≈0.262, C≈0.369 | 更锐的 Robidoux   |
 | Lanczos2 / 3 / 5 / 8     | sinc 窗       | 高质量缩放（3 为默认推荐） |
+
+**口径**：新增的 11 个核全部走 Mitchell-Netravali 的 B/C 通式或 sinc 家族，**首发的 5 个一字未动**——
+`Bicubic`/`CatmullRom` 特意没有改走 B/C 通式：同一个多项式换个求值顺序就会换舍入，那会让库里出过的每一个
+字节都变。验证：`ResamplerCatalogTests` 37 例（16 个成员各自保持常数图、两种别名逐位同一张权重表、
+核的对称性与支撑外归零、Spline/Mitchell 的定点值、Lanczos 窗口随阶数变宽）+ 三档 body SHA 仍为
+`9bd6c8df…`（既有算子字节零变化）。
 | Spline36                 | 三次 B 样条近似    | 与 Lanczos3 竞争  |
 | Hermite                  | 三次 Hermite   | 快速平滑           |
 | Robidoux / RobidouxSharp | 优化 B,C       | 下采样锐度          |
