@@ -45,7 +45,7 @@
 | guided.cross 4K | 770 | AVX2 | `Filter/GuidedFilterOps.cs` |
 | reduce colors 4K（抖动） | 614 | **标量**：误差扩散天然串行，前一像素决定后一像素 | `Filter/DitherOps.cs` |
 | guided filter 4K | 577 | AVX2 | `Filter/GuidedFilterOps.cs` |
-| seam 1080p（去 50 列） | 532 | **标量**：能量图可向量化，但 DP 是串行且占主导 | `Geometry/SeamCarving.cs` |
+| seam 1080p（去 50 列） | **443**（原 532） | **标量**；已做的优化见下：luma 缓存 −17%，DP 行内无依赖、可再向量化 | `Geometry/SeamCarving.cs` |
 | rl / rl.motion 1080p | 245 / 237 | AVX2 **+ AVX-512**（走卷积内核） | `Internal/PlanarConvolve.cs` |
 | chroma 4:2:0 4K | 228 | **标量**：双精度散列累加到色度格 | `Color/ColorConversionOps.cs` |
 | quantize 4K（octree） | 207 | **标量**：最近色搜索，数据相关 | `Color/QuantizeOps.cs` |
@@ -53,6 +53,11 @@
 | oil paint 4K | 141 | **标量**：每像素一个直方图 | `Filter/OilPaintOps.cs` |
 | resize 4K→1080p bicubic | ~67 | AVX2（行带 + 两遍 + 水平/垂直向量） | `Geometry/Resize.cs` |
 | gaussian / box blur 4K | ~88 / — | AVX2 + **AVX-512**（卷积内核） | `Internal/PlanarConvolve.cs` |
+
+**已做的一次标量优化（2026-11-15）**：`seam` 每条缝都从像素重算整张 luma 平面，50 条缝就是 50 次 2.07 MPix 的
+BT.709 转换。改成开始时算一次、每删一列把该行 luma 左移一位（删列只让像素左移，luma 是逐像素函数，移位后与
+重算逐位相同），**532 → 443 ms（−17%）**，14 例删缝测试与三档矩阵照旧。这不是向量化，是**去冗余**——
+在最贵的标量算子上，去掉重复计算的收益比硬塞 SIMD 更稳也更大。
 
 **为什么只有这些在向量上**——这是本文最该记住的一条：**确定性契约反过来限制了向量化**。
 本库承诺三档（现在四档）逐字节相同，而把标量循环改写成向量循环，往往会把浮点累加顺序从

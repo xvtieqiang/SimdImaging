@@ -127,11 +127,13 @@ public static class SeamCarving
         try
         {
             var workspace = new Workspace(width, height);
+            workspace.PrimeLuma(work.View);
             var logical = width;
             for (var i = 0; i < count; i++)
             {
                 var seam = workspace.FindSeam(work.View, logical);
                 Workspace.CutSeam(work.View, seam);
+                workspace.ShiftLuma(seam, logical);
                 logical--;
             }
 
@@ -237,6 +239,17 @@ public static class SeamCarving
         private readonly float[] _straight;
         private readonly int[] _seam;
 
+        /// <summary>
+        /// Luma of the whole image, kept across seams when <see cref="PrimeLuma"/> was called.
+        /// <para>
+        /// Removing a column shifts every row right of the seam one place left, so the luma array shifts with
+        /// it and stays exactly equal to what recomputing from the pixels would give — the conversion is a
+        /// per-pixel function of that pixel's own bytes. Without this, a 50-seam carve converted the same
+        /// 2.07 MPix fifty times.
+        /// </para>
+        /// </summary>
+        private float[]? _luma;
+
         public Workspace(int width, int height)
         {
             _capacity = width;
@@ -265,9 +278,9 @@ public static class SeamCarving
             var centre = _centre;
             var below = _below;
 
-            Luma(view, 0, width, above);
-            Luma(view, 0, width, centre);
-            Luma(view, Math.Min(1, _height - 1), width, below);
+            ReadLuma(view, 0, width, above);
+            ReadLuma(view, 0, width, centre);
+            ReadLuma(view, Math.Min(1, _height - 1), width, below);
 
             for (var x = 0; x < width; x++)
             {
@@ -281,7 +294,7 @@ public static class SeamCarving
                 above = centre;
                 centre = below;
                 below = spare;
-                Luma(view, Math.Min(y + 1, _height - 1), width, below);
+                ReadLuma(view, Math.Min(y + 1, _height - 1), width, below);
 
                 var row = y * _capacity;
                 for (var x = 0; x < width; x++)
@@ -362,7 +375,41 @@ public static class SeamCarving
         }
 
         /// <summary>Luma of one row: exact integers for 8/16-bit, BT.709 floats for Rgba32F.</summary>
-        private void Luma(PixelView view, int y, int width, float[] destination)
+        /// <summary>Converts every row once so <see cref="FindSeam"/> can read luma instead of recomputing it.</summary>
+        public void PrimeLuma(PixelView view)
+        {
+            _luma = new float[(long)_capacity * _height];
+            for (var y = 0; y < _height; y++)
+                Luma(view, y, view.Width, _luma.AsSpan(y * _capacity, view.Width));
+        }
+
+        /// <summary>Mirrors <see cref="CutSeam"/> on the cached luma: one column disappears from column <paramref name="seam"/>.</summary>
+        public void ShiftLuma(int[] seam, int width)
+        {
+            if (_luma is null)
+                return;
+
+            for (var y = 0; y < _height; y++)
+            {
+                var at = seam[y];
+                var row = y * _capacity;
+                Array.Copy(_luma, row + at + 1, _luma, row + at, width - at - 1);
+            }
+        }
+
+        /// <summary>Cached row when primed, a fresh conversion otherwise.</summary>
+        private void ReadLuma(PixelView view, int y, int width, float[] destination)
+        {
+            if (_luma is null)
+            {
+                Luma(view, y, width, destination);
+                return;
+            }
+
+            Array.Copy(_luma, (long)y * _capacity, destination, 0, width);
+        }
+
+        private void Luma(PixelView view, int y, int width, Span<float> destination)
         {
             var row = view.Row(y);
 
