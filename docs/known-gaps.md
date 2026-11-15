@@ -44,7 +44,7 @@
 | 2 | 稳态分配 | 池化 + 计划复用后 **0 B/op** | 融合路径最强链 `AddPointLut`×3 稳态 **≈4.3 KiB/op**（每线程尺）/ **≈6.0 KiB/op**（进程级）；`degree=1` 仍 2144 B/op。残余是 per-call 计划重建，不是像素缓冲 | ❌ **未达标**（已判定，三次独立运行可复现） |
 | 3 | 峰值内存 | 8K ≤ 2.5× 单帧（316.4 MiB） | 4 场景 **0.74 / 2.68 / 1.01 / 1.01×**；`gaussian-blur` 339.0 MiB **超 7.1%**，对手同项 265.9 MiB | ❌ **3/4 达标**，`gaussian-blur` 未达标 |
 | 4 | 位深保真 | 10/16 bit 全链路不塌到 8 bit | 16-bit PNG 往返**逐字节精确**（`Png_Rgba16_RoundTripsByteExact`）；10-bit HEIF 端点**测不了**：HEIF 是独立包且需手动注册，本库不接入，也没有 10-bit 语料 | ⚠ 部分：16-bit 端点达标，HEIF 端点按「架构下不可测」记账 |
-| 5 | 确定性 | 四档 SIMD 逐字节一致 | **三档**（AVX2 / V128 / 标量）今日实测：各 **963 例全绿**，算子输出 body SHA 同一 `9bd6c8df…`；第四档 `src/` 内 0 处 `Vector512`，未实现 | ⚠ 部分：三档达标，第四档是预留 |
+| 5 | 确定性 | 四档 SIMD 逐字节一致 | **三档**（AVX2 / V128 / 标量）各 **966 例全绿**、body SHA 同一；**第四档已在 `PlanarConvolve` 落地**，`Vector512<T>` 软件实现下与另三档**逐字节相同**（`PlanarConvolveTierTests` 3 例），硬件上未跑过 | ⚠ 部分：三档达标；第四档正确性已验、吞吐无数据 |
 | 6 | 色彩 | ICC→ICC 与 4.1.3 对拍，ΔE2000 ≤ 1（矩阵/TRC）、≤ 2（CLUT） | 尺子已落地：ΔE2000 对 Sharma 34 组全部 ≤1e-4；ICC 1080p 实测 40.0 ms（grid=33）/ 34.8 ms（matrix-TRC）。**与 4.1.3 的同图对拍未做**（对拍场景集里没有 ICC 项） | ⚠ 部分：尺子达标，对拍缺一项 |
 | 7 | AOT | 全库 NativeAOT + 零 trim 警告作为构建门禁 | `IsAotCompatible` 全库开启，构建 0 警告；AOT 双档（AVX2 / SSE2）与 JIT **逐字节一致**，55 条 hash / 23 条设闸 | ✅ 达标 |
 
@@ -175,7 +175,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 | 可比性 | `machine`（`OS|arch|核数`）+ `sourceSha`（`git rev-parse HEAD:src`）的树哈希，`src/` 有未提交改动时追加 `-dirty`）+ `protocol`（含 `slow=` 与 `norm=max(mem,alu)`）全同才算可比；`repeats` 只在读取基线时决定本次跑几次，**不参与比较**（脚本头注释旧称「含 repeat count」，以实现为准）。任一不同就跳过并打印原因——跨机器的秒表读数不是门禁 |
 | 已知局限 | 校正只消掉「跟探针同向退化」的机器状态。若退化只影响某类访存而两个探针都不动，仍会误报——失败行里 raw 与 normalised 的差值就是识别它的线索。探针不调用本库，所以「代码慢到把探针一起拖慢」不会发生 |
 | 已知近似 | `machine` 不含 CPU 型号，两台同 OS/同核数的机器会撞 id；`sourceSha` 因此成为第二道闸：它只随 `src/` 变，所以文档/测试改动不会误伤基线；但**改了 `src/` 就必须重录**，否则静默跳过——这是设计而非疏漏 |
-| 第四档（AVX-512） | **已出评估，未出数**：`docs/simd-tiers-evaluation.md`。关键结论是今天的代码在有 AVX-512 的机器上跑的仍是同一套 `Vector256` 内核（`Vector512.IsHardwareAccelerated` 未用），所以"四档一致"不构成任何 512 位验证。值得写 512 位的只有 `Median3x3` 与 `Convolve2D`（NLM 次之，ICC CLUT 明确不做），且必须运行时分派，`IlcInstructionSet=avx2` 不能动 |
+| 第四档（AVX-512） | **代码已落地（2026-11-15），性能未出数**。落点是 `PlanarConvolve` 的三个循环（水平/垂直两遍 + 稀疏 PSF），gaussian / box / RL 反卷积等经由它受益；`Vector512.IsHardwareAccelerated` 为假时不进该分支，测试用 `ForceVector512` 钩子在**软件实现**上跑通并与标量/256 逐字节比对（3 例）。**能力边界写清楚**：这只证明「512 位算法与另三档同字节」，不证明「512 位硬件上更快」——本机 `avx512=False`，吞吐仍是空白。其余内核（NLM、ICC CLUT、Median3x3）未铺 512：NLM 的 SSD 已有 AVX2，ICC CLUT 的 3D gather 在消费级 Zen4 上收益不明，需先有硬件再测 |
 | AotSmoke 全量核对 | **已核对**：53 条 hash，`REQUIRED` 23 条，**无悬空项**（`REQUIRED ⊆ hashed`，0 条 REQUIRED 没有对应 hash）。M15 点名的六类都在闸内：`warp` / `ewa.rotate` / `nlm` / `gainmap.hdr` / `icc.lut` / `plan.fused`；`dt` 与 `guided.cross` 于 2026-11-14 补入。其余 30 条只 hash 不设闸，属信息性覆盖 |
 | 契约表 | **已完成**：`docs/contracts.md` 30 条，每条锚定一个测试类；`ContractsTests` 反射校验类存在、且该类至少有一个 `[Fact]/[Theory]`，同时校验"恰好 30 条、编号 1..30 连续"。它不解析 markdown——解析只能证明文件与数组一致，数组才是"必须存在"的那份清单 |
 
@@ -348,7 +348,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 
 | 项 | 事实 | 状态 |
 |---|---|---|
-| AVX-512 档 | `src/` 全库 **0 处 `Vector512`**，机器 `avx512=False`，第四档从未被执行 | **未修**。对外不得再宣称"四档 SIMD 逐字节一致"，只能写"三档实现 + 一档预留" |
+| AVX-512 档 | `src/` 内 **0 处 `Vector512`**（2026-11-15 之前），机器 `avx512=False` | **部分已修**：`PlanarConvolve` 已加 512 路径，软件模拟下与三档逐字节相同；对外可写「四档均已实现、正确性已验」，**不可**写「四档吞吐一致」或「已在硬件上运行」 |
 | `.git` 不存在 | `docs/sixlabors.lic` 没有任何忽略规则保护，密钥泄漏防护为零 | **未修**，需先建仓 |
 | `FloatScratch` 无大小上限 | `[ThreadStatic]` + `MaxRetained=8`，每 worker 可驻留 8 块任意大小缓冲且永不收缩 | **M14 已修**：每线程保留预算 64 MB + 单块保留上限 32 MB，超限淘汰（但**照常分配**，只是不留），`MemoryBudget.Trim()` 立即释放。上限只约束"保留"，所以 8K 的 64 MB scratch 不会因此变慢 |
 | `Rgba32F` 的 rotate90 | 泛化只覆盖 4 与 8 字节像素，16 字节仍走 `Slice+CopyTo` 慢路径 | **未修** |

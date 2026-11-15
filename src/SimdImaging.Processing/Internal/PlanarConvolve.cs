@@ -22,6 +22,21 @@ internal static class PlanarConvolve
     /// <summary>Test hook: forces the scalar twin so a test can compare the two paths on real data.</summary>
     internal static bool ForceScalar;
 
+    /// <summary>
+    /// Test hook: takes the <see cref="Vector512{T}"/> path even when the hardware has no AVX-512.
+    /// <para>
+    /// That is not a benchmark trick — it is the only way to check the fourth tier's correctness on a machine
+    /// that cannot execute it natively. <c>Vector512&lt;T&gt;</c> is a 64-byte struct with a software
+    /// implementation, so the arithmetic and therefore the bytes can be compared here; the throughput cannot.
+    /// </para>
+    /// </summary>
+    internal static bool ForceVector512;
+
+    /// <summary>Widest tier that will run: 512 when the hardware (or the test hook) allows and scalar is not forced.</summary>
+    internal static bool Use512 => !ForceScalar && (Vector512.IsHardwareAccelerated || ForceVector512);
+
+    private static bool Use256 => !ForceScalar && !Use512 && Vector256.IsHardwareAccelerated;
+
     /// <summary>Rows per band when the caller does not pin one.</summary>
     private const int DefaultBandRows = 64;
 
@@ -112,7 +127,17 @@ internal static class PlanarConvolve
                             destination[output + column] +=
                                 source[row + Math.Clamp(column + tap.Dx, 0, width - 1)] * weight;
 
-                        if (!ForceScalar && Vector256.IsHardwareAccelerated)
+                        if (Use512)
+                        {
+                            var vector = Vector512.Create(weight);
+                            for (; column + 15 < rightEdge; column += 16)
+                            {
+                                var partial = Vector512.LoadUnsafe(ref destination[output + column]);
+                                var sample = Vector512.LoadUnsafe(ref source[row + column + tap.Dx]);
+                                (partial + sample * vector).StoreUnsafe(ref destination[output + column]);
+                            }
+                        }
+                        else if (Use256)
                         {
                             var vector = Vector256.Create(weight);
                             for (; column + 7 < rightEdge; column += 8)
@@ -144,6 +169,12 @@ internal static class PlanarConvolve
     private static void HorizontalRow(float[] source, int sourceRow, int width, float[] destination,
         int destinationRow, float[] kernel, int radius)
     {
+        if (Use512)
+        {
+            HorizontalRow512(source, sourceRow, width, destination, destinationRow, kernel, radius);
+            return;
+        }
+
         if (ForceScalar || !Vector256.IsHardwareAccelerated)
         {
             for (var scalar = 0; scalar < width; scalar++)
@@ -170,10 +201,57 @@ internal static class PlanarConvolve
             destination[destinationRow + x] = Sample(source, sourceRow, width, x, kernel, radius);
     }
 
+    /// <summary>
+    /// Sixteen pixel lanes, taps ascending. Identical arithmetic to the scalar twin per lane, so the bytes
+    /// match; the interior rule is the 256 version's — a lane that needs its index clamped is not a neighbour
+    /// of the others and must go through <see cref="Sample"/>.
+    /// </summary>
+    private static void HorizontalRow512(float[] source, int sourceRow, int width, float[] destination,
+        int destinationRow, float[] kernel, int radius)
+    {
+        var prefix = Math.Min(radius, width);
+        var x = 0;
+        for (; x < prefix; x++)
+            destination[destinationRow + x] = Sample(source, sourceRow, width, x, kernel, radius);
+
+        for (; x + 15 + radius <= width - 1; x += 16)
+        {
+            var sum = Vector512<float>.Zero;
+            for (var k = -radius; k <= radius; k++)
+                sum += Vector512.LoadUnsafe(ref source[sourceRow + x + k]) * Vector512.Create(kernel[k + radius]);
+            sum.StoreUnsafe(ref destination[destinationRow + x]);
+        }
+
+        for (; x < width; x++)
+            destination[destinationRow + x] = Sample(source, sourceRow, width, x, kernel, radius);
+    }
+
     private static void VerticalRow(float[] source, int sourceRow, int width, float[] destination,
         int destinationRow, float[] kernel)
     {
         var taps = kernel.Length;
+        if (Use512)
+        {
+            var x16 = 0;
+            for (; x16 + 15 < width; x16 += 16)
+            {
+                var sum = Vector512<float>.Zero;
+                for (var k = 0; k < taps; k++)
+                    sum += Vector512.LoadUnsafe(ref source[sourceRow + k * width + x16]) * Vector512.Create(kernel[k]);
+                sum.StoreUnsafe(ref destination[destinationRow + x16]);
+            }
+
+            for (; x16 < width; x16++)
+            {
+                var scalar = 0f;
+                for (var k = 0; k < taps; k++)
+                    scalar += source[sourceRow + k * width + x16] * kernel[k];
+                destination[destinationRow + x16] = scalar;
+            }
+
+            return;
+        }
+
         if (ForceScalar || !Vector256.IsHardwareAccelerated)
         {
             for (var x = 0; x < width; x++)

@@ -4,7 +4,7 @@
 
 依赖：`Sdcb.SimdCodecs`（解码 / 编码 / 容器 / 元数据 / 像素布局转换）。
 
-目标：功能对标 ImageSharp 4.1.x 并超越；NativeAOT 一等公民；跨 SIMD 档位输出逐字节一致（**三档已实现，AVX-512 档位预留、尚未实现**）。
+目标：功能对标 ImageSharp 4.1.x 并超越；NativeAOT 一等公民；跨 SIMD 档位输出逐字节一致（**AVX2 / Vector128 / 标量三档全库覆盖，AVX-512 已在卷积内核落地**——正确性经软件模拟逐字节验证，性能本机无硬件可测）。
 
 ## 定位
 
@@ -14,7 +14,7 @@
 |---|---|---|
 | **1. 基础图像处理** | 性能、精度、完整性超过普通 .NET 图片库 | 119 个算子、三工作格式、**16 个重采样器**（15 个核，`Triangle`≡`Bilinear`、`CatmullRom`≡`Bicubic`；见 `docs/operators.md`）；Resize 4K→1080p 比 ImageSharp 快 1.8–2.3×（同参数对拍） |
 | **2. 高级计算摄影** | 去模糊、去噪、去雾、HDR、多帧融合、频域处理 | 去模糊（Richardson-Lucy 高斯/运动 PSF）、去噪（NLM / 局部拉普拉斯 / 双边 / 导向）、HDR（5 种色调映射 + 增益图 + Ultra HDR 读写）、去雾与多帧融合**未做**、频域处理**评估后不落地**（`docs/fft-evaluation.md`） |
-| **3. 计算架构** | 纯托管 SIMD、融合执行、内存预算、NativeAOT | 纯托管零原生依赖；三档 SIMD 逐字节一致（AVX-512 预留未实现）；`ProcessingPlan` 分段融合；`MemoryBudget` + `MemoryEstimator`；NativeAOT 作为构建门禁 |
+| **3. 计算架构** | 纯托管 SIMD、融合执行、内存预算、NativeAOT | 纯托管零原生依赖；三档 SIMD 逐字节一致，AVX-512 已进卷积内核；`ProcessingPlan` 分段融合；`MemoryBudget` + `MemoryEstimator`；NativeAOT 作为构建门禁 |
 | **4. 图像数据保真** | 16-bit、32-bit float、HDR、Alpha、色彩管理 | 全链路 Rgba16 不塌 8 位；Rgba32F 的 HDR>1 不钳位；直通 alpha 与预乘语义分离；ICC matrix/TRC **与 RGB LUT** + CIEDE2000 |
 
 ## 状态
@@ -93,7 +93,7 @@ using var edited = photo.Clone(x => x.Crop(rect).Resize(800, 600).Saturation(1.2
 | 目标框架 | net8.0 | net10.0 |
 | NativeAOT | 4.1 起为部分格式补 AOT 种子 | 全库构建门禁，零 trim/AOT 警告 |
 | 位深 | 由像素类型决定 | 全链路 `Rgba16`，16 位不被 8 位中间层吞掉 |
-| 确定性 | 无跨 SIMD 档位承诺 | **三档**（AVX2 / V128 / 标量）逐字节一致；AVX-512 档位预留，尚未实现 |
+| 确定性 | 无跨 SIMD 档位承诺 | **三档**（AVX2 / V128 / 标量）全库逐字节一致；**AVX-512** 在卷积内核有实现，`Vector512<T>` 软件模拟下与另三档逐字节相同，硬件上未跑过 |
 | 内存 | 整图 `MemoryAllocator` | 池化 + ping-pong + 行带；实测 7–39 KiB/op，`0 B/op` 目标未达成 |
 | 格式面 | 多 EXR / TGA / CgBI PNG / ANI | 多 JPEG 2000 / JBIG2 / PNM 全族 / Ultra HDR（读 + 写，含增益图与底图的同步几何）；HEIF/HEIC 需自行引用 `Sdcb.SimdCodecs.Heif` 并注册 |
 
