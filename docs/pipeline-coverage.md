@@ -16,22 +16,26 @@
 | NonLocalMeans(search, patch) | `search + patch` | 搜索窗 + patch 半径（**不是两者之一**） |
 | AdaptiveThreshold(block) | ≈ `block/2` | 局部门槛窗 |
 
-## 不能进（必须整图，`Global`）
+## 按整图执行的（`Global`）——**不是不能进**
 
-| 算子 | 原因 |
+这些算子要求整图上下文，流水线会把它们**当成独立的一段整体执行**：多一张中间图（和直接调用它一样），
+其余步骤照旧共享同一遍行带。**调用方的写法完全不变**，`Pipe()` 里一样能写。
+
+| 算子 | 为什么要整图 |
 |---|---|
-| Equalize / Normalize / CLAHE | 需要整图直方图或分块统计 |
-| LocalLaplacian | 金字塔跨尺度，带内没有足够上下文 |
-| Vignette | 依赖整图中心，带内取向会错 |
+| Equalize / Normalize / CLAHE | 整图直方图或分块统计 |
+| LocalLaplacian | 金字塔跨尺度 |
+| Vignette | 按到**整图中心**的距离衰减，带内会算错中心 |
 | Pixelate | 块对齐；带边界可切在块中间，**没有常数 halo 能表达** |
-| Noise | 随机，逐带不可复现 |
+| AdaptiveThreshold | 局部门槛窗远宽于任何值得携带的带 |
 | DistanceTransform | 全局传播 |
+| Noise | 随机，逐带不可复现 |
 
 ## 根本不能
 
 | 算子 | 原因 |
 |---|---|
-| Resize / Crop / Rotate90 / Transpose / Trim / EntropyCrop | 改变尺寸或布局。`Pipe()` 会在这些处**自动切段**，调用方无需关心 |
+| Resize / Crop / Rotate90 | 改变尺寸或布局。`Pipe()` 在这些处**自动切段**，调用方无需关心 |
 
 ## 维护规则
 

@@ -140,6 +140,25 @@ public sealed class ImagePipeline
     /// <summary>Oil paint.</summary>
     public ImagePipeline OilPaint(int radius, int levels = 20) => Step(PlanOps.OilPaint(radius, levels));
 
+    /// <summary>Vignette. Runs whole-image; costs one intermediate.</summary>
+    public ImagePipeline Vignette(float radius = 0.75f, float strength = 1f) =>
+        Step(PlanOps.Vignette(radius, strength));
+
+    /// <summary>CLAHE. Runs whole-image; costs one intermediate.</summary>
+    public ImagePipeline Clahe(int tilesX = 8, int tilesY = 8, float clipLimit = 3f) =>
+        Step(PlanOps.Clahe(tilesX, tilesY, clipLimit));
+
+    /// <summary>Local Laplacian. Runs whole-image; costs one intermediate.</summary>
+    public ImagePipeline LocalLaplacian(int levels = 5, int samples = 32) =>
+        Step(PlanOps.LocalLaplacian(levels, samples));
+
+    /// <summary>Per-channel histogram stretch. Runs whole-image.</summary>
+    public ImagePipeline Normalize() => Step(PlanOps.Normalize());
+
+    /// <summary>Adaptive threshold. Runs whole-image.</summary>
+    public ImagePipeline AdaptiveThreshold(int radius = 8, float offset = 0.05f) =>
+        Step(PlanOps.AdaptiveThreshold(radius, offset));
+
     /// <summary>Block mosaic.</summary>
     public ImagePipeline Pixelate(int blockSize) => Step(PlanOps.Pixelate(blockSize));
 

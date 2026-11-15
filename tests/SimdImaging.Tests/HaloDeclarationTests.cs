@@ -112,6 +112,13 @@ public class HaloDeclarationTests
             ("guided", PlanOps.GuidedFilter(3), v => GuidedFilterOps.GuidedFilter(v, 3, 1e-4f)),
             ("oilpaint", PlanOps.OilPaint(2, 12), v => OilPaintOps.OilPaint(v, 2, 12)),
             ("nlm", PlanOps.NonLocalMeans(2), v => NonLocalMeansOps.NonLocalMeans(v, 2, 1, 0.1f)),
+
+            // Whole-image steps. They still belong in a chain - the step costs one intermediate image, the same
+            // as calling it directly, and the rest of the chain keeps its single pass.
+            ("vignette", PlanOps.Vignette(0.75f, 1f), v => FilterOps.Vignette(v, 0.75f, 1f)),
+            ("normalize", PlanOps.Normalize(), v => PointOps.Normalize(v)),
+            ("adaptive-threshold", PlanOps.AdaptiveThreshold(4, 0.05f), v => ThresholdOps.AdaptiveThreshold(v, 4, 0.05f)),
+            ("clahe", PlanOps.Clahe(4, 4, 3f), v => ClaheOps.Clahe(v, 4, 4, 3f)),
         };
 
         var failures = new List<string>();

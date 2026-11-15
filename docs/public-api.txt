@@ -399,11 +399,13 @@
   SimdImaging.ImageFrame.Dispose() -> System.Void
   SimdImaging.ImageFrame.Duration : System.TimeSpan? { get; }
   SimdImaging.ImageFrame.Pixels : SimdImaging.Abstractions.WorkingBuffer { get; }
+  SimdImaging.ImagePipeline.AdaptiveThreshold(System.Int32 radius, System.Single offset) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.BandRows(System.Int32 rows) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Bilateral(System.Int32 radius, System.Single sigmaRange) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.BokehBlur(System.Int32 radius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.BoxBlur(System.Int32 radius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Brightness(System.Single amount) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Clahe(System.Int32 tilesX, System.Int32 tilesY, System.Single clipLimit) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Close3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Contrast(System.Single amount) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Crop(Sdcb.SimdCodecs.Abstractions.PixelRect region) -> SimdImaging.ImagePipeline
@@ -417,9 +419,11 @@
   SimdImaging.ImagePipeline.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Invert() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.LocalLaplacian(System.Int32 levels, System.Int32 samples) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Median3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.MotionBlur(System.Int32 length, System.Single angleDegrees) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.NonLocalMeans(System.Int32 searchRadius, System.Int32 patchRadius, System.Single h) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Normalize() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.OilPaint(System.Int32 radius, System.Int32 levels) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Open3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Pixelate(System.Int32 blockSize) -> SimdImaging.ImagePipeline
@@ -431,6 +435,7 @@
   SimdImaging.ImagePipeline.Sepia(System.Single amount) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sharpen(System.Single amount, System.Single sigma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sobel() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Vignette(System.Single radius, System.Single strength) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipelineExtensions.Pipe(SimdImaging.Image image) -> SimdImaging.ImagePipeline
   SimdImaging.NormalizedWarp.#ctor(System.Object object, System.IntPtr method)
   SimdImaging.NormalizedWarp.BeginInvoke(System.Single u, System.Single v, System.Single& sourceU, System.Single& sourceV, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
@@ -835,10 +840,12 @@
   SimdImaging.Processing.PlanObserver.BeginInvoke(System.Int32 index, System.String name, SimdImaging.Abstractions.PixelView result, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
   SimdImaging.Processing.PlanObserver.EndInvoke(System.IAsyncResult result) -> System.Void
   SimdImaging.Processing.PlanObserver.Invoke(System.Int32 index, System.String name, SimdImaging.Abstractions.PixelView result) -> System.Void
+  SimdImaging.Processing.PlanOps.AdaptiveThreshold(System.Int32 radius, System.Single offset) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Bilateral(System.Int32 radius, System.Single sigmaRange) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BokehBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BoxBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Brightness(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Clahe(System.Int32 tilesX, System.Int32 tilesY, System.Single clipLimit) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Close3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Contrast(System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dilate3x3() -> SimdImaging.Processing.ImageOp
@@ -851,9 +858,11 @@
   SimdImaging.Processing.PlanOps.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Invert() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.LocalLaplacian(System.Int32 levels, System.Int32 samples) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Median3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.MotionBlur(System.Int32 length, System.Single angleDegrees) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.NonLocalMeans(System.Int32 searchRadius, System.Int32 patchRadius, System.Single h) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Normalize() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.OilPaint(System.Int32 radius, System.Int32 levels) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Open3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Pixelate(System.Int32 blockSize) -> SimdImaging.Processing.ImageOp
@@ -862,6 +871,7 @@
   SimdImaging.Processing.PlanOps.Sepia(System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Sharpen(System.Single amount, System.Single sigma) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Sobel() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Vignette(System.Single radius, System.Single strength) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanReport.#ctor()
   SimdImaging.Processing.PlanReport.BandCount : System.Int32 { get; }
   SimdImaging.Processing.PlanReport.ElapsedTicks : System.Int64 { get; }

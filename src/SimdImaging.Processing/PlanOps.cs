@@ -121,6 +121,28 @@ public static class PlanOps
     public static ImageOp OilPaint(int radius, int levels = 20) =>
         Neighborhood("oilpaint", radius, v => OilPaintOps.OilPaint(v, radius, levels));
 
+    /// <summary>
+    /// Vignette. It darkens by distance from the image centre, so a band would see its own centre instead — the
+    /// whole picture is the only correct context. It costs one intermediate image, like calling it directly.
+    /// </summary>
+    public static ImageOp Vignette(float radius = 0.75f, float strength = 1f) =>
+        Global("vignette", v => FilterOps.Vignette(v, radius, strength));
+
+    /// <summary>CLAHE: it builds per-tile histograms, so it reads the whole picture.</summary>
+    public static ImageOp Clahe(int tilesX = 8, int tilesY = 8, float clipLimit = 3f) =>
+        Global("clahe", v => ClaheOps.Clahe(v, tilesX, tilesY, clipLimit));
+
+    /// <summary>Local Laplacian: a pyramid, so every band would need the whole image anyway.</summary>
+    public static ImageOp LocalLaplacian(int levels = 5, int samples = 32) =>
+        Global("local-laplacian", v => LocalLaplacianOps.LocalLaplacian(v, levels, samples));
+
+    /// <summary>Per-channel histogram stretch; whole-image statistics.</summary>
+    public static ImageOp Normalize() => Global("normalize", v => PointOps.Normalize(v));
+
+    /// <summary>Adaptive threshold: a local mean, but its window is wider than any band worth carrying.</summary>
+    public static ImageOp AdaptiveThreshold(int radius = 8, float offset = 0.05f) =>
+        Global("adaptive-threshold", v => ThresholdOps.AdaptiveThreshold(v, radius, offset));
+
     /// Block-aligned mosaic. A block spans rows that a band boundary can cut anywhere, so no halo is correct —
     /// whole-image is the only category that reproduces the single-image result.
     /// </summary>
