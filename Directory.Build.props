@@ -15,6 +15,10 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>image processing simd aot raster resize filter</PackageTags>
     <DebugType>embedded</DebugType>
+    <!-- The commit SHA otherwise lands in AssemblyInformationalVersion, which makes the DLL's bytes a
+         function of HEAD rather than of the source: a docs-only commit would silently invalidate the
+         performance baseline's binary fingerprint. The baseline records gitSha itself. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <!-- Ships IntelliSense; CS1591/CS1573 silenced so the build stays at zero warnings while the
