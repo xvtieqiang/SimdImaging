@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Geometry;
@@ -184,8 +185,16 @@ public static class GuidedFilterOps
         var context = radius * 2;
         var capacity = Math.Min(height, bandRows + context * 2) * width;
 
-        var values = new float[capacity];
-        var guideValues = new float[capacity];
+        // Three planes per side, decoded once per band: the channel loop below used to re-read and re-decode
+        // both RGBA rows for each of the three channels, doing 3x the conversions for the same bytes.
+        var values = new float[3][];
+        var guideValues = new float[3][];
+        for (var c = 0; c < 3; c++)
+        {
+            values[c] = new float[capacity];
+            guideValues[c] = new float[capacity];
+        }
+
         var meanInput = new float[capacity];
         var meanGuide = new float[capacity];
         var secondGuide = new float[capacity];
@@ -196,6 +205,7 @@ public static class GuidedFilterOps
         var prefix = new float[width + 1];
         var row = new float[stride];
         var guideRow = new float[stride];
+        var ring = new float[(radius * 2 + 1) * width];
 
         for (var bandTop = 0; bandTop < height; bandTop += bandRows)
         {
@@ -205,23 +215,35 @@ public static class GuidedFilterOps
             var rows = bottom - top;
             var length = rows * width;
 
+            for (var i = 0; i < rows; i++)
+            {
+                Pixels.ReadRowRaw(source.Row(top + i), width, source.Format, row);
+                Pixels.ReadRowRaw(guide.Row(top + i), width, guide.Format, guideRow);
+
+                var at = i * width;
+                var red = values[0].AsSpan(at, width);
+                var green = values[1].AsSpan(at, width);
+                var blue = values[2].AsSpan(at, width);
+                var guideRed = guideValues[0].AsSpan(at, width);
+                var guideGreen = guideValues[1].AsSpan(at, width);
+                var guideBlue = guideValues[2].AsSpan(at, width);
+
+                for (var x = 0; x < width; x++)
+                {
+                    var o = x * 4;
+                    red[x] = row[o];
+                    green[x] = row[o + 1];
+                    blue[x] = row[o + 2];
+                    guideRed[x] = guideRow[o];
+                    guideGreen[x] = guideRow[o + 1];
+                    guideBlue[x] = guideRow[o + 2];
+                }
+            }
+
             for (var channel = 0; channel < 3; channel++)
             {
-                for (var i = 0; i < rows; i++)
-                {
-                    Pixels.ReadRowRaw(source.Row(top + i), width, source.Format, row);
-                    Pixels.ReadRowRaw(guide.Row(top + i), width, guide.Format, guideRow);
-                    var plane = values.AsSpan(i * width, width);
-                    var guideRowPlane = guideValues.AsSpan(i * width, width);
-                    for (var x = 0; x < width; x++)
-                    {
-                        plane[x] = row[x * 4 + channel];
-                        guideRowPlane[x] = guideRow[x * 4 + channel];
-                    }
-                }
-
-                var input = values.AsSpan(0, length);
-                var guidePlane = guideValues.AsSpan(0, length);
+                var input = values[channel].AsSpan(0, length);
+                var guidePlane = guideValues[channel].AsSpan(0, length);
                 var meanI = meanInput.AsSpan(0, length);
                 var meanG = meanGuide.AsSpan(0, length);
                 var scratch = secondGuide.AsSpan(0, length);
@@ -229,34 +251,26 @@ public static class GuidedFilterOps
                 var aPlane = meanA.AsSpan(0, length);
                 var bPlane = meanB.AsSpan(0, length);
 
-                BoxMean(input, meanI, width, rows, radius, columnSums, prefix);
-                BoxMean(guidePlane, meanG, width, rows, radius, columnSums, prefix);
+                BoxMean(input, meanI, width, rows, radius, columnSums, prefix, ring);
+                BoxMean(guidePlane, meanG, width, rows, radius, columnSums, prefix, ring);
 
-                for (var i = 0; i < length; i++)
-                    scratch[i] = guidePlane[i] * guidePlane[i];
+                Square(guideValues[channel], secondGuide, length);
 
-                BoxMean(scratch, aPlane, width, rows, radius, columnSums, prefix);
+                BoxMean(scratch, aPlane, width, rows, radius, columnSums, prefix, ring);
 
-                for (var i = 0; i < length; i++)
-                    crossPlane[i] = input[i] * guidePlane[i];
+                Multiply(values[channel], guideValues[channel], cross, length);
 
-                BoxMean(crossPlane, bPlane, width, rows, radius, columnSums, prefix);
+                BoxMean(crossPlane, bPlane, width, rows, radius, columnSums, prefix, ring);
 
                 // a = cov / (var + eps), b = mean(I) - a * mean(G). Two of the planes are free after being
                 // read once: the product plane takes a, the mean-of-products plane takes b.
-                for (var i = 0; i < length; i++)
-                {
-                    var meanOfGuide = meanG[i];
-                    var variance = MathF.Max(0f, aPlane[i] - meanOfGuide * meanOfGuide);
-                    var a = (bPlane[i] - meanI[i] * meanOfGuide) / (variance + epsilon);
-                    bPlane[i] = meanI[i] - a * meanOfGuide;
-                    crossPlane[i] = a;
-                }
+                // E[G^2] landed in meanA, E[I*G] in meanB; the solve writes b back over meanB and a into cross.
+                SolveCoefficients(meanInput, meanGuide, meanA, meanB, meanB, cross, epsilon, length);
 
-                BoxMean(crossPlane, aPlane, width, rows, radius, columnSums, prefix);
+                BoxMean(crossPlane, aPlane, width, rows, radius, columnSums, prefix, ring);
 
                 // scratch held the guide's second moment; it is free now and becomes the box-averaged b.
-                BoxMean(bPlane, scratch, width, rows, radius, columnSums, prefix);
+                BoxMean(bPlane, scratch, width, rows, radius, columnSums, prefix, ring);
 
                 for (var y = bandTop; y < bandBottom; y++)
                 {
@@ -288,8 +302,87 @@ public static class GuidedFilterOps
     /// value once divided by the window area.
     /// </para>
     /// </summary>
+    /// <summary>Elementwise square of a plane; lane i does what the scalar loop did, in the same order.</summary>
+    private static void Square(float[] source, float[] destination, int length)
+    {
+        var i = 0;
+        if (Vectorized)
+        {
+            for (; i + 8 <= length; i += 8)
+            {
+                var value = Vector256.LoadUnsafe(ref source[i]);
+                (value * value).StoreUnsafe(ref destination[i]);
+            }
+        }
+
+        for (; i < length; i++)
+            destination[i] = source[i] * source[i];
+    }
+
+    /// <summary>Elementwise product of two planes.</summary>
+    private static void Multiply(float[] a, float[] b, float[] destination, int length)
+    {
+        var i = 0;
+        if (Vectorized)
+        {
+            for (; i + 8 <= length; i += 8)
+            {
+                var left = Vector256.LoadUnsafe(ref a[i]);
+                var right = Vector256.LoadUnsafe(ref b[i]);
+                (left * right).StoreUnsafe(ref destination[i]);
+            }
+        }
+
+        for (; i < length; i++)
+            destination[i] = a[i] * b[i];
+    }
+
+    /// <summary>
+    /// The per-pixel coefficient solve: <c>a = cov / (var + eps)</c>, <c>b = mean(I) − a·mean(G)</c>.
+    /// </summary>
+    /// <remarks>
+    /// Division rather than a reciprocal multiply, per lane: <c>Vector256.Divide</c> is the same IEEE
+    /// correctly-rounded operation the scalar body performs, and multiplying by a precomputed reciprocal would
+    /// differ in the last bit and eventually in a byte.
+    /// </remarks>
+    private static void SolveCoefficients(float[] meanInput, float[] meanGuide, float[] secondMoment,
+        float[] covariance, float[] bPlane, float[] aPlane, float epsilon, int length)
+    {
+        var i = 0;
+        if (Vectorized)
+        {
+            var none = Vector256<float>.Zero;
+            var eps = Vector256.Create(epsilon);
+            for (; i + 8 <= length; i += 8)
+            {
+                var meanOfGuide = Vector256.LoadUnsafe(ref meanGuide[i]);
+                var variance = Vector256.Max(none,
+                    Vector256.LoadUnsafe(ref secondMoment[i]) - (meanOfGuide * meanOfGuide));
+                var meanOfInput = Vector256.LoadUnsafe(ref meanInput[i]);
+                var a = (Vector256.LoadUnsafe(ref covariance[i]) - (meanOfInput * meanOfGuide)) / (variance + eps);
+                (meanOfInput - (a * meanOfGuide)).StoreUnsafe(ref bPlane[i]);
+                a.StoreUnsafe(ref aPlane[i]);
+            }
+        }
+
+        for (; i < length; i++)
+        {
+            var meanOfGuide = meanGuide[i];
+            var variance = MathF.Max(0f, secondMoment[i] - (meanOfGuide * meanOfGuide));
+            var a = (covariance[i] - (meanInput[i] * meanOfGuide)) / (variance + epsilon);
+            bPlane[i] = meanInput[i] - (a * meanOfGuide);
+            aPlane[i] = a;
+        }
+    }
+
+    /// <summary>Test hook: forces the scalar twin so a test can compare the two paths on the same pixels.</summary>
+    internal static bool ForceScalarVector;
+
+    /// <summary>Eight float lanes, and the caller did not ask for scalar.</summary>
+    internal static bool Vectorized => Vector256.IsHardwareAccelerated && !ForceScalarVector;
+
     private static void BoxMean(ReadOnlySpan<float> input, Span<float> output, int width, int height, int radius,
-        float[] columnSums, float[] prefix)
+        float[] columnSums, float[] prefix, float[]? ring = null)
     {
         var window = radius * 2 + 1;
         var norm = 1f / (window * window);
@@ -302,16 +395,58 @@ public static class GuidedFilterOps
                 columnSums[x] += row[x];
         }
 
+        if (ring is not null)
+        {
+            // Same rows, same order, copied verbatim: the ring is a cache of what `input` already holds, so
+            // every later subtraction reads the identical float bit pattern it used to re-read from the plane.
+            for (var i = 0; i < window; i++)
+                input.Slice(Math.Clamp(i - radius, 0, height - 1) * width, width)
+                    .CopyTo(ring.AsSpan(i * width, width));
+        }
+
         var interior = width > radius * 2 + 1;
 
         for (var y = 0; y < height; y++)
         {
-            if (y > 0)
+            if (y > 0 && ring is null)
             {
                 var add = input.Slice(Math.Clamp(y + radius, 0, height - 1) * width, width);
                 var remove = input.Slice(Math.Clamp(y - radius - 1, 0, height - 1) * width, width);
                 for (var x = 0; x < width; x++)
                     columnSums[x] += add[x] - remove[x];
+            }
+            else if (y > 0)
+            {
+                // The slot that held the leaving row is the same slot the entering row belongs in, because the
+                // window is exactly 2r+1 rows wide. The expression is the scalar twin's, character for
+                // character; only where the leaving row is read from changed.
+                var slot = (y - 1) % window;
+                var leave = ring.AsSpan(slot * width, width);
+                var enter = input.Slice(Math.Clamp(y + radius, 0, height - 1) * width, width);
+                var x = 0;
+
+                if (Vectorized && leave.Length >= 8 && enter.Length >= 8)
+                {
+                    // Lane i computes exactly what the scalar body computes, in the same order, so the sums are
+                    // bit-identical; nothing is reduced across lanes.
+                    for (; x + 8 <= width; x += 8)
+                    {
+                        var entering = Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(enter), (nuint)x);
+                        var leaving = Vector256.LoadUnsafe(ref leave[x]);
+                        var sum = Vector256.LoadUnsafe(ref columnSums[x]);
+                        // (sum + (entering - leaving)), not ((sum + entering) - leaving): the scalar body adds
+                        // the difference, and in floating point the two groupings round differently.
+                        (sum + (entering - leaving)).StoreUnsafe(ref columnSums[x]);
+                        entering.StoreUnsafe(ref leave[x]);
+                    }
+                }
+
+                for (; x < width; x++)
+                {
+                    var value = enter[x];
+                    columnSums[x] += value - leave[x];
+                    leave[x] = value;
+                }
             }
 
             var running = 0f;

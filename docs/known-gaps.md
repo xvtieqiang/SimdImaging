@@ -42,9 +42,9 @@
 | nlm 1080p S=5 | 16126 | AVX2（距离平方和向量化，其余标量） | `Filter/NonLocalMeansOps.cs` |
 | nlm 1080p S=3 | 5729 | 同上 | 同上 |
 | ll 1080p L=5 S=32 | **1464–1493**（原 1798–1960） | **标量**：金字塔逐级重映射；已做「样本分配表」预计算（见下） | `Filter/LocalLaplacianOps.cs` |
-| guided.cross 4K | 770 | AVX2 | `Filter/GuidedFilterOps.cs` |
+| guided.cross 4K | **615**（本机改前 840） | AVX2（垂直加减/平方/交叉项/系数解算向量化） | `Filter/GuidedFilterOps.cs` |
 | reduce colors 4K（抖动） | 614 | **标量**：误差扩散天然串行，前一像素决定后一像素 | `Filter/DitherOps.cs` |
-| guided filter 4K | 577 | AVX2 | `Filter/GuidedFilterOps.cs` |
+| guided filter 4K | 607（自引导未改） | AVX2（窗口相减） | `Filter/GuidedFilterOps.cs` |
 | seam 1080p（去 50 列） | **404**（原 532，−24%） | **AVX2**：DP 行四路（向量轴=像素、三路 tie-break 复现严格比较），外加 luma 缓存 | `Geometry/SeamCarving.cs` |
 | rl / rl.motion 1080p | 245 / 237 | AVX2 **+ AVX-512**（走卷积内核） | `Internal/PlanarConvolve.cs` |
 | chroma 4:2:0 4K | 228 | **标量**：双精度散列累加到色度格 | `Color/ColorConversionOps.cs` |
@@ -83,6 +83,20 @@
 
 **同批试过但回滚的**：`chroma 4:2:0`（228 ms）把 `ColorMath.Coefficients(ycbcr)` 从逐像素提到每次调用——
 **没有任何变化**（228 → 235–239 ms，落在噪声内），按纪律回滚，不留「看起来更干净但没收益」的改动。
+
+**guided.cross 的 −27%（同日，840.6 → 615 ms）**：三件事分开做、每步都验字节。
+
+1. **每带只解码一次**：原来 `for channel 0..2` 每轮都把 source 与 guide 的 RGBA 行重读重解一遍，
+   同样的字节解了 3 次。改成每带一次解成 3+3 个 float 平面，通道循环只换平面。字节不变（同一批值）。
+2. **垂直滑动加行环缓冲**：`columnSums[x] += add[x] - remove[x]` 的 `add`/`remove` 各回读整行；
+   环缓冲让每行只读一次。**表达式一字未改**，只换了「被减行从哪读」。
+3. **向量化 lane 独立段**：垂直加减、`I²`、`I·G`、系数解算 `a = cov/(var+eps)`（用 `Vector256.Divide`
+   而不是乘倒数——后者最后一位会差）。**前缀和保持串行**，并有一个 `ThePrefixSumStaysSerial` 测试盯着它。
+
+**踩到的坑值得记下来**：向量版第一版写成 `(sum + entering) - leaving`，标量是 `sum + (entering - leaving)`。
+浮点下两者舍入不同，37 宽（非 8 的倍数）的图上立刻表现为一个通道饱和到 255；64 宽（8 的倍数）和 6 宽（不进向量）
+都测不出来。`GuidedFilterTierTests` 的三组宽度（37 / 64 / 6）就是为这个形状加的。修好后 `guided.cross` 的
+AOT 哈希 `8FA3D1E85EAAA05F` **逐字符未变**。
 
 **为什么只有这些在向量上**——这是本文最该记住的一条：**确定性契约反过来限制了向量化**。
 本库承诺三档（现在四档）逐字节相同，而把标量循环改写成向量循环，往往会把浮点累加顺序从

@@ -265,6 +265,11 @@ using (var bilateral = image.GaussianBlur(2f).Bilateral(2, 0f, 0.2f))
 
 // Oil paint is the sliding-window histogram: the second call uses a window wider than the row, which is the
 // clamped-slide path rather than the interior one, and the two are different code.
+// Self-guided has its own inner loop (it must keep its bytes), and it had no hash entry at all until the
+// cross path was reworked - only the cross kernel was covered.
+using (var selfGuided = image.GuidedFilter(3, 1e-4f))
+    Console.WriteLine($"guided sha={Hash(selfGuided.WritablePixels)}");
+
 using (var painted = image.OilPaint(2, 20))
     Console.WriteLine($"oilpaint sha={Hash(painted.WritablePixels)}");
 
