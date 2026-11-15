@@ -5,24 +5,28 @@ using SimdImaging.Processing.Internal;
 namespace SimdImaging.Tests;
 
 /// <summary>
-/// A random-chain property test for plan fusion, kept as an executable record of an open defect.
+/// Do fused and step-by-step execution agree for chains nobody wrote down? They do — once every operator's halo
+/// is declared truthfully, which is the part that is easy to get wrong.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>The defect.</b> With a palette of seventeen operators (parameters drawn too), eight of forty random chains
-/// produce different bytes through <see cref="ProcessingPlan"/> than through the same operators applied one at a
-/// time. A single <c>Sharpen</c> step reproduces it at <c>bandRows = 4</c>, first difference at row 8 — the seam
-/// between the second and third band, which points at halo rows not being fetched.
+/// Seventeen operators, parameters drawn per chain, three band heights, two worker counts: 120 chains compared
+/// byte for byte against the same operators applied one at a time.
 /// </para>
 /// <para>
-/// An earlier version used five hand-picked operators and passed on 160 chains. That was worth what its sample
-/// was worth: it verified the shapes the generator happened to draw. Widening the palette exposed the rest,
-/// which is why this file now records a failure instead of a proof.
+/// This test earned its keep by failing twice, and both failures were mine, not the executor's:
 /// </para>
+/// <list type="bullet">
+/// <item><description><b>Sharpen</b> is a blur-based unsharp, so its support is the Gaussian's
+/// <c>ceil(3σ) = 3</c>, not the 1 of a 3x3 convolution. Declared as 1, the band came up two rows short and the
+/// result differed exactly at a band seam.</description></item>
+/// <item><description><b>Pixelate</b> is block-aligned, not a sliding window. A block spans rows that a band
+/// boundary can cut anywhere — band 4..7 with block 6 needs rows 0..11 — so no constant halo expresses it.
+/// It has to be declared <see cref="OpCategory.Global"/>, which is the only correct category for it.</description></item>
+/// </list>
 /// <para>
-/// Skipped rather than deleted, and skipped rather than loosened — the suite must not go green by narrowing what
-/// it compares. Delete the <c>Skip</c> when the executor is fixed: the generator is seeded, so the same chains
-/// come back.
+/// That is the halo contract in one sentence: an operator that reads further than its caller admits cannot be
+/// fused correctly, and the failure looks like a wrong pixel at a band boundary rather than like an exception.
 /// </para>
 /// </remarks>
 public class FusedChainPropertyTests
@@ -55,15 +59,21 @@ public class FusedChainPropertyTests
             return v => FilterOps.GaussianBlur(v, sigma);
         }),
         ("box", OpCategory.Neighborhood, 3, r => { var radius = r.Next(1, 4); return v => FilterOps.BoxBlur(v, radius); }),
-        ("sharpen", OpCategory.Neighborhood, 1, _ => v => FilterOps.Sharpen(v)),
+        // Sharpen is a blur-based unsharp: its support is the Gaussian's, ceil(3 sigma), not the 3x3 of a
+        // convolution. Declaring 1 here is what made this test fail, and it is the mistake the halo contract
+        // exists to catch - an operator that reads further than its caller admits.
+        ("sharpen", OpCategory.Neighborhood, 3, _ => v => FilterOps.Sharpen(v)),
         ("emboss", OpCategory.Neighborhood, 1, _ => v => FilterOps.Emboss(v)),
         ("sobel", OpCategory.Neighborhood, 1, _ => v => FilterOps.Sobel(v)),
-        ("pixelate", OpCategory.Neighborhood, 6, r => { var block = r.Next(2, 7); return v => FilterOps.Pixelate(v, block); }),
+        // Pixelate is block-aligned, not a sliding window: a block spans rows that a band boundary can cut anywhere,
+        // so no constant halo expresses it (band 4..7 with block 6 needs rows 0..11). Declared Global, which runs
+        // it over the whole image - the only category that is correct for it.
+        ("pixelate", OpCategory.Global, 0, r => { var block = r.Next(2, 7); return v => FilterOps.Pixelate(v, block); }),
 
         ("equalize", OpCategory.Global, 0, _ => v => HistogramOps.Equalize(v)),
     ];
 
-    [Fact(Skip = "open defect: fused and step-by-step diverge on random neighbourhood chains")]
+    [Fact]
     public void RandomChains_MatchStepByStep()
     {
         var random = new Random(20261116);
@@ -103,7 +113,7 @@ public class FusedChainPropertyTests
     }
 
     /// <summary>The smallest case that reproduces it: one neighbourhood step, one band boundary.</summary>
-    [Fact(Skip = "open defect: reproduces with a single Sharpen step at bandRows=4, first difference at row 8")]
+    [Fact]
     public void ASingleSharpenStep_MatchesTheWholeImage()
     {
         var funcs = new List<Func<PixelView, WorkingBuffer>> { v => FilterOps.Sharpen(v) };
