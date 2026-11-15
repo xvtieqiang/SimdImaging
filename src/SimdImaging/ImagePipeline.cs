@@ -61,6 +61,15 @@ public sealed class ImagePipeline
     /// <summary>Rotates by a quarter turn. Ends the current band pass.</summary>
     public ImagePipeline Rotate90(bool clockwise = true) => Geometry(src => src.Rotate90(clockwise));
 
+    /// <summary>Rotates by a half turn. Ends the current band pass.</summary>
+    public ImagePipeline Rotate180() => Geometry(src => src.Rotate180());
+
+    /// <summary>Mirrors left to right. Ends the current band pass.</summary>
+    public ImagePipeline FlipHorizontal() => Geometry(src => src.FlipHorizontal());
+
+    /// <summary>Mirrors top to bottom. Ends the current band pass.</summary>
+    public ImagePipeline FlipVertical() => Geometry(src => src.FlipVertical());
+
     /// <summary>Brightness by <paramref name="amount"/>.</summary>
     public ImagePipeline Brightness(float amount) => Step(PlanOps.Brightness(amount));
 
@@ -74,13 +83,13 @@ public sealed class ImagePipeline
     public ImagePipeline Invert() => Step(PlanOps.Invert());
 
     /// <summary>BT.601 luma.</summary>
-    public ImagePipeline Grayscale() => Step(PlanOps.Grayscale());
+    public ImagePipeline Grayscale(bool bt709 = false) => Step(PlanOps.Grayscale(bt709));
 
     /// <summary>Blends towards sepia.</summary>
     public ImagePipeline Sepia(float amount = 1f) => Step(PlanOps.Sepia(amount));
 
     /// <summary>Scales saturation about luma.</summary>
-    public ImagePipeline Saturation(float amount) => Step(PlanOps.Saturation(amount));
+    public ImagePipeline Saturation(float amount, bool bt709 = false) => Step(PlanOps.Saturation(amount, bt709));
 
     /// <summary>Quantizes each channel to <paramref name="levels"/> steps.</summary>
     public ImagePipeline Posterize(int levels) => Step(PlanOps.Posterize(levels));

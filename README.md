@@ -48,42 +48,72 @@ bash tests/SimdImaging.AotSmoke/run.sh
 
 ## 用法
 
-三行就够：
+### 单个算子
 
 ```csharp
 using SimdImaging;
 
-using var photo = Image.Load("photo.jpg");       // 位深跟随源：8 → Rgba8，16 → Rgba16，float → Rgba32F
-using var small = photo.Resize(800, 600);        // 默认 bicubic；返回新图，原图不动
-Image.Save(small, "out.png");                    // 格式由扩展名决定，不需要枚举
+using var photo = Image.Load("photo.jpg");   // 位深跟随源：8 → Rgba8，16 → Rgba16，float → Rgba32F
+using var small = photo.Resize(800, 600);    // 默认 bicubic；返回新图，原图不动
+Image.Save(small, "out.png");                // 格式由扩展名决定
 ```
 
-`Resize` / `Crop` / `Rotate90` / `GaussianBlur` / `Saturation` … 都是 `Image` 上的实例方法，**返回新图**，
-原图不动。一串编辑用 `Clone(x => ...)`：操作先记录、最后一次性执行，中间缓冲读完立刻还池，只有结果要 `using`。
+每个算子都是 `Image` 上的实例方法，**返回新图**，原图不动。
+
+### 一串算子
 
 ```csharp
-using var edited = photo.Clone(x => x.Crop(rect).Resize(800, 600).Saturation(1.2f).GaussianBlur(1.5f));
+using var edited = photo.Pipe()
+    .Crop(rect)
+    .Resize(800, 600)
+    .Saturation(1.2f)
+    .GaussianBlur(1.5f)
+    .ToImage();
 ```
 
-1080p 实测（三个点算子）：链式 **8.8 ms / 14 KiB**，逐步写法 9.4 ms / 8.2 MB —— 链式不仅不用逐个 `using`，
-分配还少两个数量级。
+链的价值在**内存**，不在少打几个字。逐步调用每一步都要一张整图（8K 下 132 MiB 一张，五步就是五张）；
+链把同尺寸的连续步骤压成**一遍行带**，中间图不存在。实测 8K 五步链：**逐次 381 MiB → 链 72 KiB**。
 
-需要控制解码/编码时，才用两个选项类型（`SimdImaging.Abstractions`）：
+三点须知：
+
+| 事情 | 说明 |
+|---|---|
+| **必须 `ToImage()`** | 链是惰性的，加到第几步由你决定，只有终结调用会执行 |
+| **必须 `using`** | 结果图持有一块池化内存；不还回去，池下次只能重新分配（实测 4K 每轮 2.4 → 29.4 MB） |
+| **尺寸变化不用管** | `Resize` / `Crop` / `Rotate90` 会自动切开，链照常写 |
+
+个别算子需要整图（`Vignette`、`CLAHE`、`LocalLaplacian`、`Normalize`、`AdaptiveThreshold`、`Pixelate`），
+链会把它们当独立一段整体执行——**写法不变**，代价是该步多一张中间图（和直接调用它一样）。
+逐条判定与原因见 [`docs/pipeline-coverage.md`](docs/pipeline-coverage.md)。
+
+### 需要控制解码 / 编码时
+
+用两个选项类型（`SimdImaging.Abstractions`）：
 
 | 我要 | 写 |
 |---|---|
 | 1/4 缩放解码（精确尺寸） | `Load(p, new LoadOptions { ScaleDenominator = 4 })` |
 | 只要快，尺寸可以大一点 | `Load(p, new LoadOptions { ScaleDenominator = 16, PreferNativeScale = true })` |
 | 按 EXIF 转正 | `Load(p, new LoadOptions { ApplyOrientation = true })` |
-| 只解一块（地图/大图切片） | `Load(p, new LoadOptions { Region = new PixelRect(x, y, w, h) })` |
+| 只解一块（地图 / 大图切片） | `Load(p, new LoadOptions { Region = new PixelRect(x, y, w, h) })` |
 | 限内存（防解压炸弹） | `Load(p, new LoadOptions { MaxPixels = 40_000_000 })` |
 | 从流读（HTTP 响应体） | `await Image.LoadAsync(stream)` |
 | JPEG 质量 | `Save(img, p, new SaveOptions { JpegQuality = 85 })` |
 | WebP 无损 | `Save(img, p, new SaveOptions { WebpLossless = true })` |
-| 要字节不要文件 | `byte[] png = Image.Encode(img, ImageFormat.Png)`（这个枚举来自 `Sdcb.SimdCodecs.Abstractions`） |
+| 要字节不要文件 | `byte[] png = Image.Encode(img, ImageFormat.Png)`（枚举来自 `Sdcb.SimdCodecs.Abstractions`） |
 
 失败分两种，别混：输入不是图片 → `InvalidDataException`（或 `TryLoad` 返回 false）；调用方参数错了 →
 `ArgumentException` / `NotSupportedException`。没有静默降级。
+
+### 旧写法仍然可用
+
+`Clone(x => ...)` 是更早的链式入口，14 个算子，**顺序执行、不融合**：
+
+```csharp
+using var edited = photo.Clone(x => x.Resize(800, 600).Saturation(1.2f));
+```
+
+它与 `Pipe()` 功能重叠，合并计划见 [`docs/known-gaps.md`](docs/known-gaps.md)。新代码建议用 `Pipe()`。
 
 ## 与 ImageSharp 4.1.x 的定位差异
 
@@ -107,6 +137,9 @@ using var edited = photo.Clone(x => x.Crop(rect).Resize(800, 600).Saturation(1.2
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | 分层、与 SimdCodecs 的边界、缓冲抽象、SIMD 策略、AOT、测试与基准方法、里程碑、风险 |
 | [`docs/operators.md`](docs/operators.md) | 119 个算子的完整清单（语义 / 实现策略 / 确定性 / 阶段）+ ImageSharp 功能对标 |
+| [`docs/pipeline-coverage.md`](docs/pipeline-coverage.md) | 哪些算子能进链、halo 从哪来、哪些需要整图 |
+| [`docs/report-2026-11-16.md`](docs/report-2026-11-16.md) | 2026-11-16 的改动与实测数字（含负结论） |
+| [`docs/known-gaps.md`](docs/known-gaps.md) | 未达标项、已否决方向、测量方法论 |
 
 ## 一句话设计
 

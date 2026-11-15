@@ -42,13 +42,14 @@ public static class PlanOps
     public static ImageOp Invert() => Point("invert", v => PointOps.Invert(v));
 
     /// <summary>BT.601 luma, alpha untouched.</summary>
-    public static ImageOp Grayscale() => Point("grayscale", v => PointOps.Grayscale(v));
+    public static ImageOp Grayscale(bool bt709 = false) => Point("grayscale", v => PointOps.Grayscale(v, bt709));
 
     /// <summary>Blends towards a sepia tone; zero is identity.</summary>
     public static ImageOp Sepia(float amount = 1f) => Point("sepia", v => PointOps.Sepia(v, amount));
 
     /// <summary>Scales saturation about luma.</summary>
-    public static ImageOp Saturation(float amount) => Point("saturation", v => PointOps.Saturation(v, amount));
+    public static ImageOp Saturation(float amount, bool bt709 = false) =>
+        Point("saturation", v => PointOps.Saturation(v, amount, bt709));
 
     /// <summary>Quantizes each channel to <paramref name="levels"/> steps.</summary>
     public static ImageOp Posterize(int levels) => Point("posterize", v => PointOps.Posterize(v, levels));
