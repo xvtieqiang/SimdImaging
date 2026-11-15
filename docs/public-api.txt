@@ -413,9 +413,11 @@
   SimdImaging.ImagePipeline.Emboss() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Equalize() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Erode3x3() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.FlipHorizontal() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.FlipVertical() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Gamma(System.Single gamma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.GaussianBlur(System.Single sigma) -> SimdImaging.ImagePipeline
-  SimdImaging.ImagePipeline.Grayscale() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Grayscale(System.Boolean bt709) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Invert() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.ImagePipeline
@@ -429,8 +431,9 @@
   SimdImaging.ImagePipeline.Pixelate(System.Int32 blockSize) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Posterize(System.Int32 levels) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Resize(System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Rotate180() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Rotate90(System.Boolean clockwise) -> SimdImaging.ImagePipeline
-  SimdImaging.ImagePipeline.Saturation(System.Single amount) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Saturation(System.Single amount, System.Boolean bt709) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sepia(System.Single amount) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sharpen(System.Single amount, System.Single sigma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sobel() -> SimdImaging.ImagePipeline
@@ -854,7 +857,7 @@
   SimdImaging.Processing.PlanOps.Erode3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Gamma(System.Single gamma) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.GaussianBlur(System.Single sigma) -> SimdImaging.Processing.ImageOp
-  SimdImaging.Processing.PlanOps.Grayscale() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Grayscale(System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Invert() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.Processing.ImageOp
@@ -867,7 +870,7 @@
   SimdImaging.Processing.PlanOps.Open3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Pixelate(System.Int32 blockSize) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Posterize(System.Int32 levels) -> SimdImaging.Processing.ImageOp
-  SimdImaging.Processing.PlanOps.Saturation(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Saturation(System.Single amount, System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Sepia(System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Sharpen(System.Single amount, System.Single sigma) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Sobel() -> SimdImaging.Processing.ImageOp
