@@ -143,6 +143,7 @@ internal static class PointLut
                 var from = source.Row(y);
                 var to = view.Row(y);
                 var length = source.Width * 4;
+
                 for (var i = 0; i < length; i += 4)
                 {
                     to[i] = lut[from[i]];

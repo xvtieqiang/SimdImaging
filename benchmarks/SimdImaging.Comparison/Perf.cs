@@ -73,7 +73,7 @@ internal static class Perf
                 Timing.Ratio(ourMs, theirMs),
                 (ourAlloc / 1024.0).ToString("F0", CultureInfo.InvariantCulture),
                 (theirAlloc / 1024.0).ToString("F0", CultureInfo.InvariantCulture),
-                ourMs < theirMs ? "我方快" : "对手快"]);
+                Verdict(ourMs, theirMs)]);
 
             if (c.Id is "resize-bicubic" or "gaussian-blur" or "crop" or "grayscale")
             {
@@ -86,7 +86,8 @@ internal static class Perf
         report.Table(["场景", "语义", "首次我方 ms", "首次对手 ms", "稳态我方 ms", "稳态对手 ms",
             "我方 MP/s", "对手 MP/s", "稳态加速比", "我方 KiB/op", "对手 KiB/op", "胜负"], rows);
         report.Line($"**超越判定（steady）：{GeometricMean(steadyRatios):F4}×**"
-                  + $"（{steadyRatios.Count(r => r > 1)} / {steadyRatios.Count} 项领先）；"
+                  + $"（领先 {steadyRatios.Count(r => r > 1.05)} / 持平 {steadyRatios.Count(r => r is >= 0.95f and <= 1.05f)}"
+                  + $" / 落后 {steadyRatios.Count(r => r < 0.95f)}，共 {steadyRatios.Count} 项）；"
                   + $"cold 单独记账：**{GeometricMean(coldRatios):F4}×**。");
         report.Line("> cold 只回答「第一次调用要付多少」，**不参与超越判定**；两边各自的预热成本各算各的，不能拿对手初始化慢来抵算子慢。");
         report.Line("> ⚠ **单一分辨率的结论不算定论**：同一份代码在 1080p 与 4K 的名次会翻转"
@@ -133,6 +134,21 @@ internal static class Perf
         action();
         watch.Stop();
         return watch.Elapsed.TotalMilliseconds;
+    }
+
+    /// <summary>
+    /// Three-way verdict instead of a binary one. At 640x360 the point operators sit around 0.16-0.20 ms, where
+    /// run-to-run noise alone moves the ratio by several percent; calling 0.97x "the opponent is faster" reports
+    /// sampling noise as a result. The band is deliberately narrow - five percent - and the per-case ratio is
+    /// printed next to it either way, so nothing is hidden.
+    /// </summary>
+    private static string Verdict(double ours, double theirs)
+    {
+        var ratio = theirs / ours;
+        if (ratio > 1.05)
+            return "我方快";
+
+        return ratio < 0.95 ? "对手快" : "持平";
     }
 
     private static double GeometricMean(List<double> values) =>
