@@ -66,9 +66,9 @@ internal static class AllocPlan
         Console.WriteLine();
         Console.WriteLine("median [min..max] over three batches; B/op = allocated bytes / executions.");
         Console.WriteLine("B/op does not scale with pixel count (1080p is 9x the pixels of 640x360, yet");
-        Console.WriteLine("LUT-fold degree=1 is exactly 2144 at both): cost is per-call plan rebuild +");
-        Console.WriteLine("per-band WorkingBuffer wrappers + Parallel.For scheduling, not pixel buffers");
-        Console.WriteLine("(those come from the pool). The window path additionally tracks band count.");
+        Console.WriteLine("LUT-fold degree=1 reads 256 at both since execution shapes are cached): what is");
+        Console.WriteLine("left is one WorkingBuffer wrapper per segment plus Parallel.For scheduling, not");
+        Console.WriteLine("pixel buffers (those come from the pool). The window path tracks band count.");
     }
 
     private static void RunSize(int width, int height, ProcessingPlan lut, ProcessingPlan points)

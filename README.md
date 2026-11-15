@@ -111,7 +111,7 @@ using var edited = photo.Clone(x => x.Crop(rect).Resize(800, 600).Saturation(1.2
 ## 一句话设计
 
 - **三个工作格式**：`Rgba8` / `Rgba16` / `Rgba32F`。布局翻译只在边界发生一次，由 SimdCodecs 的 `PixelConverter` 完成。
-- **两个缓冲，来回倒**：`WorkingBuffer`（实现 `IMemoryOwner<byte>`，可零拷贝交给编码器）+ 池；稳态分配实测 7–39 KiB/op（§1.3 的 `0 B/op` 目标未达成）。2026-11-15 在 M10 融合路径上重测仍 ≈4.3 KiB/op，未达标但已出数（见 `known-gaps.md`）。
+- **两个缓冲，来回倒**：`WorkingBuffer`（实现 `IMemoryOwner<byte>`，可零拷贝交给编码器）+ 池；稳态分配实测 7–39 KiB/op（§1.3 的 `0 B/op` 目标**未达成**）。2026-11-15 在融合路径上把执行形状缓存后降到 **2493 B/op**（单线程 256 B/op），仍未到 0，残余是缓冲包装与并行调度（见 `known-gaps.md`）。
 - **计划先于执行**：点算子链可用 `AddPointLut` 折叠成一张 4×256 表单遍跑；连续可切带步骤由 M10 的窗口递归融合执行（halo 沿链累积，输出与逐步骤逐字节相同）；`Region`/`ScaleDenominator` 下推给解码器。`PlanObserver` 存在时回退逐步骤（见 `architecture.md` §5.5 与 `known-gaps.md`）。
 - **确定性**：整数路径跨平台逐字节；浮点路径固定运算序 + 单次舍入 FMA，跨档位逐字节。
 

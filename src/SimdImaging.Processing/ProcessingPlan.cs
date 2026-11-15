@@ -81,6 +81,19 @@ public sealed class ProcessingPlan
 
     private readonly List<PlanStep> _steps = [];
 
+    /// <summary>Bumped on every <c>Add</c>; the execution cache below is keyed on it.</summary>
+    private int _version;
+
+    /// <summary>
+    /// Folded (fused) and unfolded execution shapes, cached because they depend only on the steps.
+    /// A plan is normally built once and executed many times — that is the shape §1.3's "pooling + plan reuse"
+    /// describes — and rebuilding the fold, the step arrays and the segmentation on every call was the bulk of
+    /// the residual per-call allocation.
+    /// </summary>
+    private ExecutionShape? _fusedShape;
+    private ExecutionShape? _plainShape;
+    private int _shapeVersion = -1;
+
     /// <summary>The frozen defaults: fusion on, no diagnostics, no ceiling, no cancellation.</summary>
     private static readonly ExecuteOptions DefaultOptions = new();
 
@@ -117,6 +130,7 @@ public sealed class ProcessingPlan
                 "A geometric step changes the image size, which a same-size plan cannot represent; run it outside the plan.");
 
         _steps.Add(new PlanStep(name, category, haloX, haloY, kernel) { Scratch = scratch });
+        _version++;
         return this;
     }
 
@@ -138,6 +152,7 @@ public sealed class ProcessingPlan
 
         var table = rgbaTable.ToArray();
         _steps.Add(new PlanStep(name, OpCategory.Point, 0, 0, BuildLutKernel(table)) { Lut = table });
+        _version++;
         return this;
     }
 
@@ -219,13 +234,13 @@ public sealed class ProcessingPlan
         var width = source.Width;
         var height = source.Height;
         var fused = options.AllowFusion && observe is null;
-        var execution = BuildExecutionSteps(fused, out var firstOriginal, out var originalCount);
-        var segments = fused ? FusionPlanner.Segment(execution) : SingleSteps(execution.Count);
+        var shape = ExecutionShapeFor(fused);
+        var execution = shape.Steps;
+        var segments = shape.Segments;
         var reason = observe is not null ? FusionFallbackReason.ObserverPresent
             : !options.AllowFusion ? FusionFallbackReason.AllowFusionDisabled
-            : segments.Exists(s => !FusionPlanner.IsBandable(execution[s.First]))
-                ? FusionFallbackReason.CategoryBoundary
-                : FusionFallbackReason.None;
+            : shape.HasCategoryBoundary ? FusionFallbackReason.CategoryBoundary
+            : FusionFallbackReason.None;
 
         if (options.MaxWorkingBytes > 0)
         {
@@ -280,16 +295,32 @@ public sealed class ProcessingPlan
                         // (a 256-entry LUT, for one) 24 times per 1080p step. Measured: three point steps cost
                         // 14.5 ms that way against 5.1 ms for the same three operators called directly.
                         // Bands write disjoint rows, so the worker count cannot change a byte.
-                        RowParallel.ForBands(BandCountFor(height), (start, end) =>
+                        if (options.MaxDegreeOfParallelism == 1)
                         {
-                            for (var b = start; b < end; b++)
+                            // One worker is a plain loop: RowParallel would wrap it in a delegate, and that
+                            // closure is a per-call allocation for a path that is meant to be allocation-free.
+                            var bands = BandCountFor(height);
+                            for (var b = 0; b < bands; b++)
                             {
                                 var top = b * BandRows;
                                 var band = new PixelRect(0, top, width, Math.Min(BandRows, height - top));
                                 step.Kernel(current, destination.View, band,
                                     MapSource(band, step.HaloX, step.HaloY, width, height));
                             }
-                        }, options.MaxDegreeOfParallelism, cancellation);
+                        }
+                        else
+                        {
+                            RowParallel.ForBands(BandCountFor(height), (start, end) =>
+                            {
+                                for (var b = start; b < end; b++)
+                                {
+                                    var top = b * BandRows;
+                                    var band = new PixelRect(0, top, width, Math.Min(BandRows, height - top));
+                                    step.Kernel(current, destination.View, band,
+                                        MapSource(band, step.HaloX, step.HaloY, width, height));
+                                }
+                            }, options.MaxDegreeOfParallelism, cancellation);
+                        }
                     }
 
                     // Before the dispose below, not after: `destination` is what `owned` is about to become, and
@@ -321,7 +352,7 @@ public sealed class ProcessingPlan
             report = new PlanReport
             {
                 SegmentCount = segments.Count,
-                Segments = DescribeSegments(execution, segments, fused, firstOriginal, originalCount),
+                Segments = DescribeSegments(execution, segments, fused, shape.FirstOriginal, shape.OriginalCount),
                 FallbackReason = reason,
                 WorkerCount = RowParallel.LastWorkerCount,
                 BandCount = CountBands(execution, segments, fused, height),
@@ -335,6 +366,66 @@ public sealed class ProcessingPlan
     }
 
     private int BandCountFor(int height) => (height + BandRows - 1) / BandRows;
+
+    /// <summary>Everything about one folding mode that does not change between executions.</summary>
+    private sealed class ExecutionShape
+    {
+        public required List<PlanStep> Steps { get; init; }
+        public required List<(int First, int Count)> Segments { get; init; }
+        public required int[] FirstOriginal { get; init; }
+        public required int[] OriginalCount { get; init; }
+        public required bool HasCategoryBoundary { get; init; }
+    }
+
+    /// <summary>
+    /// The shape for <paramref name="fold"/>, built once per version of the plan.
+    /// <para>
+    /// Cached rather than rebuilt: a plan is normally built once and executed many times, and the fold, the
+    /// step arrays and the segmentation depend only on the steps. Rebuilding them was the bulk of the residual
+    /// per-call allocation that kept §1.3's "0 B/op with pooling and plan reuse" out of reach.
+    /// </para>
+    /// </summary>
+    private ExecutionShape ExecutionShapeFor(bool fold)
+    {
+        if (_shapeVersion != _version)
+        {
+            _fusedShape = null;
+            _plainShape = null;
+            _shapeVersion = _version;
+        }
+
+        var cached = fold ? _fusedShape : _plainShape;
+        if (cached is not null)
+            return cached;
+
+        var steps = BuildExecutionSteps(fold, out var firsts, out var counts);
+        var segments = fold ? FusionPlanner.Segment(steps) : SingleSteps(steps.Count);
+
+        var boundary = false;
+        foreach (var (first, _) in segments)
+        {
+            if (FusionPlanner.IsBandable(steps[first]))
+                continue;
+            boundary = true;
+            break;
+        }
+
+        var shape = new ExecutionShape
+        {
+            Steps = steps,
+            Segments = segments,
+            FirstOriginal = firsts,
+            OriginalCount = counts,
+            HasCategoryBoundary = boundary,
+        };
+
+        if (fold)
+            _fusedShape = shape;
+        else
+            _plainShape = shape;
+
+        return shape;
+    }
 
     /// <summary>
     /// Folds consecutive <see cref="AddPointLut"/> steps into one step with a composed 4×256 table.
