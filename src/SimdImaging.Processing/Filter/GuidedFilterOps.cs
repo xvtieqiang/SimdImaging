@@ -184,6 +184,17 @@ public static class GuidedFilterOps
 
         var context = radius * 2;
         var capacity = Math.Min(height, bandRows + context * 2) * width;
+        var bandCount = (height + bandRows - 1) / bandRows;
+
+        // Eight image planes per worker is what running bands in parallel costs: 17.7 MB each at 4K with
+        // bandRows 128, so the worker count is capped by a byte budget rather than by core count.
+        var perWorkerBytes = (8L * capacity * sizeof(float)) + ((long)((radius * 2 + 1) * width) * sizeof(float));
+        var workers = Math.Min(RowParallel.Degree, bandCount);
+        if (workers > 1 && workers * perWorkerBytes > ParallelScratchBytes)
+            workers = (int)Math.Max(1, ParallelScratchBytes / perWorkerBytes);
+
+        void ProcessBands(int first, int last)
+        {
 
         // Three planes per side, decoded once per band: the channel loop below used to re-read and re-decode
         // both RGBA rows for each of the three channels, doing 3x the conversions for the same bytes.
@@ -213,8 +224,9 @@ public static class GuidedFilterOps
 
         try
         {
-        for (var bandTop = 0; bandTop < height; bandTop += bandRows)
+        for (var b = first; b < last; b++)
         {
+            var bandTop = b * bandRows;
             var bandBottom = Math.Min(height, bandTop + bandRows);
             var top = Math.Max(0, bandTop - context);
             var bottom = Math.Min(height, bandBottom + context);
@@ -347,9 +359,18 @@ public static class GuidedFilterOps
             FloatScratch.Return(guideRow);
             FloatScratch.Return(ring);
         }
+        }
+
+        if (workers <= 1)
+            ProcessBands(0, bandCount);
+        else
+            RowParallel.ForBands(bandCount, ProcessBands, workers, default);
 
         return destination;
     }
+
+    /// <summary>Bytes of working set the parallel band path may hold across all its workers.</summary>
+    private const long ParallelScratchBytes = 96L << 20;
 
     /// <summary>
     /// Box mean with replicated edges, in two running sums: a column sum over the vertical window, then a
