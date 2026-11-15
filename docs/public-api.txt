@@ -430,11 +430,11 @@
   SimdImaging.ImagePipeline.Posterize(System.Int32 levels) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Resize(System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Rotate90(System.Boolean clockwise) -> SimdImaging.ImagePipeline
-  SimdImaging.ImagePipeline.Run() -> SimdImaging.Image
   SimdImaging.ImagePipeline.Saturation(System.Single amount) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sepia(System.Single amount) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sharpen(System.Single amount, System.Single sigma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sobel() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ToImage() -> SimdImaging.Image
   SimdImaging.ImagePipeline.Vignette(System.Single radius, System.Single strength) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipelineExtensions.Pipe(SimdImaging.Image image) -> SimdImaging.ImagePipeline
   SimdImaging.NormalizedWarp.#ctor(System.Object object, System.IntPtr method)

@@ -157,7 +157,7 @@ public class HaloDeclarationTests
             .Brightness(0.05f)
             .Sharpen()
             .Grayscale()
-            .Run();
+            .ToImage();
 
         using var first = source.Brightness(0.05f);
         using var second = first.Sharpen();
@@ -179,7 +179,7 @@ public class HaloDeclarationTests
             .Brightness(0.05f)
             .Resize(20, 14)
             .Sharpen()
-            .Run();
+            .ToImage();
 
         using var bright = source.Brightness(0.05f);
         using var resized = bright.Resize(20, 14);

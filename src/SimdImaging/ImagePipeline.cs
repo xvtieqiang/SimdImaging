@@ -30,7 +30,7 @@ namespace SimdImaging;
 ///     .Resize(1920, 1080)
 ///     .Brightness(0.05f)
 ///     .Sharpen()
-///     .Run();
+///     .ToImage();
 /// </code>
 /// </example>
 public sealed class ImagePipeline
@@ -165,8 +165,15 @@ public sealed class ImagePipeline
     /// <summary>Histogram equalisation.</summary>
     public ImagePipeline Equalize() => Step(PlanOps.Equalize());
 
-    /// <summary>Runs the chain and returns a new image; the source is not modified.</summary>
-    public Image Run()
+    /// <summary>
+    /// Runs the chain and returns the image. The source is not modified.
+    /// </summary>
+    /// <remarks>
+    /// A terminal call is unavoidable: the chain has to stay lazy until the last step is added, and only the
+    /// caller knows when that is. It is named for what it returns rather than for what it does, the way
+    /// <c>ToArray</c> ends a LINQ query — <c>Run</c> reads like it returns nothing.
+    /// </remarks>
+    public Image ToImage()
     {
         ObjectDisposedException.ThrowIf(_finished, this);
         _finished = true;

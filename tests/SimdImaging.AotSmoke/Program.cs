@@ -176,7 +176,7 @@ using (var ewaRotate = image.RotateWithOptions(17f, Resampler.Bicubic,
 // the JIT. The equality to the step-by-step executor is covered by FusedExecutorEquivalenceTests;
 // this entry is what proves the fused window recursion survives AOT.
 // The shape a caller writes: three steps, no planning vocabulary anywhere in sight.
-using (var planned = image.Pipe().BandRows(8).Brightness(0.05f).GaussianBlur(1f).Invert().Run())
+using (var planned = image.Pipe().BandRows(8).Brightness(0.05f).GaussianBlur(1f).Invert().ToImage())
     Console.WriteLine($"plan.fused sha={Hash(planned.WritablePixels)}");
 
 // M11 photo algorithms: non-local means (integer distances plus Math.Exp weights) and the local
