@@ -187,26 +187,32 @@ public static class GuidedFilterOps
 
         // Three planes per side, decoded once per band: the channel loop below used to re-read and re-decode
         // both RGBA rows for each of the three channels, doing 3x the conversions for the same bytes.
+        //
+        // FloatScratch, not `new`: eight 2.2 MB planes per call at 4K is 17.8 MB of garbage per invocation,
+        // and the filter is called on a whole image at a time. Every region read below is written first —
+        // the planes by the decode loop, the ring by BoxMean, the row buffers by ReadRowRaw.
         var values = new float[3][];
         var guideValues = new float[3][];
         for (var c = 0; c < 3; c++)
         {
-            values[c] = new float[capacity];
-            guideValues[c] = new float[capacity];
+            values[c] = FloatScratch.Rent(capacity);
+            guideValues[c] = FloatScratch.Rent(capacity);
         }
 
-        var meanInput = new float[capacity];
-        var meanGuide = new float[capacity];
-        var secondGuide = new float[capacity];
-        var cross = new float[capacity];
-        var meanA = new float[capacity];
-        var meanB = new float[capacity];
-        var columnSums = new float[width];
-        var prefix = new float[width + 1];
-        var row = new float[stride];
-        var guideRow = new float[stride];
-        var ring = new float[(radius * 2 + 1) * width];
+        var meanInput = FloatScratch.Rent(capacity);
+        var meanGuide = FloatScratch.Rent(capacity);
+        var secondGuide = FloatScratch.Rent(capacity);
+        var cross = FloatScratch.Rent(capacity);
+        var meanA = FloatScratch.Rent(capacity);
+        var meanB = FloatScratch.Rent(capacity);
+        var columnSums = FloatScratch.Rent(width);
+        var prefix = FloatScratch.Rent(width + 1);
+        var row = FloatScratch.Rent(stride);
+        var guideRow = FloatScratch.Rent(stride);
+        var ring = FloatScratch.Rent((radius * 2 + 1) * width);
 
+        try
+        {
         for (var bandTop = 0; bandTop < height; bandTop += bandRows)
         {
             var bandBottom = Math.Min(height, bandTop + bandRows);
@@ -215,30 +221,45 @@ public static class GuidedFilterOps
             var rows = bottom - top;
             var length = rows * width;
 
-            for (var i = 0; i < rows; i++)
+            // Rows are independent, so the decode is banded. Each worker rents its own pair of row buffers;
+            // FloatScratch is thread-local, so the rent happens once per worker per band rather than per row.
+            RowParallel.For(width, rows, (start, end) =>
             {
-                Pixels.ReadRowRaw(source.Row(top + i), width, source.Format, row);
-                Pixels.ReadRowRaw(guide.Row(top + i), width, guide.Format, guideRow);
-
-                var at = i * width;
-                var red = values[0].AsSpan(at, width);
-                var green = values[1].AsSpan(at, width);
-                var blue = values[2].AsSpan(at, width);
-                var guideRed = guideValues[0].AsSpan(at, width);
-                var guideGreen = guideValues[1].AsSpan(at, width);
-                var guideBlue = guideValues[2].AsSpan(at, width);
-
-                for (var x = 0; x < width; x++)
+                var localRow = FloatScratch.Rent(stride);
+                var localGuide = FloatScratch.Rent(stride);
+                try
                 {
-                    var o = x * 4;
-                    red[x] = row[o];
-                    green[x] = row[o + 1];
-                    blue[x] = row[o + 2];
-                    guideRed[x] = guideRow[o];
-                    guideGreen[x] = guideRow[o + 1];
-                    guideBlue[x] = guideRow[o + 2];
+                    for (var i = start; i < end; i++)
+                    {
+                        Pixels.ReadRowRaw(source.Row(top + i), width, source.Format, localRow);
+                        Pixels.ReadRowRaw(guide.Row(top + i), width, guide.Format, localGuide);
+
+                        var at = i * width;
+                        var red = values[0].AsSpan(at, width);
+                        var green = values[1].AsSpan(at, width);
+                        var blue = values[2].AsSpan(at, width);
+                        var guideRed = guideValues[0].AsSpan(at, width);
+                        var guideGreen = guideValues[1].AsSpan(at, width);
+                        var guideBlue = guideValues[2].AsSpan(at, width);
+
+                        for (var x = 0; x < width; x++)
+                        {
+                            var o = x * 4;
+                            red[x] = localRow[o];
+                            green[x] = localRow[o + 1];
+                            blue[x] = localRow[o + 2];
+                            guideRed[x] = localGuide[o];
+                            guideGreen[x] = localGuide[o + 1];
+                            guideBlue[x] = localGuide[o + 2];
+                        }
+                    }
                 }
-            }
+                finally
+                {
+                    FloatScratch.Return(localRow);
+                    FloatScratch.Return(localGuide);
+                }
+            });
 
             for (var channel = 0; channel < 3; channel++)
             {
@@ -272,20 +293,59 @@ public static class GuidedFilterOps
                 // scratch held the guide's second moment; it is free now and becomes the box-averaged b.
                 BoxMean(bPlane, scratch, width, rows, radius, columnSums, prefix, ring);
 
-                for (var y = bandTop; y < bandBottom; y++)
+                // Arrays, not the spans: a span cannot be captured by the band lambda.
+                var aPlaneMemory = meanA;
+                var inputMemory = values[channel];
+                var bMemory = secondGuide;
+                var channelColumn = channel;
+                RowParallel.For(width, bandBottom - bandTop, (start, end) =>
                 {
-                    var baseIndex = (y - top) * width;
-                    Pixels.ReadRowRaw(destination.View.Row(y), width, source.Format, row);
-
-                    for (var x = 0; x < width; x++)
+                    var localRow = FloatScratch.Rent(stride);
+                    try
                     {
-                        var index = baseIndex + x;
-                        row[x * 4 + channel] = Math.Clamp(aPlane[index] * input[index] + scratch[index], 0f, 1f);
-                    }
+                        for (var i = start; i < end; i++)
+                        {
+                            var y = bandTop + i;
+                            var baseIndex = (y - top) * width;
+                            Pixels.ReadRowRaw(destination.View.Row(y), width, source.Format, localRow);
 
-                    Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));
-                }
+                            for (var x = 0; x < width; x++)
+                            {
+                                var index = baseIndex + x;
+                                localRow[(x * 4) + channelColumn] =
+                                    Math.Clamp(aPlaneMemory[index] * inputMemory[index] + bMemory[index], 0f, 1f);
+                            }
+
+                            Pixels.WriteRowRaw(localRow, width, source.Format, destination.View.Row(y));
+                        }
+                    }
+                    finally
+                    {
+                        FloatScratch.Return(localRow);
+                    }
+                });
             }
+        }
+        }
+        finally
+        {
+            for (var c = 0; c < 3; c++)
+            {
+                FloatScratch.Return(values[c]);
+                FloatScratch.Return(guideValues[c]);
+            }
+
+            FloatScratch.Return(meanInput);
+            FloatScratch.Return(meanGuide);
+            FloatScratch.Return(secondGuide);
+            FloatScratch.Return(cross);
+            FloatScratch.Return(meanA);
+            FloatScratch.Return(meanB);
+            FloatScratch.Return(columnSums);
+            FloatScratch.Return(prefix);
+            FloatScratch.Return(row);
+            FloatScratch.Return(guideRow);
+            FloatScratch.Return(ring);
         }
 
         return destination;

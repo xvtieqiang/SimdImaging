@@ -42,7 +42,7 @@
 | nlm 1080p S=5 | 16126 | AVX2（距离平方和向量化，其余标量） | `Filter/NonLocalMeansOps.cs` |
 | nlm 1080p S=3 | 5729 | 同上 | 同上 |
 | ll 1080p L=5 S=32 | **1464–1493**（原 1798–1960） | **标量**：金字塔逐级重映射；已做「样本分配表」预计算（见下） | `Filter/LocalLaplacianOps.cs` |
-| guided.cross 4K | **615**（本机改前 840） | AVX2（垂直加减/平方/交叉项/系数解算向量化） | `Filter/GuidedFilterOps.cs` |
+| guided.cross 4K | **396**（本机改前 840，−53%） | AVX2 + 行带并行（解码/写回/逐元素） | `Filter/GuidedFilterOps.cs` |
 | reduce colors 4K（抖动） | 614 | **标量**：误差扩散天然串行，前一像素决定后一像素 | `Filter/DitherOps.cs` |
 | guided filter 4K | 607（自引导未改） | AVX2（窗口相减） | `Filter/GuidedFilterOps.cs` |
 | seam 1080p（去 50 列） | **404**（原 532，−24%） | **AVX2**：DP 行四路（向量轴=像素、三路 tie-break 复现严格比较），外加 luma 缓存 | `Geometry/SeamCarving.cs` |
@@ -83,6 +83,12 @@
 
 **同批试过但回滚的**：`chroma 4:2:0`（228 ms）把 `ColorMath.Coefficients(ycbcr)` 从逐像素提到每次调用——
 **没有任何变化**（228 → 235–239 ms，落在噪声内），按纪律回滚，不留「看起来更干净但没收益」的改动。
+
+**guided.cross 再降一档（615 → 396 ms，−35%）**：先消融定位——摘掉六次 `BoxMean` 后剩 349 ms，
+说明 BoxMean 只占 266 ms（43%），另外 57% 在解码、逐元素和写回。那三段**每行完全独立**，改 `RowParallel`
+即可，且不增加内存（每个 worker 的行缓冲从 `FloatScratch` 租，线程本地、每带一次）。
+顺手把 8 个 2.2 MB 平面从 `new` 换成 `FloatScratch`：分配 26.2 → 19.7 MB，计时在噪声内但减少的是真实的 GC 压力。
+`guided.cross` 的 AOT 哈希 `8FA3D1E85EAAA05F` 全程未变。
 
 **quantize 的 −45%（同日，63.0 → 34–36 ms）**：两件事。
 
