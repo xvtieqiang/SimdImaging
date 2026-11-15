@@ -29,9 +29,46 @@
 | 公开参考向量包 | 已实现（M6，2026-11-14）：`tests/Fixtures/vectors/` 固定输入 / 期望 / SHA-256 + 独立高精度生成脚本；初始 3 条 `warp-identity-*`，`VectorTests` 独立重算哈希。新增向量允许，为过测试改已有 `expected` 禁止 |
 | 像素差异工具 | 已实现（M6）：`src/Shared/PixelDiff.cs` 单一源码共享，测试项目与 Comparison 工程链接复用，不造第二把尺子；补首个不匹配位置、每通道误差、Top N、SHA-256、P6 差异热图，分级沿用 `Metrics.Grade` |
 | SIMD 档位自动化 | 已实现（M6）：`benchmarks/simd-tiers.sh` 三档 JIT 全量测试 + 算子输出 body SHA-256 逐档比对。修正了 §7.5 设计稿的 `--filter "FullyQualifiedName~Kernel"` —— 它实际只匹配名字里恰好带 Kernel 的用例，不匹配 scalar-twin 测试，现改为跑全量 |
-| 性能回退门禁 | **M15 起真的会判，判的是机器校正后的读数**：29 个场景里 **23 个设闸**（阈值 20–56%，由**五次**运行归一化后的偏差 `max(20, ceil(3×S))` 推出），`value` 取三次 `best-of-3` 均值。只比对 `machine` + `sourceSha`（`src/` 树哈希）+ `protocol` 全同的运行，否则打印 "not comparable" 并跳过。校正是每跑自带两个探针（`degradation = max(mem, alu)` 相对基线）；负载验证：4 核抢占下探针报 x1.59、校正后最差 −1.2% 全过，而未校正的原始读数均值 +40%。`--self-test` 把阈值压到 0 并**要求失败**（29 条全部纳入、exit=1）。留 `null` 的 6 条是 lanczos3 / crop / fill / clip / ICC grid=33 / gainmap 720p——要么三跑偏差 35–52%，要么在验证跑里整段跳到 +77%（lanczos3 的 30.8 → 54.1 ms，历史同一对里 89.7 / 53.9 也是双峰），这台机器测不出它们 15% 级别的变化 |
+| 性能回退门禁 | **M15 起真的会判，判的是机器校正后的读数**：29 个场景里 **设闸条数随录制时的机器噪声浮动**（规则：五次运行归一化后的偏差 `S` → `threshold = max(20, ceil(3×S))`，`S > 20%` 留 `null`；本次录制 16/29，阈值 20–59%），`value` 取三次 `best-of-3` 均值。只比对 `machine` + `sourceSha`（`src/` 树哈希）+ `protocol` 全同的运行，否则打印 "not comparable" 并跳过。校正是每跑自带两个探针（`degradation = max(mem, alu)` 相对基线）；负载验证：4 核抢占下探针报 x1.59、校正后最差 −1.2% 全过，而未校正的原始读数均值 +40%。`--self-test` 把阈值压到 0 并**要求失败**（29 条全部纳入、exit=1）。本次留 `null` 的 13 条集中在亚毫秒（crop）、短路径（fill / clip / stroke / oil）、ICC 与数据相关算子——它们的归一化偏差本身就 >20%，这台机器测不出这一级别的变化 |
 | CC0 语料 | 已实现（M6）：`tests/Fixtures/corpus.tsv` 2 条 Wikimedia Commons `Category:CC-Zero` 真实照片，URL + 实测 SHA-256（2026-11-14 下载校验）；`.cache/` git-ignored 不入库；离线由 `SyntheticCorpus.cs` 的 9 类确定性合成图兜底。实验台 3 张 Unsplash 演示图仍非测试夹具 |
 | AOT smoke 覆盖 | M6 补 `warp` / `samplepixel` 两条 hash 与 `REQUIRED` 必需项检查，防止「绿的 gate 什么都没验」；全量 31+ 条目核对留 M15 |
+
+## SIMD 覆盖盘点（2026-11-15）
+
+项目叫 SimdImaging，所以这张表比任何性能数字都重要：**哪些热点真的在向量上跑，哪些还是标量，为什么。**
+
+| 场景（本机实测） | ms | 档位 | 位置 |
+|---|---|---|---|
+| nlm 1080p S=5 | 16126 | AVX2（距离平方和向量化，其余标量） | `Filter/NonLocalMeansOps.cs` |
+| nlm 1080p S=3 | 5729 | 同上 | 同上 |
+| ll 1080p L=5 S=32 | 1798 | **标量**：金字塔逐级重映射，索引由像素值决定（gather） | `Filter/LocalLaplacianOps.cs` |
+| guided.cross 4K | 770 | AVX2 | `Filter/GuidedFilterOps.cs` |
+| reduce colors 4K（抖动） | 614 | **标量**：误差扩散天然串行，前一像素决定后一像素 | `Filter/DitherOps.cs` |
+| guided filter 4K | 577 | AVX2 | `Filter/GuidedFilterOps.cs` |
+| seam 1080p（去 50 列） | 532 | **标量**：能量图可向量化，但 DP 是串行且占主导 | `Geometry/SeamCarving.cs` |
+| rl / rl.motion 1080p | 245 / 237 | AVX2 **+ AVX-512**（走卷积内核） | `Internal/PlanarConvolve.cs` |
+| chroma 4:2:0 4K | 228 | **标量**：双精度散列累加到色度格 | `Color/ColorConversionOps.cs` |
+| quantize 4K（octree） | 207 | **标量**：最近色搜索，数据相关 | `Color/QuantizeOps.cs` |
+| bilateral 4K | 180 | **标量**：权重由邻域像素值查表，逐 lane 都不同 | `Filter/FilterOps.cs` |
+| oil paint 4K | 141 | **标量**：每像素一个直方图 | `Filter/OilPaintOps.cs` |
+| resize 4K→1080p bicubic | ~67 | AVX2（行带 + 两遍 + 水平/垂直向量） | `Geometry/Resize.cs` |
+| gaussian / box blur 4K | ~88 / — | AVX2 + **AVX-512**（卷积内核） | `Internal/PlanarConvolve.cs` |
+
+**为什么只有这些在向量上**——这是本文最该记住的一条：**确定性契约反过来限制了向量化**。
+本库承诺三档（现在四档）逐字节相同，而把标量循环改写成向量循环，往往会把浮点累加顺序从
+「逐行累加到 double」变成「按 lane 分段再归约」，结果差 1 ULP 就是不同的字节，黄金测试立刻炸。
+所以能安全向量化的只有两类形状：
+
+1. **向量轴 = 像素、每 lane 独立累加**（卷积、resize、逐通道点算）——改写后每条 lane 的加法序列与标量孪生
+   逐字符相同，字节天然一致。新算子应当**先写成这个形状**，而不是事后补。
+2. **纯整数、无归约**（旋转/翻转的搬运、`Pixels` 的格式转换）——整数运算没有舍入分歧。
+
+反例就是上表里的标量项：散列累加（chroma）、归约（bilateral 的权重和）、串行依赖（抖动、seam DP）、
+gather（LL、ICC CLUT）。它们不是"没来得及写"，是**按现有契约写不成向量**——要做就得先改累加结构，
+而改累加结构就要承认输出变化、重跑全部黄金与三档矩阵。这是一次独立的、有风险的重构，不能顺手做。
+
+**第四档（AVX-512）**：`PlanarConvolve` 的三个循环已有 `Vector512` 路径（2026-11-15）。本机无硬件，
+正确性用 `Vector512<T>` 的软件实现验证（与标量/256 逐字节相同），吞吐仍无数据——见 `simd-tiers-evaluation.md`。
 
 ## M5 验收（完成，2026-11-15）
 
@@ -164,7 +201,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 
 | 项 | 现状 |
 |---|---|
-| 基线文件 | `benchmarks/baselines/windows-10.0.19045-x64-16-m15.json`：29 个场景，**23 个设闸**（20–56%），`value` 取同一源码树**五次** `best-of-3` 的均值，并带一个 `calibration` 块。2026-11-15 重录（重采样器补齐 + `Mutate` 落地后的源码），`sourceSha` = `ef1aac8d…` |
+| 基线文件 | `benchmarks/baselines/windows-10.0.19045-x64-16-m15.json`：29 个场景，设闸条数随录制时的噪声浮动（**本次 16/29，阈值 20–59%**），`value` 取同一源码树**五次** `best-of-3` 的均值，并带一个 `calibration` 块。2026-11-15 重录（重采样器补齐 + `Mutate` 落地后的源码），`sourceSha` = `ef1aac8d…` |
 | 为什么不再判绝对毫秒 | 2026-11-15 实测：同一份源码、同一台机器，04:00 与 07:00 两跑，**黑盒参照 ImageSharp 4.1.3 的 resize-bicubic 从 12.5 → 19.3 ms（1.54×）**，我方同项 4.97 → 7.91 ms（1.59×），29 场景整表慢 1.2–1.8×。参照不受本库代码影响，故变的是机器。绝对毫秒在这种漂移下只能二选一：误报，或把真回退埋在膨胀的基线里 |
 | 归一化 | 每跑在首尾各测一次两个**不调用本库**的探针（256 MB 并行流式求和 / 32M 次 xorshift），各取 best-of-7、再取两端更快的读数。判定用 `got_raw / degradation` 对 `baseline.value`，`degradation = max(run.mem/base.mem, run.alu/base.alu)`——哪种资源被抢就按哪种校正；探针不动时 `degradation = 1`，等价于按原始读数判。失败行同时打印 raw 与 normalised，读的人能分清「机器漂」与「代码回退」 |
 | 阈值来源 | 五次运行各自先按自己的 calibration 归一化，取五次的最大相对偏差 `S`；`threshold = max(20, ceil(3 × S))`，即门槛至少是实测噪声的 2.5 倍；`S > 20%` 留 `null`。11-14 那版「一对记录 ≤10% 才设 15%」已废弃——它用**一对**记录把当天恰好安静的 15 个场景当成稳定场景 |
