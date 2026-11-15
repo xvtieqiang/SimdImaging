@@ -6,7 +6,7 @@
 
 `<machine>-<milestone>.json`，例如 `windows-10.0.19045-x64-16-m15.json`。
 
-`machine` 由 `BaselineJson.Machine` 生成，格式固定为 `OSDescription|ProcessArchitecture|ProcessorCount`——**刻意粗**：它只用来挡住"换了一台机器"的比较，真正的可比性还要求 `binarySha256` 相同。两台同配置的机器会撞 id，这是已知的、可接受的近似（见 `docs/known-gaps.md`）。
+`machine` 由 `BaselineJson.Machine` 生成，格式固定为 `OSDescription|ProcessArchitecture|ProcessorCount`——**刻意粗**：它只用来挡住"换了一台机器"的比较，真正的可比性还要求 `sourceSha`（`src/` 的树哈希）相同。两台同配置的机器会撞 id，这是已知的、可接受的近似（见 `docs/known-gaps.md`）。
 
 ## Schema
 
@@ -15,7 +15,7 @@
   "machine": "Microsoft Windows 10.0.19045|X64|16",
   "date": "2026-11-15",
   "gitSha": "<commit>",
-  "binarySha256": "<sha of SimdImaging.Processing.dll>:<sha of SimdImaging.Abstractions.dll>",
+  "sourceSha": "<tree hash of src/, via git rev-parse HEAD:src>",
   "protocol": "best-of-N warm single process; SimdImaging.Benchmarks; slow=0; norm=max(mem,alu)",
   "repeats": 3,
   "calibration": { "memory": 10.262, "alu": 92.815 },
@@ -36,7 +36,7 @@
 
 `calibration` 是同一进程里两个**不调用本库**的探针读数（毫秒）：`memory` 是 256 MB 并行流式求和，`alu` 是 32M 次 xorshift 取和。判定时用 `run_probe / baseline_probe` 中最差的那一个把场景读数除回来，见下节。
 
-`thresholdPercent: null` 表示该场景**不设门槛**。`gates.sh` 只对同机器、同协议、同 `binarySha256` 口径可比、且 `thresholdPercent` 非 null 的条目判定回退。
+`thresholdPercent: null` 表示该场景**不设门槛**。`gates.sh` 只对同机器、同协议、同 `sourceSha` 口径可比、且 `thresholdPercent` 非 null 的条目判定回退。
 
 ## 为什么判定的是「校正后的读数」而不是毫秒
 
@@ -72,14 +72,21 @@ movement 判定。
 
 性能场景的输入必须来自 `tests/Fixtures/corpus.tsv`（真实照片）或 `SyntheticCorpus`（确定性合成图），不得用临时随机图；否则基准输入漂移会让回退判定失真。像素正确性由 `tests/Fixtures/vectors/` 单独保证，两者互不替代。
 
-## 二进制指纹与「故意跳过」
+## 源码指纹与「故意跳过」
 
-`binarySha256` 锁 `SimdImaging.Processing.dll` + `SimdImaging.Abstractions.dll`。改到这两个 dll 的产品改动会让指纹变化，
-`check-baseline.sh` 判「binary differs」→ `comparable-baselines=0` → 打印一行「no baseline matches」后 PASS。
-**这是设计，不是漏洞**：拿不同 binary 的 stopwatch 读数比较是噪声、不是门禁（脚本头注释）。此时要重录一份带新指纹的
-基线，门禁才重新「有牙」——重录是刻意的、需复核的动作，不能在负载里顺手做。重录协议：同一 binary 连跑三次
-`--no-build`（每次都写 `calibration`），合并时 `value` 取三次均值、`calibration` 取三次均值、阈值按上节规则从
-归一化后的三次偏差推出，`date` 取**本地**日期（生成器写的是本地日，不是 UTC——凌晨录制曾把 11-15 写成 11-14）。
+`sourceSha` 是 `src/` 的 git 树哈希（`git rev-parse HEAD:src`），`src/` 有未提交改动时追加 `-dirty`。它只随源码变：
+文档或测试改动不会误伤基线，改了 `src/` 就必然失配。
+`check-baseline.sh` 判「source differs」→ `comparable-baselines=0` → 打印一行「no baseline matches」后 PASS。
+**这是设计，不是漏洞**：拿不同源码的 stopwatch 读数比较是噪声、不是门禁。
+
+> **为什么不是 DLL 哈希（2026-11-15 实测）**：原先锁的是 `Processing.dll` + `Abstractions.dll` 的 SHA-256。实测发现
+> **空提交也会改变这两个 dll 的字节**（`0.1.0-alpha+<sha>` 曾嵌在 `AssemblyInformationalVersion` 里；即便关掉它，
+> 两次构建仍差 6.5 万字节，HEAD 仍以某种方式进入编译），于是每次提交后重建都会让门禁「not comparable」而静默跳过——
+> 这是它长期不可用的真实原因。改成树哈希后，判据与「同一份代码」这个语义对齐。
+
+重录是刻意的、需复核的动作，不能在负载里顺手做。协议：同一源码树连跑三次 `--no-build`（每次都写 `calibration`），
+合并时 `value` 取三次均值、`calibration` 取三次均值、阈值按上节规则从归一化后的三次偏差推出，`date` 取**本地**日期
+（生成器写的是本地日，不是 UTC——凌晨录制曾把 11-15 写成 11-14）。
 
 - **不要为了"让绿灯"去改基线值或强行对齐指纹**。2026-11-15 的教训：一次 nearest 内层改动（见 `docs/known-gaps.md`）
   后曾把 `binarySha256` 强改成新 dll 值，结果拿「机器满载时的 fresh run」去比「空闲时测的 M15 值」，15 个场景

@@ -60,6 +60,21 @@ PY
 )
 
 echo "observed: running the benchmark ($repeats repeats) for a like-for-like reading"
+
+# Key the run to the source, not to the built binaries. The DLL's bytes move whenever HEAD moves — even for
+# a docs-only commit — so a binary hash made every commit invalidate the baseline. The tree hash of src/
+# changes exactly when the code does, and a dirty tree is marked so it never matches a clean recording.
+if git rev-parse --git-dir >/dev/null 2>&1; then
+    SIMDIMAGING_SRC_SHA="$(git rev-parse HEAD:src 2>/dev/null || echo unknown)"
+    if [ -n "$(git status --porcelain -- src 2>/dev/null)" ]; then
+        SIMDIMAGING_SRC_SHA="$SIMDIMAGING_SRC_SHA-dirty"
+    fi
+else
+    SIMDIMAGING_SRC_SHA=unknown
+fi
+export SIMDIMAGING_SRC_SHA
+echo "observed: source=$SIMDIMAGING_SRC_SHA"
+
 dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks --no-build -- "$repeats" --json "$observed" >/dev/null 2>&1
 if [ ! -f "$observed" ]; then
     echo "FAIL  the benchmark produced no JSON; cannot compare" >&2
@@ -107,8 +122,8 @@ for path in sorted(glob.glob("benchmarks/baselines/*.json")):
     if doc["machine"] != run["machine"]:
         print(f"skip  {os.path.basename(path)}: machine differs (not comparable)")
         continue
-    if doc["binarySha256"] != run["binarySha256"]:
-        print(f"skip  {os.path.basename(path)}: binary differs (not comparable)")
+    if doc.get("sourceSha") != run.get("sourceSha"):
+        print(f"skip  {os.path.basename(path)}: source differs (not comparable)")
         continue
     if doc["protocol"] != run["protocol"]:
         print(f"skip  {os.path.basename(path)}: protocol differs (not comparable)")

@@ -1,10 +1,10 @@
 {
   "machine": "Microsoft Windows 10.0.19045|X64|16",
-  "binarySha256": "452d22f7582e15a2bf1df34eb2c48eee27eb07b6b76c22318c7b4eb64857d25d:4ce8e12368abc3067acfde47e3137defc1ea0ec087c807c86af2a0af89e17be6",
   "protocol": "best-of-N warm single process; SimdImaging.Benchmarks; slow=0; norm=max(mem,alu)",
   "repeats": 3,
   "date": "2026-11-15",
   "gitSha": "fb50317",
+  "sourceSha": "ef1aac8d74ce2189aca90396abe4844aef9d7115",
   "calibration": {
     "memory": 10.283,
     "alu": 86.743

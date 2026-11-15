@@ -1,8 +1,6 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
-using SimdImaging.Abstractions;
-using SimdImaging.Processing;
 
 namespace SimdImaging.Benchmarks;
 
@@ -15,7 +13,9 @@ namespace SimdImaging.Benchmarks;
 /// </para>
 /// <para>
 /// The machine id is deliberately coarse — OS, architecture, core count — and the comparison also requires
-/// the same binary hash: a number is only comparable with itself.
+/// the same <c>sourceSha</c>: a number is only comparable with itself. That is the tree hash of <c>src/</c>,
+/// computed by <c>check-baseline.sh</c>, not a hash of the DLL — the DLL's bytes move whenever HEAD moves,
+/// even for a docs-only commit, which made every commit invalidate the baseline.
 /// </para>
 /// <para>
 /// Since 2026-11-15 the file also carries the <c>calibration</c> block. The check divides each scenario by
@@ -33,7 +33,7 @@ internal static class BaselineJson
         builder.AppendLine($"  \"machine\": \"{Escape(Machine)}\",");
         builder.AppendLine($"  \"date\": \"{LocalDate()}\",");
         builder.AppendLine($"  \"gitSha\": \"{Escape(Environment.GetEnvironmentVariable("SIMDIMAGING_GIT_SHA") ?? "unknown")}\",");
-        builder.AppendLine($"  \"binarySha256\": \"{Sha256Of(typeof(ProcessingPlan))}:{Sha256Of(typeof(PixelView))}\",");
+        builder.AppendLine($"  \"sourceSha\": \"{Escape(Environment.GetEnvironmentVariable("SIMDIMAGING_SRC_SHA") ?? "unknown")}\",");
         builder.AppendLine($"  \"protocol\": \"best-of-N warm single process; SimdImaging.Benchmarks; slow={(slow ? 1 : 0)}; norm=max(mem,alu)\",");
         builder.AppendLine($"  \"repeats\": {repeats},");
         builder.AppendLine("  \"calibration\": { " +
@@ -73,14 +73,6 @@ internal static class BaselineJson
     /// </summary>
     private static string LocalDate() => DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-    private static string Sha256Of(Type type)
-    {
-        // Not Assembly.Location: it is empty for a single-file publish, which the trimming analyser rightly
-        // flags even though a benchmark is never published that way.
-        var path = Path.Combine(AppContext.BaseDirectory, type.Assembly.GetName().Name + ".dll");
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
-    }
 
     private static string Escape(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 }

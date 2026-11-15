@@ -29,7 +29,7 @@
 | 公开参考向量包 | 已实现（M6，2026-11-14）：`tests/Fixtures/vectors/` 固定输入 / 期望 / SHA-256 + 独立高精度生成脚本；初始 3 条 `warp-identity-*`，`VectorTests` 独立重算哈希。新增向量允许，为过测试改已有 `expected` 禁止 |
 | 像素差异工具 | 已实现（M6）：`src/Shared/PixelDiff.cs` 单一源码共享，测试项目与 Comparison 工程链接复用，不造第二把尺子；补首个不匹配位置、每通道误差、Top N、SHA-256、P6 差异热图，分级沿用 `Metrics.Grade` |
 | SIMD 档位自动化 | 已实现（M6）：`benchmarks/simd-tiers.sh` 三档 JIT 全量测试 + 算子输出 body SHA-256 逐档比对。修正了 §7.5 设计稿的 `--filter "FullyQualifiedName~Kernel"` —— 它实际只匹配名字里恰好带 Kernel 的用例，不匹配 scalar-twin 测试，现改为跑全量 |
-| 性能回退门禁 | **M15 起真的会判，判的是机器校正后的读数**：29 个场景里 **24 个设闸**（阈值 15–45%，由三次运行归一化后的偏差 `max(15, ceil(2.5×S))` 推出），`value` 取三次 `best-of-3` 均值。只比对 `machine` + `binarySha256` + `protocol` 全同的运行，否则打印 "not comparable" 并跳过。校正是每跑自带两个探针（`degradation = max(mem, alu)` 相对基线）；负载验证：4 核抢占下探针报 x1.59、校正后最差 −1.2% 全过，而未校正的原始读数均值 +40%。`--self-test` 把阈值压到 0 并**要求失败**（29 条纳入、exit=1、18 条报超）。留 `null` 的 5 条是 lanczos3 / crop / fill / clip / ICC grid=33——要么三跑偏差 35–52%，要么在验证跑里整段跳到 +77%（lanczos3 的 30.8 → 54.1 ms，历史同一对里 89.7 / 53.9 也是双峰），这台机器测不出它们 15% 级别的变化 |
+| 性能回退门禁 | **M15 起真的会判，判的是机器校正后的读数**：29 个场景里 **24 个设闸**（阈值 15–45%，由三次运行归一化后的偏差 `max(15, ceil(2.5×S))` 推出），`value` 取三次 `best-of-3` 均值。只比对 `machine` + `sourceSha`（`src/` 树哈希）+ `protocol` 全同的运行，否则打印 "not comparable" 并跳过。校正是每跑自带两个探针（`degradation = max(mem, alu)` 相对基线）；负载验证：4 核抢占下探针报 x1.59、校正后最差 −1.2% 全过，而未校正的原始读数均值 +40%。`--self-test` 把阈值压到 0 并**要求失败**（29 条纳入、exit=1、18 条报超）。留 `null` 的 5 条是 lanczos3 / crop / fill / clip / ICC grid=33——要么三跑偏差 35–52%，要么在验证跑里整段跳到 +77%（lanczos3 的 30.8 → 54.1 ms，历史同一对里 89.7 / 53.9 也是双峰），这台机器测不出它们 15% 级别的变化 |
 | CC0 语料 | 已实现（M6）：`tests/Fixtures/corpus.tsv` 2 条 Wikimedia Commons `Category:CC-Zero` 真实照片，URL + 实测 SHA-256（2026-11-14 下载校验）；`.cache/` git-ignored 不入库；离线由 `SyntheticCorpus.cs` 的 9 类确定性合成图兜底。实验台 3 张 Unsplash 演示图仍非测试夹具 |
 | AOT smoke 覆盖 | M6 补 `warp` / `samplepixel` 两条 hash 与 `REQUIRED` 必需项检查，防止「绿的 gate 什么都没验」；全量 31+ 条目核对留 M15 |
 
@@ -164,7 +164,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 
 | 项 | 现状 |
 |---|---|
-| 基线文件 | `benchmarks/baselines/windows-10.0.19045-x64-16-m15.json`：29 个场景，**24 个设闸**（15–45%），`value` 取同一 binary **三次** `best-of-3` 的均值，并带一个 `calibration` 块。2026-11-15 重录（M16 重采样器 + `Mutate` 落地后的 binary），指纹 `452d22f7…` : `4ce8e123…` |
+| 基线文件 | `benchmarks/baselines/windows-10.0.19045-x64-16-m15.json`：29 个场景，**24 个设闸**（15–45%），`value` 取同一 binary **三次** `best-of-3` 的均值，并带一个 `calibration` 块。2026-11-15 重录（M16 重采样器 + `Mutate` 落地后的源码），`sourceSha` = `ef1aac8d…` |
 | 为什么不再判绝对毫秒 | 2026-11-15 实测：同一份源码、同一台机器，04:00 与 07:00 两跑，**黑盒参照 ImageSharp 4.1.3 的 resize-bicubic 从 12.5 → 19.3 ms（1.54×）**，我方同项 4.97 → 7.91 ms（1.59×），29 场景整表慢 1.2–1.8×。参照不受本库代码影响，故变的是机器。绝对毫秒在这种漂移下只能二选一：误报，或把真回退埋在膨胀的基线里 |
 | 归一化 | 每跑在首尾各测一次两个**不调用本库**的探针（256 MB 并行流式求和 / 32M 次 xorshift），各取 best-of-7、再取两端更快的读数。判定用 `got_raw / degradation` 对 `baseline.value`，`degradation = max(run.mem/base.mem, run.alu/base.alu)`——哪种资源被抢就按哪种校正；探针不动时 `degradation = 1`，等价于按原始读数判。失败行同时打印 raw 与 normalised，读的人能分清「机器漂」与「代码回退」 |
 | 阈值来源 | 三次运行各自先按自己的 calibration 归一化，取三次的最大相对偏差 `S`；`threshold = max(15, ceil(2.5 × S))`，即门槛至少是实测噪声的 2.5 倍；`S > 20%` 留 `null`。11-14 那版「一对记录 ≤10% 才设 15%」已废弃——它用**一对**记录把当天恰好安静的 15 个场景当成稳定场景 |
@@ -172,9 +172,9 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 | **指纹随提交变化（已修，2026-11-15）** | 发现 `AssemblyInformationalVersion` 里嵌了 commit SHA（`0.1.0-alpha+fb503174…`），于是**任何提交之后重新构建都会换指纹**，基线随每次提交失效——这与「同一份源码」的前提冲突，是门禁长期不可用的真实原因，不是偶发。处置：`Directory.Build.props` 加 `IncludeSourceRevisionInInformationalVersion=false`，指纹从此只随源码变；`gitSha` 仍记在基线 JSON 里，可追溯性不丢 |
 | 自检 | `--self-test` 把阈值压到 0 并要求**非零退出**：实测 `comparable-baselines=1 enforced=29`、exit=1、**18 条报超**（该跑本身安静，最差 +8.6%）。正常模式 exit=0、`enforced=24`、最差 **−0.6%**（lanczos3，阈值 34） |
 | 负载验证（整套设计成立与否的判据） | 人为起 4 个忙循环抢占 4/16 核：`alu` 探针报 **x1.59**，门禁按 x1.59 校正，**当时设闸的 24 条场景最差 −1.2%、全部通过**；同一负载下未校正的原始读数均值 **+40%**（该次实验用的是重录前的 binary，机制与阈值无关） |
-| 可比性 | `machine`（`OS|arch|核数`）+ `binarySha256`（Processing 与 Abstractions 两个 dll）+ `protocol`（含 `slow=` 与 `norm=max(mem,alu)`）全同才算可比；`repeats` 只在读取基线时决定本次跑几次，**不参与比较**（脚本头注释旧称「含 repeat count」，以实现为准）。任一不同就跳过并打印原因——跨机器的秒表读数不是门禁 |
+| 可比性 | `machine`（`OS|arch|核数`）+ `sourceSha`（`git rev-parse HEAD:src`）的树哈希，`src/` 有未提交改动时追加 `-dirty`）+ `protocol`（含 `slow=` 与 `norm=max(mem,alu)`）全同才算可比；`repeats` 只在读取基线时决定本次跑几次，**不参与比较**（脚本头注释旧称「含 repeat count」，以实现为准）。任一不同就跳过并打印原因——跨机器的秒表读数不是门禁 |
 | 已知局限 | 校正只消掉「跟探针同向退化」的机器状态。若退化只影响某类访存而两个探针都不动，仍会误报——失败行里 raw 与 normalised 的差值就是识别它的线索。探针不调用本库，所以「代码慢到把探针一起拖慢」不会发生 |
-| 已知近似 | `machine` 不含 CPU 型号，两台同 OS/同核数的机器会撞 id；`binarySha256` 因此成为第二道闸，但换编译器版本后旧基线同样会"not comparable"而静默跳过——**基线需要随 binary 一起更新**，这是设计而非疏漏 |
+| 已知近似 | `machine` 不含 CPU 型号，两台同 OS/同核数的机器会撞 id；`sourceSha` 因此成为第二道闸：它只随 `src/` 变，所以文档/测试改动不会误伤基线；但**改了 `src/` 就必须重录**，否则静默跳过——这是设计而非疏漏 |
 | 第四档（AVX-512） | **已出评估，未出数**：`docs/simd-tiers-evaluation.md`。关键结论是今天的代码在有 AVX-512 的机器上跑的仍是同一套 `Vector256` 内核（`Vector512.IsHardwareAccelerated` 未用），所以"四档一致"不构成任何 512 位验证。值得写 512 位的只有 `Median3x3` 与 `Convolve2D`（NLM 次之，ICC CLUT 明确不做），且必须运行时分派，`IlcInstructionSet=avx2` 不能动 |
 | AotSmoke 全量核对 | **已核对**：53 条 hash，`REQUIRED` 23 条，**无悬空项**（`REQUIRED ⊆ hashed`，0 条 REQUIRED 没有对应 hash）。M15 点名的六类都在闸内：`warp` / `ewa.rotate` / `nlm` / `gainmap.hdr` / `icc.lut` / `plan.fused`；`dt` 与 `guided.cross` 于 2026-11-14 补入。其余 30 条只 hash 不设闸，属信息性覆盖 |
 | 契约表 | **已完成**：`docs/contracts.md` 30 条，每条锚定一个测试类；`ContractsTests` 反射校验类存在、且该类至少有一个 `[Fact]/[Theory]`，同时校验"恰好 30 条、编号 1..30 连续"。它不解析 markdown——解析只能证明文件与数组一致，数组才是"必须存在"的那份清单 |
