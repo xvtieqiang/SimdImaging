@@ -65,7 +65,7 @@
 ### GEO-5 的重采样器全集（2026-11-15 补齐）
 
 > **实现状态（2026-11-15 核实）**：`Resampler` 枚举 **16 个成员全部落地**——首发的 5 个
-> （`Nearest` / `Box` / `Bilinear` / `Bicubic` / `Lanczos3`）字节值不变，M16 追加 11 个。
+> （`Nearest` / `Box` / `Bilinear` / `Bicubic` / `Lanczos3`）字节值不变，2026-11-15 追加 11 个。
 > 其中 `Triangle`≡`Bilinear`、`CatmullRom`≡`Bicubic` 是同核双名（便于照搬别处的叫法），
 > 因此 16 个成员覆盖 **15 个不同的核**。
 >
