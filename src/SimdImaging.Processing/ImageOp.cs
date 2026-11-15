@@ -15,7 +15,7 @@ namespace SimdImaging.Processing;
 /// and <c>Pixelate</c> is block-aligned, so no constant halo expresses it at all.
 /// </para>
 /// <para>
-/// Carrying the number on the operator makes both impossible to express wrongly: <see cref="ImageOps"/> derives
+/// Carrying the number on the operator makes both impossible to express wrongly: <see cref="PlanOps"/> derives
 /// it from the parameters it is given, and there is no public way to build a step by hand.
 /// </para>
 /// </remarks>

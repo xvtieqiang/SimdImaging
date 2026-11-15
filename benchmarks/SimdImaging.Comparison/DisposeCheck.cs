@@ -42,8 +42,8 @@ internal static class DisposeCheck
         }
 
         report.Table(["做法", "分配总量", "峰值增量", "强制回收后常驻", "每轮分配"], rows);
-        report.Line("> 读法：不写 `using` 时**分配总量**会明显更高（池不再复用），常驻在强制回收后会回落——");
-        report.Line("> 那就不是泄漏，是**池失效 + GC 压力**。如果常驻收不回去，说明有引用链把它钉住了，那是另一回事。");
+        report.Line("> 读法：不写 `using` 时**分配总量**会明显更高，这是池赶不上复用；常驻在强制回收后**不为 0**");
+        report.Line("> 说明缓冲已回到池里（池持有它们），只是**回得晚**——终结器兜住了库存，兜不住这一刻的复用。");
     }
 
     private static string[] Measure(Image source, bool dispose, int width, int height)

@@ -78,7 +78,6 @@ public static class PlanOps
     /// <summary>3x3 Sobel magnitude; one row and one column.</summary>
     public static ImageOp Sobel() => Neighborhood("sobel", 1, v => FilterOps.Sobel(v));
 
-    /// <summary>
     /// <summary>3x3 median; one row and one column of context.</summary>
     public static ImageOp Median3x3() => Neighborhood("median", 1, v => FilterOps.Median3x3(v));
 
@@ -143,6 +142,7 @@ public static class PlanOps
     public static ImageOp AdaptiveThreshold(int radius = 8, float offset = 0.05f) =>
         Global("adaptive-threshold", v => ThresholdOps.AdaptiveThreshold(v, radius, offset));
 
+    /// <summary>
     /// Block-aligned mosaic. A block spans rows that a band boundary can cut anywhere, so no halo is correct —
     /// whole-image is the only category that reproduces the single-image result.
     /// </summary>
