@@ -36,12 +36,17 @@ namespace SimdImaging;
 public sealed class ImagePipeline
 {
     private readonly Image _source;
+    private readonly IPixelPool? _pool;
     private readonly List<ImageOp> _pending = [];
     private Image? _current;
     private int _bandRows = ProcessingPlan.DefaultBandRows;
     private bool _finished;
 
-    internal ImagePipeline(Image source) => _source = source;
+    internal ImagePipeline(Image source, IPixelPool? pool = null)
+    {
+        _source = source;
+        _pool = pool;
+    }
 
     /// <summary>Rows per band; smaller bands trade bookkeeping for less working memory.</summary>
     public ImagePipeline BandRows(int rows)
@@ -53,22 +58,22 @@ public sealed class ImagePipeline
 
     /// <summary>Resizes. Ends the current band pass and continues with a new one.</summary>
     public ImagePipeline Resize(int width, int height, Resampler resampler = Resampler.Bicubic) =>
-        Geometry(src => src.Resize(width, height, resampler));
+        Geometry(src => src.Resize(width, height, resampler, _pool));
 
     /// <summary>Crops to <paramref name="region"/>. Ends the current band pass.</summary>
-    public ImagePipeline Crop(PixelRect region) => Geometry(src => src.Crop(region));
+    public ImagePipeline Crop(PixelRect region) => Geometry(src => src.Crop(region, _pool));
 
     /// <summary>Rotates by a quarter turn. Ends the current band pass.</summary>
-    public ImagePipeline Rotate90(bool clockwise = true) => Geometry(src => src.Rotate90(clockwise));
+    public ImagePipeline Rotate90(bool clockwise = true) => Geometry(src => src.Rotate90(clockwise, _pool));
 
     /// <summary>Rotates by a half turn. Ends the current band pass.</summary>
-    public ImagePipeline Rotate180() => Geometry(src => src.Rotate180());
+    public ImagePipeline Rotate180() => Geometry(src => src.Rotate180(_pool));
 
     /// <summary>Mirrors left to right. Ends the current band pass.</summary>
-    public ImagePipeline FlipHorizontal() => Geometry(src => src.FlipHorizontal());
+    public ImagePipeline FlipHorizontal() => Geometry(src => src.FlipHorizontal(_pool));
 
     /// <summary>Mirrors top to bottom. Ends the current band pass.</summary>
-    public ImagePipeline FlipVertical() => Geometry(src => src.FlipVertical());
+    public ImagePipeline FlipVertical() => Geometry(src => src.FlipVertical(_pool));
 
     /// <summary>Brightness by <paramref name="amount"/>.</summary>
     public ImagePipeline Brightness(float amount) => Step(PlanOps.Brightness(amount));

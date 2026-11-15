@@ -319,7 +319,7 @@ public class ImageIoTests
         using var stepwise2 = stepwise1.Contrast(1.1f);
         using var stepwise = stepwise2.GaussianBlur(1.5f);
 
-        using var chained = source.Clone(x => x.Saturation(1.2f).Contrast(1.1f).GaussianBlur(1.5f));
+        using var chained = source.Pipe().Saturation(1.2f).Contrast(1.1f).GaussianBlur(1.5f).ToImage();
 
         chained.Width.ShouldBe(stepwise.Width);
         chained.WritablePixels.ToArray().ShouldBe(stepwise.WritablePixels.ToArray());
@@ -328,22 +328,22 @@ public class ImageIoTests
     }
 
     [Fact]
-    public void Clone_EmptyChain_IsAPlainCopy()
+    public void AnEmptyPipe_IsAPlainCopy()
     {
         using var source = TestImages.Gradient(16, 9, WorkingFormat.Rgba8);
 
-        using var copy = source.Clone(_ => { });
+        using var copy = source.Pipe().ToImage();
 
         copy.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
         copy.Info.Orientation.ShouldBe(source.Info.Orientation);
     }
 
     [Fact]
-    public void Clone_Chain_ResizesInsideTheChain()
+    public void APipe_ResizesInsideTheChain()
     {
         using var source = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
 
-        using var chained = source.Clone(x => x.Resize(32, 24).Saturation(1.2f));
+        using var chained = source.Pipe().Resize(32, 24).Saturation(1.2f).ToImage();
 
         chained.Width.ShouldBe(32);
         chained.Height.ShouldBe(24);

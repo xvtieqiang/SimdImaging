@@ -25,7 +25,7 @@ M4 的 8K `gaussian-blur` 峰值超 7.1%，M3 抗锯齿覆盖率与 M4 的 HEIF 
 逐项状态见 [`docs/architecture.md` §11](docs/architecture.md) 与 [`docs/known-gaps.md`](docs/known-gaps.md)。
 全量测试通过、`Release` 构建 0 警告、public API 由快照锁定。
 
-**已可用：**`Image.Load / Save / Encode`、`Image.Mutate`（原地链式，其余算子返回新图）、三个工作格式、池化缓冲；几何
+**已可用：**`Image.Load / Save / Encode`、`Image.Mutate`（原地链式）、`Image.Pipe`（返回新图的链）、三个工作格式、池化缓冲；几何
 （Crop / Pad / Flip / Rotate90·180 / Rotate 任意角 / Affine / Perspective / Resize 十六种采样器）；点算子（Brightness / Contrast / Saturation /
 Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueRotate / Sepia / Normalize / Vibrance / Temperature / Tint / ColorBalance / ChannelSwap / BlackWhite / Curves / Opacity / Clamp）、直方图与均衡；滤波（GaussianBlur / BoxBlur / Median3x3 / Sobel / 形态学 3×3 / 双边 / 卷积 / 浮雕 / 锐化 / 运动模糊 / 散景 / 渐变 / 贴图 / 水印）；合成（Porter-Duff 12 式 + 18 种混合模式）、原地填充/清空、矩形描边、Bresenham 直线、椭圆与多边形填充、预乘/反预乘、调色板量化（中位切分 / Wu / WebSafe / 抖动）、直方图与均衡；高级摄影（非局部均值 / 局部拉普拉斯 / Richardson-Lucy 反卷积 / 接缝裁剪）；色彩管理（ICC 的 matrix/TRC **与 RGB LUT 型 profile**、CIEDE2000）；HDR（五种色调映射、增益图成对类型 `GainMappedImage` + Ultra HDR 读写）；内存治理（每线程 scratch 预算 64 MB、权重表缓存 8 MB + LRU、`MemoryBudget` 统计与 Trim、`MemoryEstimator.Estimate` 预估峰值且区分精确项与算子声明项）。
 
@@ -105,15 +105,13 @@ using var edited = photo.Pipe()
 失败分两种，别混：输入不是图片 → `InvalidDataException`（或 `TryLoad` 返回 false）；调用方参数错了 →
 `ArgumentException` / `NotSupportedException`。没有静默降级。
 
-### 旧写法仍然可用
+### 原地修改
 
-`Clone(x => ...)` 是更早的链式入口，14 个算子，**顺序执行、不融合**：
+不想换变量时用 `Mutate`，链一样，结果写回这张图：
 
 ```csharp
-using var edited = photo.Clone(x => x.Resize(800, 600).Saturation(1.2f));
+photo.Mutate(p => p.Resize(800, 600).Saturation(1.2f));
 ```
-
-它与 `Pipe()` 功能重叠，合并计划见 [`docs/known-gaps.md`](docs/known-gaps.md)。新代码建议用 `Pipe()`。
 
 ## 与 ImageSharp 4.1.x 的定位差异
 

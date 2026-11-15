@@ -100,43 +100,6 @@ public sealed partial class Image : IDisposable
         return new Image(frames, Info, Format, ColorEncoding, Metadata);
     }
 
-    /// <summary>
-    /// Copies frame 0 through a chain of operations and returns the result — the original is untouched. This is the
-    /// one call for "several edits in a row": the steps are recorded first and executed once, so a chain of point
-    /// operators costs a single destination buffer instead of one per step, and every intermediate buffer is
-    /// released as soon as the next step has read it.
-    /// <para>
-    /// Frame 0 only: a multi-frame image would lose every frame after the first, so this throws rather than
-    /// silently dropping them.
-    /// </para>
-    /// </summary>
-    /// <param name="steps">Records the operations, e.g. <c>x => x.Resize(800, 600).Saturation(1.2f)</c>.</param>
-    /// <param name="pool">Where the buffers are rented from; null uses <see cref="ArrayPixelPool.Shared"/>.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="steps"/> is null.</exception>
-    /// <exception cref="NotSupportedException">The image has more than one frame.</exception>
-    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
-    public Image Clone(Action<ImageChain> steps, IPixelPool? pool = null)
-    {
-        ArgumentNullException.ThrowIfNull(steps);
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (_frames.Length > 1)
-            throw new NotSupportedException(
-                $"The image has {_frames.Length} frames and a chain edits one; select a frame with KeepFrames first.");
-
-        var chain = new ImageChain();
-        steps(chain);
-
-        var buffer = chain.Run(_frames[0].Pixels.View, pool);
-        try
-        {
-            return ReplaceBuffer(buffer, Metadata, Info.Orientation);
-        }
-        catch
-        {
-            buffer.Dispose();
-            throw;
-        }
-    }
 
     /// <summary>Releases every frame's buffer. Afterwards the indexer and <see cref="WritablePixels"/> throw.</summary>
     public void Dispose()
@@ -149,25 +112,19 @@ public sealed partial class Image : IDisposable
 
     /// <summary>Turns an operator's output buffer into a new image with this image's metadata and colour signalling.</summary>
     /// <summary>
-    /// Runs a chain and applies the result to <em>this</em> image, the way a mutating call site expects.
+    /// Applies a chain to this image in place, returning it.
     /// </summary>
     /// <remarks>
-    /// Every other operator returns a new image and leaves the source untouched; this one deliberately does the
-    /// opposite, because ported call sites read <c>image.Mutate(x =&gt; x.Resize(...))</c> and then keep using
-    /// <c>image</c>. Returning a new image from that shape would be a silent trap: the call compiles, the
-    /// original never changes, and the bug surfaces far away.
-    /// <para>
-    /// The old buffers are released to the pool once the new ones are in place, so the peak is the same two
-    /// buffers <see cref="Clone(Action{ImageChain}, IPixelPool?)"/> needs. If the chain throws, the image is
-    /// left exactly as it was.
-    /// </para>
+    /// Same chain as <see cref="Pipe()"/>, but the result replaces this image's frames instead of coming back as a
+    /// new image — for call sites that keep using the same variable. The old buffers go back to the pool once the
+    /// new ones are in place, and a throw leaves the image untouched.
     /// </remarks>
-    /// <param name="steps">Records the operations; the same methods <see cref="ImageChain"/> exposes.</param>
-    /// <param name="pool">Optional pool for the intermediate and destination buffers.</param>
-    /// <returns>This image, so the call can be chained or ignored.</returns>
+    /// <param name="steps">Records the operations, e.g. <c>p =&gt; p.Resize(32, 24).Grayscale()</c>.</param>
+    /// <param name="pool">Where the buffers are rented from; null uses <see cref="ArrayPixelPool.Shared"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="steps"/> is null.</exception>
     /// <exception cref="NotSupportedException">The image has more than one frame.</exception>
     /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
-    public Image Mutate(Action<ImageChain> steps, IPixelPool? pool = null)
+    public Image Mutate(Action<ImagePipeline> steps, IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(steps);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -175,22 +132,22 @@ public sealed partial class Image : IDisposable
             throw new NotSupportedException(
                 $"The image has {_frames.Length} frames and a chain edits one; select a frame with KeepFrames first.");
 
-        var chain = new ImageChain();
-        steps(chain);
+        var pipeline = new ImagePipeline(this, pool);
+        steps(pipeline);
 
-        var buffer = chain.Run(_frames[0].Pixels.View, pool);
-        Image replacement;
+        var replacement = pipeline.ToImage();
+        if (ReferenceEquals(replacement, this))
+            return this;
+
         try
         {
-            replacement = ReplaceBuffer(buffer, Metadata, Info.Orientation);
+            Adopt(replacement);
         }
-        catch
+        finally
         {
-            buffer.Dispose();
-            throw;
+            replacement.Dispose();
         }
 
-        Adopt(replacement);
         return this;
     }
 
