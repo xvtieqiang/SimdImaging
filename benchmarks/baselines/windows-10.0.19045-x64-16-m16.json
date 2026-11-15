@@ -3,302 +3,302 @@
   "protocol": "best-of-N warm single process; SimdImaging.Benchmarks; slow=0; norm=max(mem,alu)",
   "repeats": 3,
   "date": "2026-11-15",
-  "gitSha": "1e2570c",
-  "sourceSha": "6c5b80d40d94237a8a3e62e9c8997ee8d4ec51cc",
+  "gitSha": "00fdc40",
+  "sourceSha": "3cb553d6f426ec7e233f63245cc3e94ce0ae3564",
   "calibration": {
-    "memory": 9.77,
-    "alu": 77.732
+    "memory": 10.221,
+    "alu": 86.899
   },
   "entries": [
     {
       "scenario": "resize 4K->1080p bicubic",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 56.939,
+      "value": 63.166,
       "unit": "ms",
-      "thresholdPercent": 37.0,
-      "megapixelsPerSecond": 36.46,
+      "thresholdPercent": null,
+      "megapixelsPerSecond": 33.66,
       "allocatedBytes": 2744
     },
     {
       "scenario": "resize 4K->1080p lanczos3",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 49.346,
+      "value": 54.415,
       "unit": "ms",
       "thresholdPercent": null,
-      "megapixelsPerSecond": 47.56,
-      "allocatedBytes": 2616
+      "megapixelsPerSecond": 39.48,
+      "allocatedBytes": 2872
     },
     {
       "scenario": "crop 1000x1000",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 0.199,
+      "value": 0.252,
       "unit": "ms",
       "thresholdPercent": null,
-      "megapixelsPerSecond": 5277.18,
-      "allocatedBytes": 2584
+      "megapixelsPerSecond": 4469.57,
+      "allocatedBytes": 2672
     },
     {
       "scenario": "quantize 4K -> 64 colours",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 55.54,
+      "value": 62.95,
       "unit": "ms",
       "thresholdPercent": null,
-      "megapixelsPerSecond": 150.16,
+      "megapixelsPerSecond": 132.74,
       "allocatedBytes": 972184
     },
     {
       "scenario": "quantize 4K -> 64 (wu)",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 80.604,
+      "value": 88.415,
       "unit": "ms",
-      "thresholdPercent": 54.0,
-      "megapixelsPerSecond": 103.15,
+      "thresholdPercent": null,
+      "megapixelsPerSecond": 94.12,
       "allocatedBytes": 1474488
     },
     {
       "scenario": "quantize 4K -> 64 (octree)",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 219.451,
+      "value": 224.348,
       "unit": "ms",
-      "thresholdPercent": null,
-      "megapixelsPerSecond": 37.98,
+      "thresholdPercent": 30.0,
+      "megapixelsPerSecond": 36.99,
       "allocatedBytes": 86672
     },
     {
       "scenario": "reduce colors 4K -> 64 dithered",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 615.974,
+      "value": 659.21,
       "unit": "ms",
-      "thresholdPercent": 45.0,
-      "megapixelsPerSecond": 13.48,
+      "thresholdPercent": 42.0,
+      "megapixelsPerSecond": 12.64,
       "allocatedBytes": 271040
     },
     {
       "scenario": "fill 4K ellipse path (aa)",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 41.732,
+      "value": 46.228,
       "unit": "ms",
       "thresholdPercent": null,
-      "megapixelsPerSecond": 205.29,
+      "megapixelsPerSecond": 189.22,
       "allocatedBytes": 48464
     },
     {
       "scenario": "stroke 4K ellipse path (aa, w=6)",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 18.887,
+      "value": 19.284,
       "unit": "ms",
-      "thresholdPercent": null,
-      "megapixelsPerSecond": 440.64,
+      "thresholdPercent": 25.0,
+      "megapixelsPerSecond": 431.58,
       "allocatedBytes": 236464
     },
     {
       "scenario": "clip 4K ellipse path (aa)",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 66.426,
+      "value": 75.605,
       "unit": "ms",
       "thresholdPercent": null,
-      "megapixelsPerSecond": 126.41,
+      "megapixelsPerSecond": 111.54,
       "allocatedBytes": 48456
     },
     {
       "scenario": "oil paint 4K r=2",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 166.596,
+      "value": 117.387,
       "unit": "ms",
       "thresholdPercent": null,
-      "megapixelsPerSecond": 50.15,
-      "allocatedBytes": 371824
+      "megapixelsPerSecond": 72.15,
+      "allocatedBytes": 99360
     },
     {
       "scenario": "guided filter 4K r=4",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 594.215,
+      "value": 626.435,
       "unit": "ms",
-      "thresholdPercent": 59.0,
-      "megapixelsPerSecond": 14.0,
-      "allocatedBytes": 11154480
+      "thresholdPercent": 31.0,
+      "megapixelsPerSecond": 13.27,
+      "allocatedBytes": 11154160
     },
     {
       "scenario": "guided.cross 4K r=4",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 775.176,
+      "value": 840.558,
       "unit": "ms",
-      "thresholdPercent": 27.0,
-      "megapixelsPerSecond": 10.7,
-      "allocatedBytes": 17851176
+      "thresholdPercent": 53.0,
+      "megapixelsPerSecond": 9.91,
+      "allocatedBytes": 17851304
     },
     {
       "scenario": "gaussian blur 4K sigma=3",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 68.249,
+      "value": 69.843,
       "unit": "ms",
       "thresholdPercent": null,
-      "megapixelsPerSecond": 121.9,
-      "allocatedBytes": 2896
+      "megapixelsPerSecond": 119.64,
+      "allocatedBytes": 2768
     },
     {
       "scenario": "chroma 4:2:0 4K",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 230.996,
+      "value": 245.712,
       "unit": "ms",
-      "thresholdPercent": 26.0,
-      "megapixelsPerSecond": 35.94,
+      "thresholdPercent": 52.0,
+      "megapixelsPerSecond": 33.82,
       "allocatedBytes": 1114072
     },
     {
       "scenario": "bilateral 4K r=2",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 199.853,
+      "value": 204.551,
       "unit": "ms",
-      "thresholdPercent": null,
-      "megapixelsPerSecond": 42.09,
+      "thresholdPercent": 38.0,
+      "megapixelsPerSecond": 40.68,
       "allocatedBytes": 373784
     },
     {
       "scenario": "dt 1080p 8px checker",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 41.823,
+      "value": 44.566,
       "unit": "ms",
-      "thresholdPercent": 39.0,
-      "megapixelsPerSecond": 49.76,
+      "thresholdPercent": null,
+      "megapixelsPerSecond": 46.81,
       "allocatedBytes": 46496
     },
     {
       "scenario": "nlm 1080p S=3 P=1 h=0.1",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 5784.496,
+      "value": 6257.318,
       "unit": "ms",
-      "thresholdPercent": 38.0,
-      "megapixelsPerSecond": 0.36,
+      "thresholdPercent": 42.0,
+      "megapixelsPerSecond": 0.33,
       "allocatedBytes": 552
     },
     {
       "scenario": "nlm 1080p S=5 P=2 h=0.1",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 16199.911,
+      "value": 17081.03,
       "unit": "ms",
-      "thresholdPercent": 30.0,
-      "megapixelsPerSecond": 0.13,
+      "thresholdPercent": 35.0,
+      "megapixelsPerSecond": 0.12,
       "allocatedBytes": 552
     },
     {
       "scenario": "ll 1080p L=5 S=32",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 1812.714,
+      "value": 1497.063,
       "unit": "ms",
-      "thresholdPercent": 20.0,
-      "megapixelsPerSecond": 1.15,
-      "allocatedBytes": 143102520
+      "thresholdPercent": 28.0,
+      "megapixelsPerSecond": 1.39,
+      "allocatedBytes": 151389112
     },
     {
       "scenario": "rl 1080p sigma=1.5 it=10",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 259.426,
+      "value": 262.532,
       "unit": "ms",
-      "thresholdPercent": 20.0,
-      "megapixelsPerSecond": 8.0,
-      "allocatedBytes": 99704936
+      "thresholdPercent": 41.0,
+      "megapixelsPerSecond": 7.9,
+      "allocatedBytes": 99704968
     },
     {
       "scenario": "rl.motion 1080p len=15 it=10",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 245.483,
+      "value": 253.924,
       "unit": "ms",
-      "thresholdPercent": 20.0,
-      "megapixelsPerSecond": 8.46,
-      "allocatedBytes": 99708048
+      "thresholdPercent": 42.0,
+      "megapixelsPerSecond": 8.17,
+      "allocatedBytes": 99708872
     },
     {
       "scenario": "seam 1080p remove 50 columns",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 527.689,
+      "value": 422.278,
       "unit": "ms",
-      "thresholdPercent": 34.0,
-      "megapixelsPerSecond": 3.83,
-      "allocatedBytes": 4241256
+      "thresholdPercent": 37.0,
+      "megapixelsPerSecond": 4.79,
+      "allocatedBytes": 12535832
     },
     {
       "scenario": "icc 1080p lut16 grid=33",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 46.919,
+      "value": 50.074,
       "unit": "ms",
       "thresholdPercent": null,
-      "megapixelsPerSecond": 44.9,
-      "allocatedBytes": 221936
+      "megapixelsPerSecond": 42.28,
+      "allocatedBytes": 222064
     },
     {
       "scenario": "icc 1080p lut16 grid=2",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 46.667,
+      "value": 48.196,
       "unit": "ms",
       "thresholdPercent": null,
-      "megapixelsPerSecond": 44.73,
-      "allocatedBytes": 6360
+      "megapixelsPerSecond": 43.49,
+      "allocatedBytes": 6424
     },
     {
       "scenario": "icc 1080p matrix/trc",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 38.883,
+      "value": 39.636,
       "unit": "ms",
-      "thresholdPercent": 41.0,
-      "megapixelsPerSecond": 53.63,
+      "thresholdPercent": null,
+      "megapixelsPerSecond": 52.61,
       "allocatedBytes": 15400
     },
     {
       "scenario": "gainmap.reconstruct 1080p",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 27.882,
+      "value": 28.983,
       "unit": "ms",
-      "thresholdPercent": 39.0,
-      "megapixelsPerSecond": 74.65,
-      "allocatedBytes": 2568
+      "thresholdPercent": null,
+      "megapixelsPerSecond": 72.12,
+      "allocatedBytes": 2824
     },
     {
       "scenario": "gainmap resize 1080p->720p",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 6.456,
+      "value": 5.89,
       "unit": "ms",
-      "thresholdPercent": null,
-      "megapixelsPerSecond": 154.28,
-      "allocatedBytes": 5360
+      "thresholdPercent": 38.0,
+      "megapixelsPerSecond": 157.14,
+      "allocatedBytes": 5192
     },
     {
       "scenario": "composite 1080p overlay",
       "size": "as named",
       "metric": "milliseconds",
-      "value": 45.858,
+      "value": 47.472,
       "unit": "ms",
-      "thresholdPercent": null,
-      "megapixelsPerSecond": 182.26,
-      "allocatedBytes": 64048
+      "thresholdPercent": 32.0,
+      "megapixelsPerSecond": 174.89,
+      "allocatedBytes": 64088
     }
   ]
 }

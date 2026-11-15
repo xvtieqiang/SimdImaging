@@ -143,7 +143,7 @@ M12 measured on this machine at 1080p Rgba8: `RichardsonLucy(1.5, 10)` **254 ms*
 alloc 4 MiB. Deconvolution cost is `2 · taps · iterations` per pixel; FFT would need σ ≳ 18 px to win and
 would break cross-tier byte equality — see `docs/fft-evaluation.md`.
 
-M15 (2026-11-14): `gates.sh --perf` stopped being a placeholder. `benchmarks/baselines/windows-10.0.19045-x64-16-m15.json`
+M15 (2026-11-14): `gates.sh --perf` stopped being a placeholder. `benchmarks/baselines/windows-10.0.19045-x64-16-m16.json`
 records 29 scenarios from two `best-of-3` runs of the same binary, **15 of them with `thresholdPercent: 15`**,
 and `check-baseline.sh` compares a fresh run against them: `PASS` at worst **+1.9%** and **+3.5%** on two
 validation runs (`enforced=15`), and

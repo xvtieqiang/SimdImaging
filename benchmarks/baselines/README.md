@@ -4,7 +4,7 @@
 
 ## 文件命名
 
-`<machine>-<milestone>.json`，例如 `windows-10.0.19045-x64-16-m15.json`。
+`<machine>-<milestone>.json`，例如 `windows-10.0.19045-x64-16-m16.json`。
 
 `machine` 由 `BaselineJson.Machine` 生成，格式固定为 `OSDescription|ProcessArchitecture|ProcessorCount`——**刻意粗**：它只用来挡住"换了一台机器"的比较，真正的可比性还要求 `sourceSha`（`src/` 的树哈希）相同。两台同配置的机器会撞 id，这是已知的、可接受的近似（见 `docs/known-gaps.md`）。
 
