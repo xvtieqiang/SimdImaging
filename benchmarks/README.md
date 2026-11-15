@@ -30,6 +30,11 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks [iterations]
 > 逐通道算子（invert / brightness / gamma / contrast）走这张表；矩阵类算子（sepia / grayscale）不走，
 > 三条独立测量确认它们字节未变。Rgba16 整体：**1.53–1.72×（4/7）→ 2.01–2.29×（7/7）**。
 
+> **2026-11-15 修复**：新增 16 位点算子表（4 × 65536 个 `ushort`，512 KiB），用与 Rgba8 相同的手法构造——
+> 拿算子自己的行变换跑每个值、记下结果，因此不存在第二份算术。低于 `Lut16PixelFloor`（16384 像素）不建表。
+> 逐通道算子（invert / brightness / gamma / contrast）走这张表；矩阵类算子（sepia / grayscale）不走，
+> 三条独立测量确认它们字节未变。Rgba16 整体：**1.53–1.72×（4/7）→ 2.01–2.29×（7/7）**。
+
 参数档位（1920×1080，同时输出耗时与分配）：
 
 | 档位 | 我方 ms | 对手 ms | 比值 |
@@ -53,6 +58,11 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks [iterations]
 **小尺寸是弱点**：640×360 上 19 项里只有 15 项领先——固定开销（计划、池、线程启动）在小图上摊不开。
 **Rgba16 的短板很集中**：三个点算子（grayscale / sepia / invert）在三种尺寸上都是 0.63–0.67×，
 因为 `PointLut` 只对 `Rgba8` 生效，16 位走的是 float 行路径。这是矩阵第一次运行就暴露出来的真问题。
+
+> **2026-11-15 修复**：新增 16 位点算子表（4 × 65536 个 `ushort`，512 KiB），用与 Rgba8 相同的手法构造——
+> 拿算子自己的行变换跑每个值、记下结果，因此不存在第二份算术。低于 `Lut16PixelFloor`（16384 像素）不建表。
+> 逐通道算子（invert / brightness / gamma / contrast）走这张表；矩阵类算子（sepia / grayscale）不走，
+> 三条独立测量确认它们字节未变。Rgba16 整体：**1.53–1.72×（4/7）→ 2.01–2.29×（7/7）**。
 
 > **2026-11-15 修复**：新增 16 位点算子表（4 × 65536 个 `ushort`，512 KiB），用与 Rgba8 相同的手法构造——
 > 拿算子自己的行变换跑每个值、记下结果，因此不存在第二份算术。低于 `Lut16PixelFloor`（16384 像素）不建表。
