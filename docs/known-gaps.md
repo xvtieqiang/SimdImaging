@@ -90,6 +90,12 @@
 顺手把 8 个 2.2 MB 平面从 `new` 换成 `FloatScratch`：分配 26.2 → 19.7 MB，计时在噪声内但减少的是真实的 GC 压力。
 `guided.cross` 的 AOT 哈希 `8FA3D1E85EAAA05F` 全程未变。
 
+**guided.cross 再降一档（615 → 396 ms，−35%）**：先消融定位——摘掉六次 `BoxMean` 后剩 349 ms，
+说明 BoxMean 只占 266 ms（43%），另外 57% 在解码、逐元素和写回。那三段**每行完全独立**，改 `RowParallel`
+即可，且不增加内存（每个 worker 的行缓冲从 `FloatScratch` 租，线程本地、每带一次）。
+顺手把 8 个 2.2 MB 平面从 `new` 换成 `FloatScratch`：分配 26.2 → 19.7 MB，计时在噪声内但减少的是真实的 GC 压力。
+`guided.cross` 的 AOT 哈希 `8FA3D1E85EAAA05F` 全程未变。
+
 **quantize 的 −45%（同日，63.0 → 34–36 ms）**：两件事。
 
 1. **映射行带并行**：`PaletteQuantizer.Apply` 的 Rgba8 分支是单线程逐像素表读，每像素完全独立；
