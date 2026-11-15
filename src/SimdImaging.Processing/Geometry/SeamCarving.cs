@@ -71,13 +71,14 @@ public static class SeamCarving
 
     /// <summary>
     /// Removes <paramref name="count"/> connected seams, shrinking the image by one column or row each.
-    /// <para><b>Why the energy is recomputed rather than updated.</b> Removing a seam moves every pixel to its
-    /// right (or below) one position, so the columns whose gradient changes are not a fixed-width band around the
-    /// seam: the set is bounded only by how far the path wanders, which is unbounded in general. The programme has
-    /// the same problem in a worse form — a change at one cell spreads one column per row, so for a full-height
-    /// seam the affected region is a triangle that reaches the far edge by the bottom row. An "incremental"
-    /// update therefore still touches about half the image, and the measured saving did not justify a second
-    /// code path that could disagree with the full one.</para>
+    /// <para><b>Why the energy is recomputed rather than updated.</b> Not because the affected set is unbounded —
+    /// that was the original argument here and it is wrong. Keep the energy in original coordinates and only the
+    /// cells straddling a cut change, one or two per row. The reason is the measurement: with
+    /// <see cref="Energy"/> short-circuited in both the scalar body and the vector one, a 1080p carve of 50 seams
+    /// drops from 400.5 to 331.4 ms in the seam search, so the energy is <b>17% of that phase and 14% of the
+    /// carve</b>. Even a perfect cache cannot return more, and a real one pays a logical-to-original gather per
+    /// cell. What is left is the programme recurrence itself, which is O(W·H) by nature and already four lanes
+    /// wide. See the seamprofile numbers in benchmarks/README.md.</para>
     /// </summary>
     /// <param name="source">The pixels.</param>
     /// <param name="axis">Which way the seams run.</param>
