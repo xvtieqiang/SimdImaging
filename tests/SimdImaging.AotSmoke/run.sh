@@ -53,7 +53,7 @@ grep -q 'dynamic-code-supported=False' avx2.txt || { echo "FAIL: the AOT build d
 
 # An operator whose implementation changed but is missing from this list makes a green smoke
 # meaningless. Extend REQUIRED in the same commit that changes an operator (AGENTS.md:156-160).
-REQUIRED="icc.lut gainmap.hdr rl rl.motion seam dt nlm ll bilateral guided guided.cross warp samplepixel warp.linear warp.premul resize.options rotate.options perspective.options ewa.rotate plan.fused resize.bicubic resize.nearest rotate17 perspective"
+REQUIRED="icc.lut gainmap.hdr rl rl.motion seam dt nlm ll bilateral guided guided.cross quantize quantize.wu quantize.octree warp samplepixel warp.linear warp.premul resize.options rotate.options perspective.options ewa.rotate plan.fused resize.bicubic resize.nearest rotate17 perspective"
 for key in $REQUIRED; do
   for f in jit avx2 base; do
     grep -q "^${key} sha=" "$f.txt" || {

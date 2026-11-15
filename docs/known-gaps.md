@@ -48,7 +48,7 @@
 | seam 1080p（去 50 列） | **404**（原 532，−24%） | **AVX2**：DP 行四路（向量轴=像素、三路 tie-break 复现严格比较），外加 luma 缓存 | `Geometry/SeamCarving.cs` |
 | rl / rl.motion 1080p | 245 / 237 | AVX2 **+ AVX-512**（走卷积内核） | `Internal/PlanarConvolve.cs` |
 | chroma 4:2:0 4K | 228 | **标量**：双精度散列累加到色度格 | `Color/ColorConversionOps.cs` |
-| quantize 4K（octree） | 207 | **标量**：最近色搜索，数据相关 | `Color/QuantizeOps.cs` |
+| quantize 4K（octree） | **185–192**（改前 224） | 建表标量、映射行带并行；文件在 `Quantization/OctreeQuantizer.cs` |
 | bilateral 4K | 180 | **标量**：权重由邻域像素值查表，逐 lane 都不同 | `Filter/FilterOps.cs` |
 | oil paint 4K | **117–141**（本机改前 204–214） | **标量散点**（AVX2 无 scatter，这条路不存在）；已做行基址提升 + 样本预计算 + `FloatScratch` | `Filter/OilPaintOps.cs` |
 | resize 4K→1080p bicubic | ~67 | AVX2（行带 + 两遍 + 水平/垂直向量） | `Geometry/Resize.cs` |
@@ -83,6 +83,21 @@
 
 **同批试过但回滚的**：`chroma 4:2:0`（228 ms）把 `ColorMath.Coefficients(ycbcr)` 从逐像素提到每次调用——
 **没有任何变化**（228 → 235–239 ms，落在噪声内），按纪律回滚，不留「看起来更干净但没收益」的改动。
+
+**quantize 的 −45%（同日，63.0 → 34–36 ms）**：两件事。
+
+1. **映射行带并行**：`PaletteQuantizer.Apply` 的 Rgba8 分支是单线程逐像素表读，每像素完全独立；
+   改 `RowParallel.For`。字节不变（lookup 只读、建完再切带）。
+2. **最近色搜索剪枝**：`BuildLookup` 对 32768 个 bin 各扫全部调色板。加两条**严格等价**的剪枝——
+   `dr² >= bestDistance` 直接跳过（另两项只会更大，不可能赢）、`bestDistance == 0` 时 `break`
+   （升序扫描下第一个 0 距离就是最小下标）。63 → 54（剪枝）→ 34–36（并行）。
+
+**试过并回滚的**：
+- **精确 KD-tree**（`NearestLookup.cs`，包围盒预存、平局取最小下标、`==best` 不下剪）：**负收益**，
+  36.6 → 39.9–41.4 ms。64 色 × 32768 bin 只有 2.1M 次距离计算，剪枝后的线性扫比建树+遍历更快。
+  已删除，结论留在这里：**在 32³ 网格上，KD-tree 不划算**。
+- **调色板内容缓存**（5-A）：没做。基准里同一张图每轮都重建出相同调色板，缓存只会在基准里命中，
+  单次调用者拿不到好处——那是给基准化妆，不是优化。
 
 **guided.cross 的 −27%（同日，840.6 → 615 ms）**：三件事分开做、每步都验字节。
 

@@ -104,21 +104,26 @@ public static class PaletteQuantizer
         var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         if (source.Format == WorkingFormat.Rgba8)
         {
-            for (var y = 0; y < source.Height; y++)
+            // Every pixel is an independent table read, so the rows are banded. The lookup is read-only and
+            // built before the bands start, which is what makes the split unable to change a byte.
+            RowParallel.For(source.Width, source.Height, (start, end) =>
             {
-                var row = source.Row(y);
-                var output = destination.View.Row(y);
-                for (var x = 0; x < source.Width; x++)
+                for (var y = start; y < end; y++)
                 {
-                    var o = x * 4;
-                    var bin = ((row[o] >> 3) << 10) | ((row[o + 1] >> 3) << 5) | (row[o + 2] >> 3);
-                    var color = palette[lookup[bin]];
-                    output[o] = color.R;
-                    output[o + 1] = color.G;
-                    output[o + 2] = color.B;
-                    output[o + 3] = row[o + 3];
+                    var row = source.Row(y);
+                    var output = destination.View.Row(y);
+                    for (var x = 0; x < source.Width; x++)
+                    {
+                        var o = x * 4;
+                        var bin = ((row[o] >> 3) << 10) | ((row[o + 1] >> 3) << 5) | (row[o + 2] >> 3);
+                        var color = palette[lookup[bin]];
+                        output[o] = color.R;
+                        output[o + 1] = color.G;
+                        output[o + 2] = color.B;
+                        output[o + 3] = row[o + 3];
+                    }
                 }
-            }
+            });
 
             return destination;
         }
@@ -146,7 +151,13 @@ public static class PaletteQuantizer
     internal static byte[] BuildLookup(ColorPalette palette)
     {
         // One nearest-colour lookup per histogram bin; pixels then cost a table read.
+        //
+        // A k-d tree was built and measured here and it lost: 64 colours over 32768 bins is 2.1M distance
+        // evaluations, which the pruned scan below beats once traversal and bounding-box tests are counted
+        // (36.6 -> 40.1 ms end to end). See docs/known-gaps.md for the numbers; the negative result is the
+        // reason this stays a flat scan.
         var lookup = new byte[Bins];
+
         var colors = palette.Colors;
         for (var bin = 0; bin < Bins; bin++)
         {
@@ -159,13 +170,25 @@ public static class PaletteQuantizer
             for (var i = 0; i < colors.Length; i++)
             {
                 var dr = r - colors[i].R;
+                var partial = dr * dr;
+
+                // The red term alone already costs at least what the best costs, and the other two only add to
+                // it, so this colour cannot win. Pure pruning of a strict `<` comparison: no tie can change.
+                if (partial >= bestDistance)
+                    continue;
+
                 var dg = g - colors[i].G;
                 var db = b - colors[i].B;
-                var distance = dr * dr + dg * dg + db * db;
+                var distance = partial + dg * dg + db * db;
                 if (distance < bestDistance)
                 {
                     bestDistance = distance;
                     best = i;
+
+                    // Nothing can beat zero, and the scan is ascending, so the first exact match is already the
+                    // lowest index that can win.
+                    if (bestDistance == 0)
+                        break;
                 }
             }
 

@@ -270,6 +270,10 @@ using (var bilateral = image.GaussianBlur(2f).Bilateral(2, 0f, 0.2f))
 using (var selfGuided = image.GuidedFilter(3, 1e-4f))
     Console.WriteLine($"guided sha={Hash(selfGuided.WritablePixels)}");
 
+// Octree had no hash at all: the other two quantisers were covered, this one never was.
+using (var octree = image.Quantize(8, Quantizer.Octree))
+    Console.WriteLine($"quantize.octree sha={Hash(octree.WritablePixels)}");
+
 using (var painted = image.OilPaint(2, 20))
     Console.WriteLine($"oilpaint sha={Hash(painted.WritablePixels)}");
 
