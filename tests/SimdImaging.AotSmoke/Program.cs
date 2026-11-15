@@ -248,6 +248,20 @@ using (var gradient = Image.Create(64, 48, WorkingFormat.Rgba8))
 using (var edges = image.Median3x3().Sobel())
     Console.WriteLine($"median.sobel sha={Hash(edges.WritablePixels)}");
 
+// Sixteen-bit point operator: it now goes through a 4 x 65536 table instead of the float row path, so its
+// bytes have to survive both the tier matrix and ILC.
+using (var widePoint = Image.Create(160, 120, WorkingFormat.Rgba16))
+{
+    // 19200 pixels, above PointOps.Lut16PixelFloor, so this hash covers the 4 x 65536 table rather than the
+    // float path the small `wide` image would take.
+    var samples = MemoryMarshal.Cast<byte, ushort>(widePoint.WritablePixels);
+    for (var i = 0; i < samples.Length; i++)
+        samples[i] = (ushort)((i * 7919 + 3) & 0xFFFF);
+
+    using var inverted16 = widePoint.Invert();
+    Console.WriteLine($"invert16 sha={Hash(inverted16.WritablePixels)}");
+}
+
 using (var quantized = image.Quantize(8))
     Console.WriteLine($"quantize sha={Hash(quantized.WritablePixels)}");
 

@@ -147,10 +147,24 @@ public static class PointOps
     /// For channel-independent operators on Rgba8, precompute the 256-entry byte LUT instead of doing
     /// eight float conversions per pixel. The scalar twin is the reference and must match exactly.
     /// </summary>
-    private static WorkingBuffer ApplyLut(PixelView source, IPixelPool? pool, RowTransform transform) =>
-        source.Format == WorkingFormat.Rgba8 && !ForceScalarPoint
-            ? PointLut.ApplyRgba8(source, pool, transform)
-            : Apply(source, pool, transform);
+    private static WorkingBuffer ApplyLut(PixelView source, IPixelPool? pool, RowTransform transform)
+    {
+        if (ForceScalarPoint)
+            return Apply(source, pool, transform);
+
+        if (source.Format == WorkingFormat.Rgba8)
+            return PointLut.ApplyRgba8(source, pool, transform);
+
+        // Sixteen bits needs a 4 x 65536 table (512 KiB) to be worth building: below this the build costs more
+        // than the float work it replaces. The threshold is a measurement, not a guess - see known-gaps.
+        if (source.Format == WorkingFormat.Rgba16 && (long)source.Width * source.Height >= Lut16PixelFloor)
+            return PointLut.ApplyRgba16(source, pool, transform);
+
+        return Apply(source, pool, transform);
+    }
+
+    /// <summary>Pixels below which the 16-bit table costs more to build than it saves.</summary>
+    internal const long Lut16PixelFloor = 16 * 1024;
 
     private static WorkingBuffer Apply(PixelView source, IPixelPool? pool, RowTransform transform)
     {

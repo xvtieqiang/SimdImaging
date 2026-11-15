@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Internal;
@@ -19,6 +20,9 @@ internal static class PointLut
     // Reused per thread so steady-state managed allocation stays at zero; a byte[]/float[] can be
     // captured by the parallel lambda, whereas a stackalloc Span cannot.
     [ThreadStatic] private static byte[]? _lutBytes;
+
+    /// <summary>Sixteen-bit table, built on first use per thread and reused: 512 KiB.</summary>
+    [ThreadStatic] private static ushort[]? _lutShorts;
 
     /// <summary>
     /// Colour-matrix products, laid out <b>value-major</b>: three records of 256 × 4 floats, where lane
@@ -44,6 +48,69 @@ internal static class PointLut
     {
         var scaled = value * scale + half;
         return Vector128.ConvertToInt32(Vector128.Max(Vector128.Min(scaled, max), zero));
+    }
+
+    /// <summary>
+    /// Sixteen-bit twin of <see cref="ApplyRgba8"/>: a 4 × 65536 table of samples.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Built the same constructive way — run the operator's own row transform on one pixel per value and record
+    /// what comes back — so there is no second implementation of the arithmetic to drift. That is also why it
+    /// is exact: for a per-channel point operator, the table entry <i>is</i> the output.
+    /// </para>
+    /// <para>
+    /// 512 KiB is a lot to build for a small image, so the caller decides: <c>PointOps</c> only routes here when
+    /// the image is large enough to amortise it. At 2 MPix the build is about 0.3 ms against ~10 ms of float
+    /// work, which is why the crossover sits far below the sizes this is used on.
+    /// </para>
+    /// </remarks>
+    internal static WorkingBuffer ApplyRgba16(PixelView source, IPixelPool? pool, PointOps.RowTransform transform)
+    {
+        var lut = _lutShorts ??= new ushort[4 * 65536];
+
+        Span<byte> onePixel = stackalloc byte[8];
+        Span<float> oneRow = stackalloc float[4];
+        Span<byte> oneResult = stackalloc byte[8];
+
+        for (var value = 0; value < 65536; value++)
+        {
+            var sample = (ushort)value;
+            MemoryMarshal.Write(onePixel, in sample);
+            MemoryMarshal.Write(onePixel[2..], in sample);
+            MemoryMarshal.Write(onePixel[4..], in sample);
+            MemoryMarshal.Write(onePixel[6..], in sample);
+
+            Pixels.ReadRowRaw(onePixel, 1, WorkingFormat.Rgba16, oneRow);
+            transform(oneRow, 1);
+            Pixels.WriteRowRaw(oneRow, 1, WorkingFormat.Rgba16, oneResult);
+
+            lut[value] = MemoryMarshal.Read<ushort>(oneResult);
+            lut[65536 + value] = MemoryMarshal.Read<ushort>(oneResult[2..]);
+            lut[131072 + value] = MemoryMarshal.Read<ushort>(oneResult[4..]);
+            lut[196608 + value] = MemoryMarshal.Read<ushort>(oneResult[6..]);
+        }
+
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        var view = destination.View;
+        RowParallel.For(source.Width, source.Height, (start, end) =>
+        {
+            for (var y = start; y < end; y++)
+            {
+                var from = MemoryMarshal.Cast<byte, ushort>(source.Row(y));
+                var to = MemoryMarshal.Cast<byte, ushort>(view.Row(y));
+                var length = source.Width * 4;
+                for (var i = 0; i < length; i += 4)
+                {
+                    to[i] = lut[from[i]];
+                    to[i + 1] = lut[65536 + from[i + 1]];
+                    to[i + 2] = lut[131072 + from[i + 2]];
+                    to[i + 3] = lut[196608 + from[i + 3]];
+                }
+            }
+        });
+
+        return destination;
     }
 
     internal static WorkingBuffer ApplyRgba8(PixelView source, IPixelPool? pool, PointOps.RowTransform transform)
