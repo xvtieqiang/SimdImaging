@@ -1,31 +1,33 @@
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Geometry;
 
 namespace SimdImaging;
 
 /// <summary>
-/// Chains same-size operations so the image is walked once instead of once per step.
+/// Chains operations so the image is walked once per run of same-size steps instead of once per step.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The plain call is <c>image.A()</c> then <c>b.A()</c> then <c>c.A()</c>, and each link allocates a whole new
-/// image — three of them alive at 8K is 396 MiB. A pipeline walks the picture in horizontal bands instead: read a
-/// band, run every step on it, write it out, move on. No intermediate image exists, so a five-step chain at 8K
-/// costs 72 KiB instead of 381 MiB.
+/// Calling <c>image.A()</c> then <c>b.B()</c> then <c>c.C()</c> allocates a whole image per link; three alive at
+/// 8K is 396 MiB. A pipeline walks the picture in horizontal bands instead — read a band, run every same-size
+/// step on it, write it out, move on — so no intermediate image exists and a five-step chain costs 72 KiB.
 /// </para>
 /// <para>
-/// Everything the executor needs to know about an operator — how far it reads beyond the band, whether it needs
-/// the whole picture — travels with the operator. That is why none of it appears here: <see cref="Sharpen"/>
-/// knows it blurs internally, and <see cref="Pixelate"/> knows it cannot be walked in bands at all.
+/// A size-changing step is handled here rather than pushed onto the caller. <c>Resize</c>, <c>Crop</c> and
+/// <c>Rotate90</c> end the current band pass, run it, apply themselves, and start a new pass; the chain reads
+/// the same either way. That split is the only thing bands cannot cross, and it is the library's problem.
 /// </para>
 /// <para>
-/// Steps must keep the image size. A resize, crop or rotate changes the dimensions and belongs between two
-/// pipelines, not inside one.
+/// What the executor needs to know about an operator — how far past the band it reads, whether it needs the
+/// whole picture — travels with the operator, which is why none of it appears in this API.
 /// </para>
 /// </remarks>
 /// <example>
 /// <code>
 /// using var result = image.Pipe()
+///     .Resize(1920, 1080)
 ///     .Brightness(0.05f)
 ///     .Sharpen()
 ///     .Run();
@@ -34,85 +36,130 @@ namespace SimdImaging;
 public sealed class ImagePipeline
 {
     private readonly Image _source;
-    private readonly ProcessingPlan _plan = new();
+    private readonly List<ImageOp> _pending = [];
+    private Image? _current;
+    private int _bandRows = ProcessingPlan.DefaultBandRows;
+    private bool _finished;
 
     internal ImagePipeline(Image source) => _source = source;
 
-    /// <summary>Rows per band; smaller bands mean less working memory and more bookkeeping.</summary>
+    /// <summary>Rows per band; smaller bands trade bookkeeping for less working memory.</summary>
     public ImagePipeline BandRows(int rows)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
-        return new ImagePipeline(_source, rows);
+        _bandRows = rows;
+        return this;
     }
 
-    private ImagePipeline(Image source, int bandRows)
-    {
-        _source = source;
-        _plan = new ProcessingPlan { BandRows = bandRows };
-    }
+    /// <summary>Resizes. Ends the current band pass and continues with a new one.</summary>
+    public ImagePipeline Resize(int width, int height, Resampler resampler = Resampler.Bicubic) =>
+        Geometry(src => src.Resize(width, height, resampler));
+
+    /// <summary>Crops to <paramref name="region"/>. Ends the current band pass.</summary>
+    public ImagePipeline Crop(PixelRect region) => Geometry(src => src.Crop(region));
+
+    /// <summary>Rotates by a quarter turn. Ends the current band pass.</summary>
+    public ImagePipeline Rotate90(bool clockwise = true) => Geometry(src => src.Rotate90(clockwise));
 
     /// <summary>Brightness by <paramref name="amount"/>.</summary>
-    public ImagePipeline Brightness(float amount) => Step(ImageOps.Brightness(amount));
+    public ImagePipeline Brightness(float amount) => Step(PlanOps.Brightness(amount));
 
     /// <summary>Contrast about the mid-point.</summary>
-    public ImagePipeline Contrast(float amount) => Step(ImageOps.Contrast(amount));
+    public ImagePipeline Contrast(float amount) => Step(PlanOps.Contrast(amount));
 
     /// <summary>Gamma correction; above one darkens.</summary>
-    public ImagePipeline Gamma(float gamma) => Step(ImageOps.Gamma(gamma));
+    public ImagePipeline Gamma(float gamma) => Step(PlanOps.Gamma(gamma));
 
     /// <summary>Inverts the colour channels.</summary>
-    public ImagePipeline Invert() => Step(ImageOps.Invert());
+    public ImagePipeline Invert() => Step(PlanOps.Invert());
 
     /// <summary>BT.601 luma.</summary>
-    public ImagePipeline Grayscale() => Step(ImageOps.Grayscale());
+    public ImagePipeline Grayscale() => Step(PlanOps.Grayscale());
 
     /// <summary>Blends towards sepia.</summary>
-    public ImagePipeline Sepia(float amount = 1f) => Step(ImageOps.Sepia(amount));
+    public ImagePipeline Sepia(float amount = 1f) => Step(PlanOps.Sepia(amount));
 
     /// <summary>Scales saturation about luma.</summary>
-    public ImagePipeline Saturation(float amount) => Step(ImageOps.Saturation(amount));
+    public ImagePipeline Saturation(float amount) => Step(PlanOps.Saturation(amount));
 
     /// <summary>Quantizes each channel to <paramref name="levels"/> steps.</summary>
-    public ImagePipeline Posterize(int levels) => Step(ImageOps.Posterize(levels));
+    public ImagePipeline Posterize(int levels) => Step(PlanOps.Posterize(levels));
 
     /// <summary>Remaps the tone curve.</summary>
-    public ImagePipeline Levels(float black, float white, float gamma) => Step(ImageOps.Levels(black, white, gamma));
+    public ImagePipeline Levels(float black, float white, float gamma) => Step(PlanOps.Levels(black, white, gamma));
 
     /// <summary>Gaussian blur.</summary>
-    public ImagePipeline GaussianBlur(float sigma) => Step(ImageOps.GaussianBlur(sigma));
+    public ImagePipeline GaussianBlur(float sigma) => Step(PlanOps.GaussianBlur(sigma));
 
     /// <summary>Box blur of the given radius.</summary>
-    public ImagePipeline BoxBlur(int radius) => Step(ImageOps.BoxBlur(radius));
+    public ImagePipeline BoxBlur(int radius) => Step(PlanOps.BoxBlur(radius));
 
     /// <summary>Unsharp mask.</summary>
-    public ImagePipeline Sharpen(float amount = 0.5f, float sigma = 1f) => Step(ImageOps.Sharpen(amount, sigma));
+    public ImagePipeline Sharpen(float amount = 0.5f, float sigma = 1f) => Step(PlanOps.Sharpen(amount, sigma));
 
     /// <summary>3x3 emboss.</summary>
-    public ImagePipeline Emboss() => Step(ImageOps.Emboss());
+    public ImagePipeline Emboss() => Step(PlanOps.Emboss());
 
     /// <summary>3x3 Sobel magnitude.</summary>
-    public ImagePipeline Sobel() => Step(ImageOps.Sobel());
+    public ImagePipeline Sobel() => Step(PlanOps.Sobel());
 
     /// <summary>Block mosaic.</summary>
-    public ImagePipeline Pixelate(int blockSize) => Step(ImageOps.Pixelate(blockSize));
+    public ImagePipeline Pixelate(int blockSize) => Step(PlanOps.Pixelate(blockSize));
 
     /// <summary>Histogram equalisation.</summary>
-    public ImagePipeline Equalize() => Step(ImageOps.Equalize());
+    public ImagePipeline Equalize() => Step(PlanOps.Equalize());
 
     /// <summary>Runs the chain and returns a new image; the source is not modified.</summary>
-    public Image Run() => _source.Apply(_plan);
+    public Image Run()
+    {
+        ObjectDisposedException.ThrowIf(_finished, this);
+        _finished = true;
+        var result = Current();
+        _current = null;
+        return result;
+    }
 
     private ImagePipeline Step(ImageOp op)
     {
-        _plan.Add(op);
+        ObjectDisposedException.ThrowIf(_finished, this);
+        _pending.Add(op);
         return this;
+    }
+
+    /// <summary>Ends the current pass, applies geometry, and starts a fresh pass on the result.</summary>
+    private ImagePipeline Geometry(Func<Image, Image> reshape)
+    {
+        ObjectDisposedException.ThrowIf(_finished, this);
+        var input = Current();
+        _current = reshape(input);
+        return this;
+    }
+
+    /// <summary>The image as of the last completed pass, running the pending plan first.</summary>
+    private Image Current()
+    {
+        if (_pending.Count == 0)
+            return _current ?? _source;
+
+        var plan = new ProcessingPlan { BandRows = _bandRows };
+        foreach (var op in _pending)
+            plan.Add(op);
+        _pending.Clear();
+
+        var input = _current ?? _source;
+        var next = input.Apply(plan);
+        if (!ReferenceEquals(input, _source))
+            input.Dispose();
+
+        _current = next;
+        return next;
     }
 }
 
 /// <summary>Starts a pipeline.</summary>
 public static class ImagePipelineExtensions
 {
-    /// <summary>Chains same-size operations into a single pass over the image.</summary>
+    /// <summary>Chains operations into passes, splitting automatically where the size changes.</summary>
     public static ImagePipeline Pipe(this Image image)
     {
         ArgumentNullException.ThrowIfNull(image);

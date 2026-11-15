@@ -82,22 +82,22 @@ public class HaloDeclarationTests
 
         var ops = new (string Name, ImageOp Op, Func<PixelView, WorkingBuffer> Direct)[]
         {
-            ("brightness", ImageOps.Brightness(0.05f), v => PointOps.Brightness(v, 0.05f)),
-            ("contrast", ImageOps.Contrast(1.1f), v => PointOps.Contrast(v, 1.1f)),
-            ("gamma", ImageOps.Gamma(1.4f), v => PointOps.Gamma(v, 1.4f)),
-            ("invert", ImageOps.Invert(), v => PointOps.Invert(v)),
-            ("grayscale", ImageOps.Grayscale(), v => PointOps.Grayscale(v)),
-            ("sepia", ImageOps.Sepia(1f), v => PointOps.Sepia(v, 1f)),
-            ("saturation", ImageOps.Saturation(1.3f), v => PointOps.Saturation(v, 1.3f)),
-            ("posterize", ImageOps.Posterize(5), v => PointOps.Posterize(v, 5)),
-            ("levels", ImageOps.Levels(0f, 1f, 1.2f), v => PointOps.Levels(v, 0f, 1f, 1.2f)),
-            ("blur", ImageOps.GaussianBlur(1.5f), v => FilterOps.GaussianBlur(v, 1.5f)),
-            ("box", ImageOps.BoxBlur(2), v => FilterOps.BoxBlur(v, 2)),
-            ("sharpen", ImageOps.Sharpen(), v => FilterOps.Sharpen(v)),
-            ("emboss", ImageOps.Emboss(), v => FilterOps.Emboss(v)),
-            ("sobel", ImageOps.Sobel(), v => FilterOps.Sobel(v)),
-            ("pixelate", ImageOps.Pixelate(5), v => FilterOps.Pixelate(v, 5)),
-            ("equalize", ImageOps.Equalize(), v => HistogramOps.Equalize(v)),
+            ("brightness", PlanOps.Brightness(0.05f), v => PointOps.Brightness(v, 0.05f)),
+            ("contrast", PlanOps.Contrast(1.1f), v => PointOps.Contrast(v, 1.1f)),
+            ("gamma", PlanOps.Gamma(1.4f), v => PointOps.Gamma(v, 1.4f)),
+            ("invert", PlanOps.Invert(), v => PointOps.Invert(v)),
+            ("grayscale", PlanOps.Grayscale(), v => PointOps.Grayscale(v)),
+            ("sepia", PlanOps.Sepia(1f), v => PointOps.Sepia(v, 1f)),
+            ("saturation", PlanOps.Saturation(1.3f), v => PointOps.Saturation(v, 1.3f)),
+            ("posterize", PlanOps.Posterize(5), v => PointOps.Posterize(v, 5)),
+            ("levels", PlanOps.Levels(0f, 1f, 1.2f), v => PointOps.Levels(v, 0f, 1f, 1.2f)),
+            ("blur", PlanOps.GaussianBlur(1.5f), v => FilterOps.GaussianBlur(v, 1.5f)),
+            ("box", PlanOps.BoxBlur(2), v => FilterOps.BoxBlur(v, 2)),
+            ("sharpen", PlanOps.Sharpen(), v => FilterOps.Sharpen(v)),
+            ("emboss", PlanOps.Emboss(), v => FilterOps.Emboss(v)),
+            ("sobel", PlanOps.Sobel(), v => FilterOps.Sobel(v)),
+            ("pixelate", PlanOps.Pixelate(5), v => FilterOps.Pixelate(v, 5)),
+            ("equalize", PlanOps.Equalize(), v => HistogramOps.Equalize(v)),
         };
 
         var failures = new List<string>();
@@ -143,6 +143,30 @@ public class HaloDeclarationTests
         using var third = second.Grayscale();
 
         piped.WritablePixels.ToArray().ShouldBe(third.WritablePixels.ToArray());
+    }
+
+    /// <summary>
+    /// A size change in the middle of a chain is the library's problem: the caller writes one chain, the pipeline
+    /// ends its band pass, resizes, and starts another. The bytes must match doing it by hand.
+    /// </summary>
+    [Fact]
+    public void Pipeline_WithAResizeInTheMiddle_MatchesDoingItByHand()
+    {
+        using var source = Pattern();
+
+        using var piped = source.Pipe()
+            .Brightness(0.05f)
+            .Resize(20, 14)
+            .Sharpen()
+            .Run();
+
+        using var bright = source.Brightness(0.05f);
+        using var resized = bright.Resize(20, 14);
+        using var sharpened = resized.Sharpen();
+
+        piped.Width.ShouldBe(20);
+        piped.Height.ShouldBe(14);
+        piped.WritablePixels.ToArray().ShouldBe(sharpened.WritablePixels.ToArray());
     }
 
     /// <summary>The declared values: what the library's own documentation says each operator needs.</summary>

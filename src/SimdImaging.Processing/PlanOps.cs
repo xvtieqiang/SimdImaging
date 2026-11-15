@@ -18,7 +18,7 @@ namespace SimdImaging.Processing;
 /// established what they read.
 /// </para>
 /// </remarks>
-public static class ImageOps
+public static class PlanOps
 {
     private static ImageOp Point(string name, Func<PixelView, WorkingBuffer> op) =>
         new(name, OpCategory.Point, 0, 0, PlanSteps.Point(op));
