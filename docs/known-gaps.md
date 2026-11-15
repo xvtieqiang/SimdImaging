@@ -101,6 +101,11 @@
 `min(Degree, bandCount, 96 MB / 每 worker 字节)`，4K 下取到 5 个 worker。band 内已有的行并行会自动退化为单线程
 （`RowParallel` 的嵌套计数），不会双重并行。
 
+**guided.cross 的 band 并行（396 → 210 ms，−47%）**：剩下串行的只有 `BoxMean` 的 18 遍。band 之间本就独立，
+但每 worker 要自己一套 8 个平面，4K 下每套 17.7 MB——所以 worker 数由**字节预算**而不是核数决定：
+`min(Degree, bandCount, 96 MB / 每 worker 字节)`，4K 下取到 5 个 worker。band 内已有的行并行会自动退化为单线程
+（`RowParallel` 的嵌套计数），不会双重并行。
+
 **quantize 的 −45%（同日，63.0 → 34–36 ms）**：两件事。
 
 1. **映射行带并行**：`PaletteQuantizer.Apply` 的 Rgba8 分支是单线程逐像素表读，每像素完全独立；
