@@ -263,6 +263,14 @@ using (var opened = image.Open3x3())
 using (var bilateral = image.GaussianBlur(2f).Bilateral(2, 0f, 0.2f))
     Console.WriteLine($"bilateral sha={Hash(bilateral.WritablePixels)}");
 
+// Oil paint is the sliding-window histogram: the second call uses a window wider than the row, which is the
+// clamped-slide path rather than the interior one, and the two are different code.
+using (var painted = image.OilPaint(2, 20))
+    Console.WriteLine($"oilpaint sha={Hash(painted.WritablePixels)}");
+
+using (var paintedWide = image.OilPaint(40, 5))
+    Console.WriteLine($"oilpaint.clamp sha={Hash(paintedWide.WritablePixels)}");
+
 // Cross-guided filter: cov(I, G) and var(G) from a guide that is not the source, so the second box-pass
 // layout is hashed too. The self-guided path is already covered through the one-argument call.
 using (var guide = image.GaussianBlur(1f))

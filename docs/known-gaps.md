@@ -50,7 +50,7 @@
 | chroma 4:2:0 4K | 228 | **标量**：双精度散列累加到色度格 | `Color/ColorConversionOps.cs` |
 | quantize 4K（octree） | 207 | **标量**：最近色搜索，数据相关 | `Color/QuantizeOps.cs` |
 | bilateral 4K | 180 | **标量**：权重由邻域像素值查表，逐 lane 都不同 | `Filter/FilterOps.cs` |
-| oil paint 4K | 141 | **标量**：每像素一个直方图 | `Filter/OilPaintOps.cs` |
+| oil paint 4K | **117–141**（本机改前 204–214） | **标量散点**（AVX2 无 scatter，这条路不存在）；已做行基址提升 + 样本预计算 + `FloatScratch` | `Filter/OilPaintOps.cs` |
 | resize 4K→1080p bicubic | ~67 | AVX2（行带 + 两遍 + 水平/垂直向量） | `Geometry/Resize.cs` |
 | gaussian / box blur 4K | ~88 / — | AVX2 + **AVX-512**（卷积内核） | `Internal/PlanarConvolve.cs` |
 
@@ -65,6 +65,19 @@
    把向量与标量逐字节对比，三档 body SHA 不变。
 
 收益不大（DP 只占剩余成本的一半），但它是库里少数**能安全向量化**的形状，且证明了"照抄求值顺序"这个方法论可行。
+
+**oil paint 的 −40% 从哪来（2026-11-15）**：这个算子**没法向量化散点**（`vpscatterdd` 是 AVX-512F 才有），
+所以做的是三件标量层面的事，全部逐字节不变：
+
+1. **行基址提升**：每像素每 tap 都在算 `Math.Clamp(y+ky)`、`sy % window`（除数是运行期值 → `idiv`）、构造 `Span`，
+   共 10 次/像素；这些与像素值无关，逐行算一次即可（204–214 → 186–194 ms）。
+2. **样本预计算**：滑动窗口里每个样本被处理两次（leave 一次、enter 一次），把 `bin` 与打包 RGB
+   （`0xRRGGBB < 2²⁴`，float 可精确表示）按源行算一次，内层退化为「2 次读取 + 4 次整数 RMW」
+   （186–194 → 117–141 ms）。
+3. **`FloatScratch` 替换每 worker 每次调用的 `new float[]`**：分配 363 KiB → 97 KiB。
+
+**同批试过但回滚的**：`chroma 4:2:0`（228 ms）把 `ColorMath.Coefficients(ycbcr)` 从逐像素提到每次调用——
+**没有任何变化**（228 → 235–239 ms，落在噪声内），按纪律回滚，不留「看起来更干净但没收益」的改动。
 
 **为什么只有这些在向量上**——这是本文最该记住的一条：**确定性契约反过来限制了向量化**。
 本库承诺三档（现在四档）逐字节相同，而把标量循环改写成向量循环，往往会把浮点累加顺序从
