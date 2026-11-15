@@ -90,17 +90,24 @@ using var edited = photo.Pipe()
 
 用两个选项类型（`SimdImaging.Abstractions`）：
 
-| 我要 | 写 |
-|---|---|
-| 1/4 缩放解码（精确尺寸） | `Load(p, new LoadOptions { ScaleDenominator = 4 })` |
-| 只要快，尺寸可以大一点 | `Load(p, new LoadOptions { ScaleDenominator = 16, PreferNativeScale = true })` |
-| 按 EXIF 转正 | `Load(p, new LoadOptions { ApplyOrientation = true })` |
-| 只解一块（地图 / 大图切片） | `Load(p, new LoadOptions { Region = new PixelRect(x, y, w, h) })` |
-| 限内存（防解压炸弹） | `Load(p, new LoadOptions { MaxPixels = 40_000_000 })` |
-| 从流读（HTTP 响应体） | `await Image.LoadAsync(stream)` |
-| JPEG 质量 | `Save(img, p, new SaveOptions { JpegQuality = 85 })` |
-| WebP 无损 | `Save(img, p, new SaveOptions { WebpLossless = true })` |
-| 要字节不要文件 | `byte[] png = Image.Encode(img, ImageFormat.Png)`（枚举来自 `Sdcb.SimdCodecs.Abstractions`） |
+**解码**
+
+```csharp
+using var quarter = Image.Load(path, new LoadOptions { ScaleDenominator = 4 });   // 精确 1/4 尺寸
+using var fast    = Image.Load(path, new LoadOptions { ScaleDenominator = 16, PreferNativeScale = true });
+using var upright = Image.Load(path, new LoadOptions { ApplyOrientation = true });   // 按 EXIF 转正
+using var tile    = Image.Load(path, new LoadOptions { Region = new PixelRect(x, y, w, h) });
+using var capped  = Image.Load(path, new LoadOptions { MaxPixels = 40_000_000 });     // 防解压炸弹
+using var remote  = await Image.LoadAsync(stream);                                    // HTTP 响应体
+```
+
+**编码**
+
+```csharp
+Image.Save(img, path, new SaveOptions { JpegQuality = 85 });
+Image.Save(img, path, new SaveOptions { WebpLossless = true });
+byte[] png = Image.Encode(img, ImageFormat.Png);   // ImageFormat 来自 Sdcb.SimdCodecs.Abstractions
+```
 
 失败分两种，别混：输入不是图片 → `InvalidDataException`（或 `TryLoad` 返回 false）；调用方参数错了 →
 `ArgumentException` / `NotSupportedException`。没有静默降级。

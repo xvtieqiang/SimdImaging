@@ -95,7 +95,7 @@ AGENTS.md 写明：JPEG 编解码、WebP 解码、PNG 编解码**已调到世界
 ```
 业务代码
   │
-  ├─ SimdImaging                    门面：Load / Save / Mutate / Clone / Plan
+  ├─ SimdImaging                    门面：Load / Save / Mutate / Pipe
   │    ├─ SimdImaging.Drawing       P1 起：形状 / 路径 / 渐变 / 抗锯齿
   │    ├─ SimdImaging.Processing    119 个算子 + 全部 SIMD 内核
   │    └─ SimdImaging.Abstractions  Image / WorkingBuffer / IImageOp
@@ -352,22 +352,24 @@ public sealed record ExecuteOptions
 }
 ```
 
-两种用法，同一份计划：
+两种用法，同一个执行器：
 
 ```csharp
-// 1) 顺手（对标 ImageSharp 的 Mutate 心智模型），内部建计划 + ping-pong，原地生效
-image.Mutate(x => x.Resize(1920, 1080, Lanczos3).Grayscale().Contrast(1.1f));
+// 1) 返回新图
+using var result = image.Pipe()
+    .Resize(1920, 1080, Resampler.Lanczos3)
+    .Grayscale()
+    .Contrast(1.1f)
+    .ToImage();
 
-// 2) 显式（批处理、需要复用权重表、需要审计）
-var plan = ProcessingPlan.Create()
-    .Resize(1920, 1080, Lanczos3)
-    .Premultiply()
-    .GaussianBlur(8f)
-    .Unpremultiply()
-    .Build();
-PlanReport report = plan.Analyze(image);   // 文本可导出，做黄金比对
-Image result = plan.Execute(image);
+// 2) 原地生效（同一个链类型，结果写回这张图）
+image.Mutate(p => p.Resize(1920, 1080, Resampler.Lanczos3).Grayscale().Contrast(1.1f));
 ```
+
+链的每一步是 `ProcessingPlan` 里的一个 `ImageOp`：算子自己带着「读多远」的支撑半径，`PlanOps` 的工厂从
+算子参数推导它（高斯是 `ceil(3σ)`、盒式是半径、点算子是 0），所以调用方既不用写、也写不错。
+`Add(ImageOp)` 是唯一的公共入口，`PlanSteps` 与字符串版 `Add` 都是 `internal`。
+逐算子的判定见 [`pipeline-coverage.md`](pipeline-coverage.md)。
 
 **计划期做的四件事**（这是"超越"里最实的一块）：
 
@@ -385,11 +387,7 @@ Image result = plan.Execute(image);
 
 ```
 
-**实现状态（2026-11-14）**
-
-- 实际 API 是 `new ProcessingPlan { BandRows = … }.Add(name, category, kernel, haloX, haloY)` +
-  `Image.Apply(plan)`；执行选项走 `ProcessingPlan.ExecuteWithOptions` / `Image.ApplyWithOptions`。
-  草图中的 `Create()` builder 与 `Analyze()` 仍是示意，不要按草图写代码。
+**实现状态（2026-11-16）**：上面的写法就是当前实现。`PlanReport` / `PlanObserver` 存在，但**带观察者会强制退化为逐步执行**，所以它用于解释分段原因，不代表实际执行形状；需要观测真实执行时用 `benchmarks` 的 `fusion` 模式（按租用次数判定）。
 - 行带循环已改为**并行**（`RowParallel.ForBands`）。因此**内核会被并发调用**，`OpKernel` 必须线程安全，
   且只能写 `destinationRect` 内的行。这是 2026-11-06 的契约变更。
 - **跨步骤已融合（M10）**：连续可切带步骤（Point / Neighborhood / Separable）按段经 `FusedExecutor`
