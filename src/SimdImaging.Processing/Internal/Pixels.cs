@@ -36,14 +36,27 @@ internal static class Pixels
 
             case WorkingFormat.Rgba16:
             {
+                // Eight samples at a time: widen the codes to int32 (exact — they are at most 65535), convert to
+                // float (exact below 2^24), then the same multiply by 1/65535 the scalar body does.
                 var samples = MemoryMarshal.Cast<byte, ushort>(row);
-                for (int x = 0, s = 0, d = 0; x < width; x++, s += 4, d += 4)
+                var count = width * 4;
+                var i = 0;
+
+                if (Vector256.IsHardwareAccelerated && !ForceScalarWrite)
                 {
-                    destination[d] = samples[s] * (1f / MaxCode16);
-                    destination[d + 1] = samples[s + 1] * (1f / MaxCode16);
-                    destination[d + 2] = samples[s + 2] * (1f / MaxCode16);
-                    destination[d + 3] = samples[s + 3] * (1f / MaxCode16);
+                    var scale = Vector256.Create(1f / MaxCode16);
+                    for (; i + 8 <= count; i += 8)
+                    {
+                        var (low, high) = Vector128.Widen(
+                            Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(samples), (nuint)i));
+                        var codes = Vector256.Create(low, high).AsInt32();
+                        (Vector256.ConvertToSingle(codes) * scale).StoreUnsafe(ref destination[i]);
+                    }
                 }
+
+                for (; i < count; i++)
+                    destination[i] = samples[i] * (1f / MaxCode16);
+
                 break;
             }
 
@@ -146,14 +159,32 @@ internal static class Pixels
 
             case WorkingFormat.Rgba16:
             {
+                // The scalar body is `value * 65535 + 0.5`, clamped to [0, 65535], truncated. The vector body keeps
+                // that order exactly; Max(v, 0) also turns a NaN into 0, which is what the x64 conversion of NaN
+                // does in the scalar path.
                 var samples = MemoryMarshal.Cast<byte, ushort>(row);
-                for (int x = 0, s = 0, d = 0; x < width; x++, s += 4, d += 4)
+                var count = width * 4;
+                var i = 0;
+
+                if (Vector256.IsHardwareAccelerated && !ForceScalarWrite)
                 {
-                    samples[d] = ToUInt16(source[s]);
-                    samples[d + 1] = ToUInt16(source[s + 1]);
-                    samples[d + 2] = ToUInt16(source[s + 2]);
-                    samples[d + 3] = ToUInt16(source[s + 3]);
+                    var scale = Vector256.Create((float)MaxCode16);
+                    var half = Vector256.Create(0.5f);
+                    var zero = Vector256<float>.Zero;
+                    var ceiling = Vector256.Create((float)MaxCode16);
+                    for (; i + 8 <= count; i += 8)
+                    {
+                        var scaled = (Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(source), (nuint)i) * scale) + half;
+                        var clamped = Vector256.Min(Vector256.Max(scaled, zero), ceiling);
+                        var codes = Vector256.ConvertToInt32(clamped);
+                        var packed = Vector128.Narrow(codes.GetLower().AsUInt32(), codes.GetUpper().AsUInt32());
+                        packed.StoreUnsafe(ref MemoryMarshal.GetReference(samples), (nuint)i);
+                    }
                 }
+
+                for (; i < count; i++)
+                    samples[i] = ToUInt16(source[i]);
+
                 break;
             }
 
