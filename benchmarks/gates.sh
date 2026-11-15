@@ -35,11 +35,17 @@ nope()   { printf 'FAIL  %s\n' "$1"; fail=1; }
 # The repo rule is "no new warnings", and there is no suppression budget. A warning count above zero is a
 # gate failure here, not a note.
 report "1/5 build (Release, zero warnings required)"
-build_log="$(dotnet build SimdImaging.slnx -c Release --nologo 2>&1)"
+# An up-to-date build prints no "N Warning(s)" line at all, so a missing count means "nothing was rebuilt", not
+# "the count is unknown". The exit status is the authority on whether the build worked; the counts only refine it.
+build_status=0
+build_log="$(dotnet build SimdImaging.slnx -c Release --nologo 2>&1)" || build_status=$?
 warn=$(printf '%s' "$build_log" | grep -oE '[0-9]+ Warning\(s\)' | grep -oE '[0-9]+' | tail -1)
 err=$(printf '%s' "$build_log"  | grep -oE '[0-9]+ Error\(s\)'   | grep -oE '[0-9]+' | tail -1)
-printf 'observed: warnings=%s errors=%s\n' "${warn:-?}" "${err:-?}"
-if [ "${err:-1}" = "0" ] && [ "${warn:-1}" = "0" ]; then
+warn=${warn:-0}
+err=${err:-0}
+[ "$build_status" -ne 0 ] && err=$(( err > 0 ? err : 1 ))
+printf 'observed: warnings=%s errors=%s exit=%s\n' "$warn" "$err" "$build_status"
+if [ "$err" = "0" ] && [ "$warn" = "0" ]; then
     pass "build clean"
 else
     printf '%s\n' "$build_log" | grep -E 'warning |error ' | head -20

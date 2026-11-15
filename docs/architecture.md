@@ -294,8 +294,11 @@ public sealed partial class Image : IDisposable
     public ImageFrame this[int index] { get; }
     public ColorEncoding ColorEncoding { get; }     // 直接复用 Abstractions 的类型
     public ImageMetadata Metadata { get; }
-    public Image Clone(IPixelPool? pool = null);
+    public Image Clone(IPixelPool? pool = null);              // 复制一张，原图不动
+    public Image Mutate(Action<ImagePipeline> steps, IPixelPool? pool = null);   // 原地跑一条链
+    public Image Apply(ProcessingPlan plan, IPixelPool? pool = null, PlanObserver? observe = null);
     public void Dispose();
+    // Pipe() 是扩展方法（ImagePipelineExtensions）：image.Pipe().A().B().ToImage()
     // 静态工厂 Load / TryLoad、静态 Save / Encode 见 §5.5
 }
 
