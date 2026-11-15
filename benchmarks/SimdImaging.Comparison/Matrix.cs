@@ -26,7 +26,8 @@ namespace SimdImaging.Comparison;
 internal static class Matrix
 {
     /// <summary>Small, common, and large — the three points the flip-flopping cases were observed between.</summary>
-    private static readonly (int Width, int Height)[] Sizes = [(640, 360), (1920, 1080), (3840, 2160)];
+    private static readonly (int Width, int Height)[] Sizes =
+        [(640, 360), (1920, 1080), (3840, 2160), (7680, 4320)];
 
     public static void Write(Report report)
     {
@@ -50,7 +51,13 @@ internal static class Matrix
             report.Line();
         }
 
-        ParameterSweep(report, 1920, 1080);
+        // Quality is a knob, and it interacts with size: a sigma that is cheap at 1080p is not at 8K. The sweep
+        // therefore runs at every size rather than once at 1080p.
+        foreach (var (width, height) in Sizes)
+        {
+            Console.WriteLine($"[matrix] 参数档位 {width}x{height}...");
+            ParameterSweep(report, width, height);
+        }
     }
 
     /// <summary>
