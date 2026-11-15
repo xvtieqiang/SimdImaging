@@ -1,3 +1,4 @@
+using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Geometry;
 
@@ -57,6 +58,83 @@ public class SeamCarvingTierTests
         finally
         {
             SeamCarving.ForceScalarVector = false;
+        }
+    }
+
+
+    /// <summary>
+    /// The integer programme against the double one it replaced: for 8- and 16-bit sources every value in the
+    /// integer rows is exactly representable, so the two must agree to the byte — including on the tie-heavy and
+    /// ragged inputs where a different lane width would show up first.
+    /// </summary>
+    [Theory]
+    [InlineData(SeamAxis.Vertical, 1)]
+    [InlineData(SeamAxis.Vertical, 9)]
+    [InlineData(SeamAxis.Horizontal, 4)]
+    public void IntegerProgramme_MatchesTheDoubleOneExactly(SeamAxis axis, int count)
+    {
+        using var image = Pattern(97, 61);
+
+        var integer = Remove(image, axis, count, forceScalar: false);
+        var doubly = WithDouble(image, () => Remove(image, axis, count, forceScalar: false));
+
+        integer.ShouldBe(doubly);
+    }
+
+    [Fact]
+    public void IntegerProgramme_OnAFlatImage_MatchesTheDoubleOne()
+    {
+        using var image = Image.Create(64, 40, WorkingFormat.Rgba8);
+        image.WritablePixels.Fill(120);
+
+        Remove(image, SeamAxis.Vertical, 12, forceScalar: false).ShouldBe(WithDouble(image, () => Remove(image, SeamAxis.Vertical, 12, forceScalar: false)));
+    }
+
+    [Fact]
+    public void IntegerProgramme_OnAWanderingPath_MatchesTheDoubleOne()
+    {
+        // A diagonal ramp: every row's seam sits one column further along, which is the case where a mapping bug
+        // would shift a column without ever failing a flat-image test.
+        using var image = Image.Create(96, 64, WorkingFormat.Rgba8);
+        var pixels = image.WritablePixels;
+        for (var y = 0; y < 64; y++)
+        {
+            for (var x = 0; x < 96; x++)
+            {
+                var i = ((y * 96) + x) * 4;
+                var value = (byte)Math.Min(255, Math.Abs(x - y) * 4);
+                pixels[i] = value;
+                pixels[i + 1] = (byte)(255 - value);
+                pixels[i + 2] = (byte)((x * y) & 0xFF);
+                pixels[i + 3] = 255;
+            }
+        }
+
+        Remove(image, SeamAxis.Vertical, 7, forceScalar: false).ShouldBe(WithDouble(image, () => Remove(image, SeamAxis.Vertical, 7, forceScalar: false)));
+    }
+
+    [Theory]
+    [InlineData(WorkingFormat.Rgba16)]
+    public void IntegerProgramme_MatchesTheDoubleOneOnSixteenBit(WorkingFormat format)
+    {
+        using var image = Image.Create(83, 47, format);
+        var samples = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, ushort>(image.WritablePixels);
+        for (var i = 0; i < samples.Length; i++)
+            samples[i] = (ushort)((i * 7919 + 3) & 0xFFFF);
+
+        Remove(image, SeamAxis.Vertical, 5, forceScalar: false).ShouldBe(WithDouble(image, () => Remove(image, SeamAxis.Vertical, 5, forceScalar: false)));
+    }
+
+    private static byte[] WithDouble(Image image, Func<byte[]> run)
+    {
+        try
+        {
+            SeamCarving.ForceDoubleDp = true;
+            return run();
+        }
+        finally
+        {
+            SeamCarving.ForceDoubleDp = false;
         }
     }
 

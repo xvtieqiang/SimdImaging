@@ -30,6 +30,19 @@ public static class SeamCarving
     internal static bool ForceScalarVector;
 
     /// <summary>
+    /// Test hook: forces the double-precision programme even for 8- and 16-bit sources, so the integer kernel
+    /// can be compared against the path it replaced, byte for byte.
+    /// </summary>
+    /// <remarks>
+    /// The integer path is exact, not an approximation: for those formats the luma is an integer, so energy and
+    /// the accumulated programme are integers too, and every value fits in 32 bits (the worst case is
+    /// <c>height × 131070</c>, which is guarded at the entry). Comparisons on those integers therefore pick the
+    /// same cells as the same comparisons on their exact double values — the same reasoning that let the DP row
+    /// be vectorised in the first place.
+    /// </remarks>
+    internal static bool ForceDoubleDp;
+
+    /// <summary>
     /// Phase timing, off by default: six counters written once per phase per call, and four per seam.
     /// </summary>
     /// <remarks>
@@ -322,6 +335,15 @@ public static class SeamCarving
         private readonly float[] _above;
         private readonly float[] _centre;
         private readonly float[] _below;
+
+        // The integer twin: 8- and 16-bit sources keep their luma as integers all the way through, which is what
+        // lets the row body run eight lanes at once instead of four.
+        private readonly int[] _rowIntA;
+        private readonly int[] _rowIntB;
+        private readonly int[] _intAbove;
+        private readonly int[] _intCentre;
+        private readonly int[] _intBelow;
+        private int[]? _lumaInt;
         private readonly float[] _straight;
         private readonly int[] _seam;
 
@@ -346,6 +368,11 @@ public static class SeamCarving
             _back = new byte[(long)width * height];
             _rowA = new double[width];
             _rowB = new double[width];
+            _rowIntA = new int[width];
+            _rowIntB = new int[width];
+            _intAbove = new int[width];
+            _intCentre = new int[width];
+            _intBelow = new int[width];
             _above = new float[width];
             _centre = new float[width];
             _below = new float[width];
@@ -360,6 +387,11 @@ public static class SeamCarving
         /// </summary>
         public int[] FindSeam(PixelView view, int width, bool blocked = false)
         {
+            // The insert path keeps the double kernel: it reads the blocked mask, which the integer path does
+            // not model, and forcing a fallback there is cheaper than a second copy of that logic.
+            if (!blocked && UseIntegerPath(view))
+                return FindSeamInt(view, width);
+
             var previous = _rowA;
             var current = _rowB;
             var above = _above;
@@ -468,6 +500,132 @@ public static class SeamCarving
         /// the centre, and a tie on the right keeps whatever the left comparison chose.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// The programme on integers, eight lanes at a time. Same rows, same visit order, same strict
+        /// comparisons as <see cref="FindSeam"/>; only the element type is narrower, and every value it holds is
+        /// exactly representable there.
+        /// </summary>
+        private int[] FindSeamInt(PixelView view, int width)
+        {
+            var previous = _rowIntA;
+            var current = _rowIntB;
+            var above = _intAbove;
+            var centre = _intCentre;
+            var below = _intBelow;
+
+            ReadLumaInt(view, 0, width, above);
+            ReadLumaInt(view, 0, width, centre);
+            ReadLumaInt(view, Math.Min(1, _height - 1), width, below);
+
+            for (var x = 0; x < width; x++)
+            {
+                previous[x] = EnergyInt(width, x, above, centre, below);
+                _back[x] = 1;
+            }
+
+            for (var y = 1; y < _height; y++)
+            {
+                var spare = above;
+                above = centre;
+                centre = below;
+                below = spare;
+                ReadLumaInt(view, Math.Min(y + 1, _height - 1), width, below);
+
+                var row = y * _capacity;
+                var x = 0;
+
+                if (Vectorized)
+                {
+                    // Column 0 reads centre[-1] and previous[-1] through clamps, so it stays scalar.
+                    WriteCellInt(width, 0, row, previous, current, above, centre, below);
+                    x = 1;
+
+                    for (; x + 8 < width; x += 8)
+                        WriteRow8(x, row, previous, current, above, centre, below);
+                }
+
+                for (; x < width; x++)
+                    WriteCellInt(width, x, row, previous, current, above, centre, below);
+
+                (previous, current) = (current, previous);
+            }
+
+            var column = 0;
+            var minimum = previous[0];
+            for (var x = 1; x < width; x++)
+            {
+                if (previous[x] < minimum)
+                {
+                    minimum = previous[x];
+                    column = x;
+                }
+            }
+
+            for (var y = _height - 1; y >= 0; y--)
+            {
+                _seam[y] = column;
+                column = Math.Clamp(column + _back[(y * _capacity) + column] - 1, 0, width - 1);
+            }
+
+            return _seam;
+        }
+
+        private void WriteRow8(int x, int row, int[] previous, int[] current,
+            int[] above, int[] centre, int[] below)
+        {
+            var prevLeft = Vector256.LoadUnsafe(ref previous[x - 1]);
+            var prevMid = Vector256.LoadUnsafe(ref previous[x]);
+            var prevRight = Vector256.LoadUnsafe(ref previous[x + 1]);
+
+            var takeLeft = Vector256.LessThan(prevLeft, prevMid);
+            var bestLeft = Vector256.ConditionalSelect(takeLeft, prevLeft, prevMid);
+            var direction = Vector256.ConditionalSelect(takeLeft, Vector256<int>.Zero, Vector256.Create(1));
+
+            var takeRight = Vector256.LessThan(prevRight, bestLeft);
+            var best = Vector256.ConditionalSelect(takeRight, prevRight, bestLeft);
+            direction = Vector256.ConditionalSelect(takeRight, Vector256.Create(2), direction);
+
+            var horizontal = Vector256.Abs(
+                Vector256.LoadUnsafe(ref centre[x + 1]) - Vector256.LoadUnsafe(ref centre[x - 1]));
+            var vertical = Vector256.Abs(
+                Vector256.LoadUnsafe(ref below[x]) - Vector256.LoadUnsafe(ref above[x]));
+
+            (horizontal + vertical + best).StoreUnsafe(ref current[x]);
+
+            Span<int> directions = stackalloc int[8];
+            direction.StoreUnsafe(ref MemoryMarshal.GetReference(directions));
+            for (var i = 0; i < 8; i++)
+                _back[row + x + i] = (byte)directions[i];
+        }
+
+        private void WriteCellInt(int width, int x, int row, int[] previous, int[] current,
+            int[] above, int[] centre, int[] below)
+        {
+            var best = previous[x];
+            var direction = (byte)1;
+            if (x > 0 && previous[x - 1] < best)
+            {
+                best = previous[x - 1];
+                direction = 0;
+            }
+
+            if (x + 1 < width && previous[x + 1] < best)
+            {
+                best = previous[x + 1];
+                direction = 2;
+            }
+
+            current[x] = EnergyInt(width, x, above, centre, below) + best;
+            _back[row + x] = direction;
+        }
+
+        private static int EnergyInt(int width, int x, int[] above, int[] centre, int[] below)
+        {
+            var left = centre[x > 0 ? x - 1 : 0];
+            var right = centre[x + 1 < width ? x + 1 : width - 1];
+            return Math.Abs(right - left) + Math.Abs(below[x] - above[x]);
+        }
+
         private void WriteRow4(int x, int row, double[] previous, double[] current,
             float[] above, float[] centre, float[] below)
         {
@@ -532,9 +690,24 @@ public static class SeamCarving
         }
 
         /// <summary>Luma of one row: exact integers for 8/16-bit, BT.709 floats for Rgba32F.</summary>
+        /// <summary>True when this source can stay integer end to end: 8- or 16-bit, and the programme cannot
+        /// overflow 32 bits (<c>height × 131070</c> is the worst path sum).</summary>
+        private bool UseIntegerPath(PixelView view) =>
+            !ForceDoubleDp
+            && view.Format is WorkingFormat.Rgba8 or WorkingFormat.Rgba16
+            && _height <= int.MaxValue / 131070;
+
         /// <summary>Converts every row once so <see cref="FindSeam"/> can read luma instead of recomputing it.</summary>
         public void PrimeLuma(PixelView view)
         {
+            if (UseIntegerPath(view))
+            {
+                _lumaInt = new int[(long)_capacity * _height];
+                for (var y = 0; y < _height; y++)
+                    LumaInt(view, y, view.Width, _lumaInt.AsSpan(y * _capacity, view.Width));
+                return;
+            }
+
             _luma = new float[(long)_capacity * _height];
             for (var y = 0; y < _height; y++)
                 Luma(view, y, view.Width, _luma.AsSpan(y * _capacity, view.Width));
@@ -543,15 +716,54 @@ public static class SeamCarving
         /// <summary>Mirrors <see cref="CutSeam"/> on the cached luma: one column disappears from column <paramref name="seam"/>.</summary>
         public void ShiftLuma(int[] seam, int width)
         {
-            if (_luma is null)
-                return;
-
+            // Both caches, whichever one this call primed: they mirror CutSeam, and a cache left unshifted would
+            // keep feeding the search pixels that have already moved.
             for (var y = 0; y < _height; y++)
             {
                 var at = seam[y];
                 var row = y * _capacity;
-                Array.Copy(_luma, row + at + 1, _luma, row + at, width - at - 1);
+                if (_lumaInt is not null)
+                    Array.Copy(_lumaInt, row + at + 1, _lumaInt, row + at, width - at - 1);
+                else if (_luma is not null)
+                    Array.Copy(_luma, row + at + 1, _luma, row + at, width - at - 1);
             }
+        }
+
+        /// <summary>Integer twin of <see cref="Luma"/> for 8- and 16-bit sources; the weights are the same
+        /// <c>(54R + 183G + 19B) &gt;&gt; 8</c>.</summary>
+        private void LumaInt(PixelView view, int y, int width, Span<int> destination)
+        {
+            var row = view.Row(y);
+
+            if (view.Format == WorkingFormat.Rgba16)
+            {
+                var samples = MemoryMarshal.Cast<byte, ushort>(row);
+                for (var x = 0; x < width; x++)
+                {
+                    var o = x * 4;
+                    destination[x] = (54 * samples[o] + 183 * samples[o + 1] + 19 * samples[o + 2]) >> 8;
+                }
+
+                return;
+            }
+
+            for (var x = 0; x < width; x++)
+            {
+                var o = x * 4;
+                destination[x] = (54 * row[o] + 183 * row[o + 1] + 19 * row[o + 2]) >> 8;
+            }
+        }
+
+        /// <summary>Integer rows: cached when primed, converted from the float cache otherwise.</summary>
+        private void ReadLumaInt(PixelView view, int y, int width, int[] destination)
+        {
+            if (_lumaInt is not null)
+            {
+                Array.Copy(_lumaInt, (long)y * _capacity, destination, 0, width);
+                return;
+            }
+
+            LumaInt(view, y, width, destination);
         }
 
         /// <summary>Cached row when primed, a fresh conversion otherwise.</summary>

@@ -106,11 +106,35 @@
 `min(Degree, bandCount, 96 MB / 每 worker 字节)`，4K 下取到 5 个 worker。band 内已有的行并行会自动退化为单线程
 （`RowParallel` 的嵌套计数），不会双重并行。
 
+**seam 的整数 DP（2026-11-16，422 → 258 ms，−39%）**：分段的实测说 `FindSeam` 占 80–85%，而消融又说
+能量只占 `FindSeam` 的 17%——所以瓶颈就是**递推那行本身**。它原本跑 `Vector256<double>`，只有 4 lane。
+8/16 位下 luma、能量、递推全是**精确整数**（8-bit 能量 ≤510、16-bit ≤131070，路径和 ≤ `height×131070`），
+换成 `Vector256<int>` 就是 8 lane，且 int 的比较/加法比 double 便宜。
+
+- 守卫：`height > int.MaxValue / 131070` 时回落 double；`Rgba32F` 仍走 double（`operators.md` 的 D1 契约）；
+  插入路径（`blocked: true`）也用 double——它读的掩码不在整数路径里建模。
+- 等价性：`ForceDoubleDp` 反向开关 + `SeamCarvingTierTests` 的 A/B（Vertical/Horizontal × 1/9/4 缝、平图、
+  逐行斜移 1 列的路径、Rgba16），逐字节相等；AOT 哈希 `5F0F06D0755265C8` 未变。
+- 踩到的坑：`ShiftLuma` 只搬了 float 缓存，整数缓存没搬——第二条缝起就用错位的 luma。**A/B 测试在第一条
+  缝上仍会通过**（只有一条缝时不需要 shift），是「16 位 + 5 缝」这个组合把它抓出来的。
+
 **Rgba16 点算子补上 16 位表（同日）**：矩阵第一次运行就指出，grayscale / sepia / invert 在三种尺寸上都是
 0.63–0.67×——`PointLut` 只对 `Rgba8` 生效，16 位退回 float 行路径。补一张 4 × 65536 的 `ushort` 表（512 KiB），
 **构造方式与 Rgba8 完全一致**：用算子自己的行变换跑一遍 65536 个值并记录结果，所以没有第二份算术可漂移。
 低于 16384 像素不建表（建表成本盖过收益，阈值是实测量级不是猜的）。Rgba16 整体 1.53–1.72×（4/7）→
 **2.01–2.29×（7/7）**，三次独立运行一致；`invert16` 进了 AOT 哈希清单且用 19200 像素的图才真正覆盖该路径。
+
+**seam 的整数 DP（2026-11-16，422 → 258 ms，−39%）**：分段的实测说 `FindSeam` 占 80–85%，而消融又说
+能量只占 `FindSeam` 的 17%——所以瓶颈就是**递推那行本身**。它原本跑 `Vector256<double>`，只有 4 lane。
+8/16 位下 luma、能量、递推全是**精确整数**（8-bit 能量 ≤510、16-bit ≤131070，路径和 ≤ `height×131070`），
+换成 `Vector256<int>` 就是 8 lane，且 int 的比较/加法比 double 便宜。
+
+- 守卫：`height > int.MaxValue / 131070` 时回落 double；`Rgba32F` 仍走 double（`operators.md` 的 D1 契约）；
+  插入路径（`blocked: true`）也用 double——它读的掩码不在整数路径里建模。
+- 等价性：`ForceDoubleDp` 反向开关 + `SeamCarvingTierTests` 的 A/B（Vertical/Horizontal × 1/9/4 缝、平图、
+  逐行斜移 1 列的路径、Rgba16），逐字节相等；AOT 哈希 `5F0F06D0755265C8` 未变。
+- 踩到的坑：`ShiftLuma` 只搬了 float 缓存，整数缓存没搬——第二条缝起就用错位的 luma。**A/B 测试在第一条
+  缝上仍会通过**（只有一条缝时不需要 shift），是「16 位 + 5 缝」这个组合把它抓出来的。
 
 **Rgba16 点算子补上 16 位表（同日）**：矩阵第一次运行就指出，grayscale / sepia / invert 在三种尺寸上都是
 0.63–0.67×——`PointLut` 只对 `Rgba8` 生效，16 位退回 float 行路径。补一张 4 × 65536 的 `ushort` 表（512 KiB），
