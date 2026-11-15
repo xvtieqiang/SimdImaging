@@ -209,7 +209,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 | **指纹随提交变化（已修，2026-11-15）** | 发现 `AssemblyInformationalVersion` 里嵌了 commit SHA（`0.1.0-alpha+fb503174…`），于是**任何提交之后重新构建都会换指纹**，基线随每次提交失效——这与「同一份源码」的前提冲突，是门禁长期不可用的真实原因，不是偶发。处置：`Directory.Build.props` 加 `IncludeSourceRevisionInInformationalVersion=false`，指纹从此只随源码变；`gitSha` 仍记在基线 JSON 里，可追溯性不丢 |
 | 自检 | `--self-test` 把阈值压到 0 并要求**非零退出**：实测 `comparable-baselines=1 enforced=29`、exit=1。正常模式 exit=0、`enforced=23`，连续两次校验最差 **+0.4% / +0.1%** |
 | 负载验证（整套设计成立与否的判据） | 人为起 4 个忙循环抢占 4/16 核：`alu` 探针报 **x1.59**，门禁按 x1.59 校正，**当时设闸的 24 条场景最差 −1.2%、全部通过**；同一负载下未校正的原始读数均值 **+40%**（该次实验用的是重录前的 binary，机制与阈值无关） |
-| 可比性 | `machine`（`OS|arch|核数`）+ `sourceSha`（`git rev-parse HEAD:src`）的树哈希，`src/` 有未提交改动时追加 `-dirty`）+ `protocol`（含 `slow=` 与 `norm=max(mem,alu)`）全同才算可比；`repeats` 只在读取基线时决定本次跑几次，**不参与比较**（脚本头注释旧称「含 repeat count」，以实现为准）。任一不同就跳过并打印原因——跨机器的秒表读数不是门禁 |
+| 可比性 | `machine`（`OS|arch|核数`）+ `protocol`（含 `slow=` 与 `norm=max(mem,alu)`）全同才算可比；`sourceSha` **只做提示**（不同源码树打印一行 warn 后照常判定）——代码变了正是要跑门禁的理由；`repeats` 只在读取基线时决定本次跑几次，**不参与比较**（脚本头注释旧称「含 repeat count」，以实现为准）。任一不同就跳过并打印原因——跨机器的秒表读数不是门禁 |
 | 已知局限 | 校正只消掉「跟探针同向退化」的机器状态。若退化只影响某类访存而两个探针都不动，仍会误报——失败行里 raw 与 normalised 的差值就是识别它的线索。探针不调用本库，所以「代码慢到把探针一起拖慢」不会发生 |
 | 已知近似 | `machine` 不含 CPU 型号，两台同 OS/同核数的机器会撞 id；`sourceSha` 因此成为第二道闸：它只随 `src/` 变，所以文档/测试改动不会误伤基线；但**改了 `src/` 就必须重录**，否则静默跳过——这是设计而非疏漏 |
 | 第四档（AVX-512） | **代码已落地（2026-11-15），性能未出数**。落点是 `PlanarConvolve` 的三个循环（水平/垂直两遍 + 稀疏 PSF），gaussian / box / RL 反卷积等经由它受益；`Vector512.IsHardwareAccelerated` 为假时不进该分支，测试用 `ForceVector512` 钩子在**软件实现**上跑通并与标量/256 逐字节比对（3 例）。**能力边界写清楚**：这只证明「512 位算法与另三档同字节」，不证明「512 位硬件上更快」——本机 `avx512=False`，吞吐仍是空白。其余内核（NLM、ICC CLUT、Median3x3）未铺 512：NLM 的 SSD 已有 AVX2，ICC CLUT 的 3D gather 在消费级 Zen4 上收益不明，需先有硬件再测 |

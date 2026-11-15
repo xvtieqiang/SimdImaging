@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Versioned performance-baseline check (opt-in from gates.sh --perf).
 #
-# A run is comparable only with itself: same machine id, same binary hash, same protocol, same repeat
-# count. When no stored baseline matches, this script says so and passes — a cross-machine comparison of
-# stopwatch readings is noise, not a gate.
+# A run is comparable only with itself: same machine id and same protocol. When no stored baseline matches,
+# this script says so and passes — a cross-machine comparison of stopwatch readings is noise, not a gate.
+# A different source tree is warned about and compared anyway: the code changing is the reason to run a
+# performance gate, not a reason to skip it.
 #
 # Absolute milliseconds are not judged, the machine-corrected reading is: each scenario is divided by how
 # much slower the calibration probes say the machine is than when the baseline was taken. The machine
@@ -123,8 +124,12 @@ for path in sorted(glob.glob("benchmarks/baselines/*.json")):
         print(f"skip  {os.path.basename(path)}: machine differs (not comparable)")
         continue
     if doc.get("sourceSha") != run.get("sourceSha"):
-        print(f"skip  {os.path.basename(path)}: source differs (not comparable)")
-        continue
+        # A note, not a veto. Gating on the source tree meant every edit switched the gate off until a
+        # ten-minute re-record, which is how a gate stops being run at all. The machine and the protocol are
+        # what make a reading meaningless when they differ; a different tree only means the numbers may have
+        # moved because the code did — which is the thing we are trying to measure.
+        print(f"warn  {os.path.basename(path)}: recorded from a different source tree "
+              f"({str(doc.get('sourceSha'))[:12]} vs {str(run.get('sourceSha'))[:12]}); compared anyway")
     if doc["protocol"] != run["protocol"]:
         print(f"skip  {os.path.basename(path)}: protocol differs (not comparable)")
         continue

@@ -60,8 +60,9 @@ bash benchmarks/simd-tiers.sh [--aot]             # SIMD tier matrix: full suite
 `--perf` judges only runs whose `machine`, `sourceSha` (the tree hash of `src/`) and `protocol` all match a
 stored baseline. It does not compare raw milliseconds: each scenario is divided by how much slower the two
 calibration probes say the machine is than when the baseline was taken (`max` of the memory and ALU ratios).
-A different source tree, or a dirty `src/`, prints "not comparable" and passes — the design, not a pass that
-proved anything. Re-record whenever `src/` changes.
+A different source tree only prints a warning and is compared anyway: the code changing is why a
+performance gate exists, not a reason to skip it. Only a different machine or protocol makes a reading
+meaningless.
 `tests/Fixtures/` holds the CC0 corpus manifest (URL + measured SHA-256, cache never committed),
 the independent reference vectors and the deterministic synthetic offline substitute.
 

@@ -76,8 +76,9 @@ movement 判定。
 
 `sourceSha` 是 `src/` 的 git 树哈希（`git rev-parse HEAD:src`），`src/` 有未提交改动时追加 `-dirty`。它只随源码变：
 文档或测试改动不会误伤基线，改了 `src/` 就必然失配。
-`check-baseline.sh` 判「source differs」→ `comparable-baselines=0` → 打印一行「no baseline matches」后 PASS。
-**这是设计，不是漏洞**：拿不同源码的 stopwatch 读数比较是噪声、不是门禁。
+源码不同**不再跳过**，只打印一行 `warn ... recorded from a different source tree`，然后照常判定。理由很直接：
+**代码变了正是要跑性能门禁的理由，不是跳过它的理由**。早先把它做成不可比，结果是每次改 `src/` 门禁就空转到重录为止，
+一个每次改代码都要重录十分钟的检查最后没人跑。真正让一个读数失去意义的只有两样：换了机器、换了协议（`slow=` / `norm=`）。
 
 > **为什么不是 DLL 哈希（2026-11-15 实测）**：原先锁的是 `Processing.dll` + `Abstractions.dll` 的 SHA-256。实测发现
 > **空提交也会改变这两个 dll 的字节**（`0.1.0-alpha+<sha>` 曾嵌在 `AssemblyInformationalVersion` 里；即便关掉它，
