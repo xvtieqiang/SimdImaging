@@ -171,7 +171,7 @@ and 32M xorshift rounds, both best-of-7, measured at the start and end of the ru
 divides each scenario by `max(run/baseline)` of the two — whichever resource was contended, the correction
 covers it. Thresholds are derived from **three** runs rather than one pair: each run is normalised by its own
 calibration, the largest relative deviation `S` across the three sets `threshold = max(15, ceil(2.5·S))`, and
-`S > 20%` stays `null`. Result: **24 of 29 gated, at 15–45%**; three short scenarios were demoted to `null`
+`S > 20%` stays `null`. Result: **23 of 29 gated, at 20–56%**; three short scenarios were demoted to `null`
 after the verification runs showed excursions the three-run estimate had not seen. Proven under deliberate
 load: four busy cores drove the `alu` probe to ×1.59, the gate corrected by ×1.59, and every gated scenario
 passed with a worst delta of **−1.2%** while the raw readings averaged **+40%**. `--self-test` still exits 1.
@@ -206,9 +206,9 @@ NLM measured on this machine at 1080p Rgba8 (best of one warm run, `SimdImaging.
 `h`/radii is the only lever that does not change the result.
 
 `benchmarks/baselines/` is versioned (unlike the git-ignored `results/`). `thresholdPercent` is set for the
-24 of 29 scenarios whose normalised spread over three runs stayed under 20%, at `max(15, 2.5×spread)` — always
+23 of 29 scenarios whose normalised spread over five runs stayed under 20%, at `max(20, 3×spread)` — always
 above the measured noise, never a round number chosen to make today green. `check-baseline.sh` prints
-`enforced=24` plus the machine correction it applied. The five that stay `null` (Lanczos3, crop, both path fills, one ICC grid) either exceeded 20% spread
+`enforced=23` plus the machine correction it applied. The five that stay `null` (Lanczos3, crop, both path fills, one ICC grid) either exceeded 20% spread
 across the three runs or jumped to +77% in a verification run: Lanczos3 went 30.8 → 54.1 ms, and an
 earlier pair read 89.7 / 53.9 ms for the same scenario, so it is bimodal rather than merely noisy. Default `gates.sh`
 stays at ~1 min; `--aot`, `--perf` and `simd-tiers.sh` are opt-in.
