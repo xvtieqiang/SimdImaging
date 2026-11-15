@@ -23,7 +23,7 @@ for i in $(seq 1 "$runs"); do
 done
 
 results="benchmarks/SimdImaging.Comparison/results"
-suffix=$([ "$mode" = "perf16" ] && echo "perf16" || echo "perf")
+suffix=$([ "$mode" = "perf" ] && echo "perf" || echo "$mode")
 
 python - "$results" "$tag" "$suffix" "$mode@$size" <<'PY'
 import glob, re, statistics, sys
@@ -32,16 +32,17 @@ results, tag, suffix, label = sys.argv[1:5]
 files = sorted(glob.glob(f"{results}/*.{tag}.*.{suffix}.md"))
 runs = []
 for path in files:
-    rows, header = {}, None
+    rows, header, ratio_col = {}, None, None
     for line in open(path, encoding="utf-8"):
         if not line.startswith("|"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) >= 4 and "加速比" in cells[-4]:
+        if any("加速比" in c for c in cells):
             header = cells
+            ratio_col = next(i for i, c in enumerate(cells) if "加速比" in c)
             continue
         if header and len(cells) == len(header):
-            m = re.match(r"^([\d.,]+)×$", cells[len(header) - 4])
+            m = re.match(r"^([\d.,]+)×$", cells[ratio_col])
             if m:
                 rows[cells[0]] = float(m.group(1).replace(",", ""))
     if rows:
