@@ -21,7 +21,7 @@
 | 多帧 / 动画 | 已实现：`Load` 见 `FrameCount > 1` 走会话逐帧解码（`LoadFrames`），保留每帧 `Duration`；保存仍只写单帧，对多帧抛 `NotSupportedException`（见「实现边界」） |
 | 处理算子 | 已实现 119 个（全量）；实现边界见下方「实现边界」 |
 | SIMD 内核 | Rgba8 行读写、resize/blur 两遍卷积已向量化；点算子走「字节 LUT + 值主序矩阵记录 + 寄存器内钳制打包」，与标量孪生逐位一致（有端到端对比测试）。全部逐位一致，有测试兜底 |
-| `ProcessingPlan` | 已实现：同尺寸步骤按行带执行，`PlanSteps` 把现有算子适配成步骤；`Mutate` 未提供（算子返回新图，原地绘制归 DrawOps） |
+| `ProcessingPlan` | 已实现：同尺寸步骤按行带执行。**公共面只有 `Add(ImageOp)`**——halo 由 `ImageOps` 工厂从算子参数推出，调用方写不出来；`PlanSteps`（手工 halo 的适配器）已转 `internal`，字符串版 `Add` 同样内部化。`Mutate` 未提供（算子返回新图，原地绘制归 DrawOps） |
 | `SimdImaging.Drawing` 包 | 未创建，P1 起 |
 | `NativePixelPool` / `NullPixelPool` | 只有 `ArrayPixelPool` |
 | 公开 API 门禁 | 不接 RS0016 分析器，改用 `docs/public-api.txt` 快照：`PublicApiTests` 反射出全部公开签名（含可空标注）逐行比对，改动必须显式重新生成并 review diff |

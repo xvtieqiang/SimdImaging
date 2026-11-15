@@ -687,6 +687,26 @@
   SimdImaging.Processing.HistogramOps.MinMax(SimdImaging.Abstractions.PixelView source) -> System.ValueTuple<SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange>
   SimdImaging.Processing.HistogramOps.Statistics(SimdImaging.Abstractions.PixelView source) -> System.ValueTuple<SimdImaging.Processing.ChannelStatistics, SimdImaging.Processing.ChannelStatistics, SimdImaging.Processing.ChannelStatistics, SimdImaging.Processing.ChannelStatistics>
   SimdImaging.Processing.IccTransformOps.Transform(SimdImaging.Abstractions.PixelView source, System.ReadOnlySpan<System.Byte> sourceProfile, System.ReadOnlySpan<System.Byte> destinationProfile, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
+  SimdImaging.Processing.ImageOp.Category : SimdImaging.Abstractions.OpCategory { get; }
+  SimdImaging.Processing.ImageOp.HaloX : System.Int32 { get; }
+  SimdImaging.Processing.ImageOp.HaloY : System.Int32 { get; }
+  SimdImaging.Processing.ImageOp.Name : System.String { get; }
+  SimdImaging.Processing.ImageOps.BoxBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Brightness(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Contrast(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Emboss() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Equalize() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Gamma(System.Single gamma) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.GaussianBlur(System.Single sigma) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Grayscale() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Invert() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Pixelate(System.Int32 blockSize) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Posterize(System.Int32 levels) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Saturation(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Sepia(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Sharpen(System.Single amount, System.Single sigma) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.ImageOps.Sobel() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.Internal.ScratchStatistics.#ctor(System.Int32 Buffers, System.Int64 RetainedBytes, System.Int64 Hits, System.Int64 Misses, System.Int64 Allocations, System.Int64 Evictions, System.Int64 RetainedBytesLimit, System.Int64 BufferBytesLimit)
   SimdImaging.Processing.Internal.ScratchStatistics.Allocations : System.Int64 { get; set; }
   SimdImaging.Processing.Internal.ScratchStatistics.BufferBytesLimit : System.Int64 { get; set; }
@@ -833,9 +853,6 @@
   SimdImaging.Processing.PlanStep.ToString() -> System.String
   SimdImaging.Processing.PlanStep.op_Equality(SimdImaging.Processing.PlanStep left, SimdImaging.Processing.PlanStep right) -> System.Boolean
   SimdImaging.Processing.PlanStep.op_Inequality(SimdImaging.Processing.PlanStep left, SimdImaging.Processing.PlanStep right) -> System.Boolean
-  SimdImaging.Processing.PlanSteps.Global(System.Func<SimdImaging.Abstractions.PixelView, SimdImaging.Abstractions.WorkingBuffer> operator) -> SimdImaging.Processing.OpKernel
-  SimdImaging.Processing.PlanSteps.Neighborhood(System.Func<SimdImaging.Abstractions.PixelView, SimdImaging.Abstractions.WorkingBuffer> operator, System.Int32 haloX, System.Int32 haloY) -> SimdImaging.Processing.OpKernel
-  SimdImaging.Processing.PlanSteps.Point(System.Func<SimdImaging.Abstractions.PixelView, SimdImaging.Abstractions.WorkingBuffer> operator) -> SimdImaging.Processing.OpKernel
   SimdImaging.Processing.PointOps.AlphaThreshold(SimdImaging.Abstractions.PixelView source, System.Single threshold, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.PointOps.BlackWhite(SimdImaging.Abstractions.PixelView source, System.Single threshold, System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.PointOps.Brightness(SimdImaging.Abstractions.PixelView source, System.Single amount, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
@@ -873,8 +890,7 @@
   SimdImaging.Processing.PorterDuff.SourceOver = 3
   SimdImaging.Processing.PorterDuff.Xor = 11
   SimdImaging.Processing.ProcessingPlan.#ctor()
-  SimdImaging.Processing.ProcessingPlan.Add(System.String name, SimdImaging.Abstractions.OpCategory category, SimdImaging.Processing.OpKernel kernel, System.Int32 haloX, System.Int32 haloY) -> SimdImaging.Processing.ProcessingPlan
-  SimdImaging.Processing.ProcessingPlan.Add(System.String name, SimdImaging.Abstractions.OpCategory category, SimdImaging.Processing.OpKernel kernel, System.Int32 haloX, System.Int32 haloY, System.Func<System.Int32, System.Int32, SimdImaging.Abstractions.WorkingFormat, System.Int64>? scratch) -> SimdImaging.Processing.ProcessingPlan
+  SimdImaging.Processing.ProcessingPlan.Add(SimdImaging.Processing.ImageOp op) -> SimdImaging.Processing.ProcessingPlan
   SimdImaging.Processing.ProcessingPlan.AddPointLut(System.String name, System.ReadOnlySpan<System.Byte> rgbaTable) -> SimdImaging.Processing.ProcessingPlan
   SimdImaging.Processing.ProcessingPlan.BandRows : System.Int32 { get; set; }
   SimdImaging.Processing.ProcessingPlan.DefaultBandRows : System.Int32
@@ -975,6 +991,8 @@ class SimdImaging.Processing.GuidedFilterOps
 class SimdImaging.Processing.HdrOps
 class SimdImaging.Processing.HistogramOps
 class SimdImaging.Processing.IccTransformOps
+class SimdImaging.Processing.ImageOp
+class SimdImaging.Processing.ImageOps
 class SimdImaging.Processing.LocalLaplacianOps
 class SimdImaging.Processing.MemoryBudget
 class SimdImaging.Processing.MemoryBudgetSnapshot
@@ -988,7 +1006,6 @@ class SimdImaging.Processing.PathOps
 class SimdImaging.Processing.PixelPath
 class SimdImaging.Processing.PixelPathBuilder
 class SimdImaging.Processing.PlanReport
-class SimdImaging.Processing.PlanSteps
 class SimdImaging.Processing.PointOps
 class SimdImaging.Processing.ProcessingPlan
 class SimdImaging.Processing.RichardsonLucyOps

@@ -12,7 +12,7 @@ namespace SimdImaging.Processing;
 /// the image the extra rows absorb the operator's edge handling and are discarded.
 /// </para>
 /// </summary>
-public static class PlanSteps
+internal static class PlanSteps
 {
     /// <summary>Adapts a point operator — one whose output pixel depends only on the same input pixel.</summary>
     /// <param name="operator">Runs the operator over a view and returns a new buffer the adapter disposes.</param>

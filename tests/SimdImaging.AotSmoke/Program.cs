@@ -175,10 +175,11 @@ using (var ewaRotate = image.RotateWithOptions(17f, Resampler.Bicubic,
 // M10 fusion: a banded chain through ProcessingPlan must produce the same bytes under ILC as under
 // the JIT. The equality to the step-by-step executor is covered by FusedExecutorEquivalenceTests;
 // this entry is what proves the fused window recursion survives AOT.
+// Built the way a caller builds one: ImageOps carries each operator's support, and a plan takes nothing else.
 using (var planned = image.Apply(new ProcessingPlan { BandRows = 8 }
-    .Add("brightness", OpCategory.Point, PlanSteps.Point(v => PointOps.Brightness(v, 0.05f)))
-    .Add("blur", OpCategory.Neighborhood, PlanSteps.Neighborhood(v => FilterOps.GaussianBlur(v, 1f), 3, 3), 3, 3)
-    .Add("invert", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v)))))
+    .Add(ImageOps.Brightness(0.05f))
+    .Add(ImageOps.GaussianBlur(1f))
+    .Add(ImageOps.Invert())))
     Console.WriteLine($"plan.fused sha={Hash(planned.WritablePixels)}");
 
 // M11 photo algorithms: non-local means (integer distances plus Math.Exp weights) and the local

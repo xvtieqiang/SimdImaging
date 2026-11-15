@@ -112,13 +112,25 @@ public sealed class ProcessingPlan
     /// <exception cref="ArgumentException"><paramref name="name"/> is empty or <paramref name="kernel"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A halo is negative.</exception>
     /// <exception cref="NotSupportedException">The category changes the image size.</exception>
-    public ProcessingPlan Add(string name, OpCategory category, OpKernel kernel, int haloX = 0, int haloY = 0) =>
+    // Internal on purpose: a caller who can pass a halo can pass the wrong one, and the wrong one does not
+    // throw - it returns a wrong pixel at a band boundary. Plans are built from ImageOps, which owns the number.
+    internal ProcessingPlan Add(string name, OpCategory category, OpKernel kernel, int haloX = 0, int haloY = 0) =>
         Add(name, category, kernel, haloX, haloY, scratch: null);
+
+    /// <summary>
+    /// Appends an operator that carries its own support radius. This is the only public way to add a step: a
+    /// caller cannot state a halo, so a caller cannot state one wrongly.
+    /// </summary>
+    public ProcessingPlan Add(ImageOp op)
+    {
+        ArgumentNullException.ThrowIfNull(op);
+        return Add(op.Name, op.Category, op.Kernel, op.HaloX, op.HaloY);
+    }
 
     /// <summary>Appends a step that also declares its own scratch.</summary>
     /// <param name="scratch">What the step allocates per worker for a band of the given height; null when it
     /// allocates nothing worth reporting. <see cref="MemoryEstimator"/> turns these into the per-worker term.</param>
-    public ProcessingPlan Add(string name, OpCategory category, OpKernel kernel, int haloX, int haloY,
+    internal ProcessingPlan Add(string name, OpCategory category, OpKernel kernel, int haloX, int haloY,
         Func<int, int, WorkingFormat, long>? scratch)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);

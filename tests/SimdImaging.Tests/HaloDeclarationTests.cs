@@ -70,6 +70,59 @@ public class HaloDeclarationTests
         }
     }
 
+    /// <summary>
+    /// The same question asked through the public API instead of hand-declared halos: every factory in
+    /// <see cref="ImageOps"/> builds a step that knows its own support, so a banded plan must equal the direct
+    /// call for all of them — including the two that tripped the hand-written version.
+    /// </summary>
+    [Fact]
+    public void EveryImageOpsFactory_BandsToTheSameBytesAsADirectCall()
+    {
+        using var source = Pattern();
+
+        var ops = new (string Name, ImageOp Op, Func<PixelView, WorkingBuffer> Direct)[]
+        {
+            ("brightness", ImageOps.Brightness(0.05f), v => PointOps.Brightness(v, 0.05f)),
+            ("contrast", ImageOps.Contrast(1.1f), v => PointOps.Contrast(v, 1.1f)),
+            ("gamma", ImageOps.Gamma(1.4f), v => PointOps.Gamma(v, 1.4f)),
+            ("invert", ImageOps.Invert(), v => PointOps.Invert(v)),
+            ("grayscale", ImageOps.Grayscale(), v => PointOps.Grayscale(v)),
+            ("sepia", ImageOps.Sepia(1f), v => PointOps.Sepia(v, 1f)),
+            ("saturation", ImageOps.Saturation(1.3f), v => PointOps.Saturation(v, 1.3f)),
+            ("posterize", ImageOps.Posterize(5), v => PointOps.Posterize(v, 5)),
+            ("levels", ImageOps.Levels(0f, 1f, 1.2f), v => PointOps.Levels(v, 0f, 1f, 1.2f)),
+            ("blur", ImageOps.GaussianBlur(1.5f), v => FilterOps.GaussianBlur(v, 1.5f)),
+            ("box", ImageOps.BoxBlur(2), v => FilterOps.BoxBlur(v, 2)),
+            ("sharpen", ImageOps.Sharpen(), v => FilterOps.Sharpen(v)),
+            ("emboss", ImageOps.Emboss(), v => FilterOps.Emboss(v)),
+            ("sobel", ImageOps.Sobel(), v => FilterOps.Sobel(v)),
+            ("pixelate", ImageOps.Pixelate(5), v => FilterOps.Pixelate(v, 5)),
+            ("equalize", ImageOps.Equalize(), v => HistogramOps.Equalize(v)),
+        };
+
+        var failures = new List<string>();
+        foreach (var (name, op, direct) in ops)
+        {
+            var plan = new ProcessingPlan { BandRows = BandRows }.Add(op);
+            byte[] banded;
+            try
+            {
+                using var result = source.Apply(plan);
+                banded = result.WritablePixels.ToArray();
+            }
+            catch (Exception e)
+            {
+                failures.Add($"{name}: threw {e.GetType().Name}");
+                continue;
+            }
+
+            if (!banded.AsSpan().SequenceEqual(Stepped(source, direct)))
+                failures.Add($"{name}: banded differs from the direct call");
+        }
+
+        failures.ShouldBeEmpty(string.Join("\n", failures));
+    }
+
     /// <summary>The declared values: what the library's own documentation says each operator needs.</summary>
     private static (Func<PixelView, WorkingBuffer> Op, int Halo) Build(string id) => id switch
     {

@@ -87,7 +87,7 @@ public static class SeamCarving
     /// <para><b>Why the energy is recomputed rather than updated.</b> Not because the affected set is unbounded —
     /// that was the original argument here and it is wrong. Keep the energy in original coordinates and only the
     /// cells straddling a cut change, one or two per row. The reason is the measurement: with
-    /// <see cref="Energy"/> short-circuited in both the scalar body and the vector one, a 1080p carve of 50 seams
+    /// <c>Energy</c> short-circuited in both the scalar body and the vector one, a 1080p carve of 50 seams
     /// drops from 400.5 to 331.4 ms in the seam search, so the energy is <b>17% of that phase and 14% of the
     /// carve</b>. Even a perfect cache cannot return more, and a real one pays a logical-to-original gather per
     /// cell. What is left is the programme recurrence itself, which is O(W·H) by nature and already four lanes
