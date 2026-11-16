@@ -47,6 +47,26 @@ internal static class PerfPipeline
                 i => i.Clone(x => x.Invert().Contrast(0.9f).Sepia().Contrast(1.1f)
                     .Grayscale(GrayscaleMode.Bt601))),
 
+            // The same five per-channel steps, once as separate point steps and once collapsed into one table.
+            // Point ops are the only chain shape where this library used to lose to the oracle.
+            ("point-5-steps", "Invert → Contrast .9 → Brightness .02 → Contrast 1.1 → Invert (five steps)",
+                new ProcessingPlan()
+                    .Add("invert", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v)))
+                    .Add("contrast1", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 0.9f)))
+                    .Add("brightness", OpCategory.Point, PlanSteps.Point(v => PointOps.Brightness(v, 0.02f)))
+                    .Add("contrast2", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 1.1f)))
+                    .Add("invert2", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v))),
+                i => i.Clone(x => x.Invert().Contrast(0.9f).Brightness(0.02f).Contrast(1.1f).Invert())),
+
+            ("point-5-collapsed", "Invert → Contrast .9 → Brightness .02 → Contrast 1.1 → Invert (one table)",
+                new ProcessingPlan().Add(PlanOps.PointChain(
+                    PointOps.InvertRow(),
+                    PointOps.ContrastRow(0.9f),
+                    PointOps.BrightnessRow(0.02f),
+                    PointOps.ContrastRow(1.1f),
+                    PointOps.InvertRow())),
+                i => i.Clone(x => x.Invert().Contrast(0.9f).Brightness(0.02f).Contrast(1.1f).Invert())),
+
             ("blur-point", "Gaussian σ3 → Sepia → Grayscale",
                 new ProcessingPlan()
                     .Add("blur", OpCategory.Neighborhood,

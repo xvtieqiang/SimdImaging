@@ -1,17 +1,46 @@
 using System.Diagnostics;
 using SimdImaging;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing;
 
-// The smallest workload that touches the library: decode nothing, build one image, run one operator, print a byte.
-// Process wall time is measured outside; this only proves the work happened and reports the in-process elapsed time
-// so the JIT and AOT runs can be compared on the same number.
-var watch = Stopwatch.StartNew();
-using var image = Image.Create(64, 64, WorkingFormat.Rgba8);
-var span = image.WritablePixels;
-for (var i = 0; i < span.Length; i++)
-    span[i] = (byte)(i * 7);
+// Table building is 1024 transform invocations: cheap next to a frame, not cheap next to a thumbnail. Reusing a
+// pre-built table is the difference between paying that per call and paying it once.
+var chain = new[]
+{
+    PointOps.ContrastRow(1.2f),
+    PointOps.InvertRow(),
+    PointOps.BrightnessRow(0.02f),
+    PointOps.ContrastRow(1.1f),
+    PointOps.InvertRow(),
+};
 
-using var blurred = image.GaussianBlur(1f);
-watch.Stop();
+var table = PointChainTable.Create(chain);
 
-Console.WriteLine($"op={blurred.WritablePixels[123]} elapsed={watch.Elapsed.TotalMilliseconds:F1}ms");
+foreach (var size in new[] { 16, 256, 1920 })
+{
+    using var image = Image.Create(size, size, WorkingFormat.Rgba8);
+
+    var perCall = Best(image, () => image.PointChain(chain));
+    var reused = Best(image, () => image.PointChain(table));
+
+    Console.WriteLine($"{size,5}x{size,-5} per-call {perCall:F3} ms   reused {reused:F3} ms   x{perCall / reused:F2}");
+}
+
+static double Best(Image image, Func<Image> run)
+{
+    for (var i = 0; i < 3; i++)
+    {
+        using var warm = run();
+    }
+
+    var best = double.MaxValue;
+    for (var i = 0; i < 7; i++)
+    {
+        var watch = Stopwatch.StartNew();
+        using var result = run();
+        watch.Stop();
+        best = Math.Min(best, watch.Elapsed.TotalMilliseconds);
+    }
+
+    return best;
+}

@@ -104,6 +104,18 @@ bash tests/SimdImaging.AotSmoke/run.sh            # needs the C++ workload (see 
   4–7× to this in one day (NLM, then the general convolution), and neither threw: the only symptom was a number
   that looked like a slow algorithm. When a parallel loop shows no speed-up, check this before profiling.
 
+## Reusing an operator's machinery
+
+- **Read the whole function, not its signature, before building on it.** Four features were written, tested and
+  thrown away in one night because the semantics had been assumed from the name: `Median3x3` medians alpha as well
+  as colour; `RowParallel.For` takes the width first; a crop offset was one row out; and `PointLut.ApplyRgba8`
+  builds its table from `(v, v, v, v)`, which is only valid for per-channel transforms — feed it a channel-mixing
+  one and it silently returns the diagonal.
+- **The equivalence test comes first.** For anything that must match an existing path byte for byte, write the
+  reference (a naive implementation, or the old path itself) and start red. The median passed on the first attempt
+  once a naive sort was the specification; the three attempts that were written implementation-first all had to be
+  withdrawn.
+
 ## Output contracts
 
 - Integer pipelines are byte-exact across SIMD tiers and platforms. Float pipelines freeze the operation

@@ -34,6 +34,18 @@ internal static class ChainAb
             using var buffer = plan.ExecuteWithOptions(view, new ExecuteOptions { AllowFusion = false });
         });
 
+        var collapsed = Time(() =>
+        {
+            using var buffer = FilterOps.PointChain(view,
+            [
+                PointOps.InvertRow(),
+                PointOps.ContrastRow(0.9f),
+                PointOps.BrightnessRow(0.02f),
+                PointOps.ContrastRow(1.1f),
+                PointOps.InvertRow(),
+            ]);
+        });
+
         var direct = Time(() =>
         {
             using var result = image.Pipe().Invert().Contrast(0.9f).Sepia().Contrast(1.1f).Grayscale().ToImage();
@@ -42,6 +54,7 @@ internal static class ChainAb
         report.Table(["路径", "中位 ms", "相对直调"], [
             ["融合计划", fused.ToString("F1"), $"{fused / direct:F2}×"],
             ["不融合计划", stepped.ToString("F1"), $"{stepped / direct:F2}×"],
+            ["塌缩表（5 步 → 1 遍）", collapsed.ToString("F1"), $"{collapsed / direct:F2}×"],
             ["直调（Clone + 五个门面）", direct.ToString("F1"), "1.00×"],
         ]);
 
