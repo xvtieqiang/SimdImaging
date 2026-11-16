@@ -129,6 +129,11 @@ public sealed class ImagePipeline
         BorderMode border = BorderMode.Clamp, float bias = 0f, float constantValue = 0f) =>
         Step(PlanOps.Convolve(kernel, radius, border, bias, constantValue));
 
+    /// <summary>Several per-channel point transforms collapsed into one table and one pass (8-bit).</summary>
+    /// <param name="transforms">The transforms, applied in order.</param>
+    public ImagePipeline PointChain(params PointOps.RowTransform[] transforms) =>
+        Step(PlanOps.PointChain(transforms));
+
     /// <summary>Median with radius <paramref name="radius"/> (1 is 3×3, up to 8).</summary>
     /// <param name="radius">Window radius.</param>
     public ImagePipeline Median(int radius) => Step(PlanOps.Median(radius));

@@ -15,6 +15,19 @@ public sealed partial class Image
         ReplaceBuffer(PointOps.Brightness(this[0].Pixels.View, amount, pool));
 
     /// <summary>Scales contrast around mid-grey; 1 is identity.</summary>
+    /// <summary>
+    /// Several per-channel point transforms collapsed into one table and applied in a single pass (8-bit only).
+    /// </summary>
+    /// <param name="transforms">The transforms, applied in order.</param>
+    public Image PointChain(params PointOps.RowTransform[] transforms) =>
+        ReplaceBuffer(FilterOps.PointChain(this[0].Pixels.View, transforms));
+
+    /// <summary>Applies a pre-built chain table; the same table can be reused across images and threads.</summary>
+    /// <param name="table">The table.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image PointChain(PointChainTable table, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.Apply(this[0].Pixels.View, table, pool));
+
     public Image Contrast(float amount, IPixelPool? pool = null) =>
         ReplaceBuffer(PointOps.Contrast(this[0].Pixels.View, amount, pool));
 

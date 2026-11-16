@@ -191,6 +191,9 @@ var Box5 = new float[25];
 for (var i = 0; i < Box5.Length; i++)
     Box5[i] = 1f / 25f;
 
+using (var chain = image.PointChain(PointOps.ContrastRow(1.2f), PointOps.InvertRow()))
+    Console.WriteLine($"pointchain sha={Hash(chain.WritablePixels)}");
+
 // The general convolution and the wide median: both are new code paths (a border-mapped kernel and a sliding
 // histogram) and neither is exercised by the 3x3 specialisations above.
 using (var conv = image.Convolve(Box5, 2, BorderMode.Mirror))

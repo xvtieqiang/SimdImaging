@@ -130,7 +130,86 @@ public static class PointOps
         });
     }
 
-    internal delegate void RowTransform(Span<float> row, int width);
+    /// <summary>
+    /// One pass of work over a row of straight colour in 0..1 floats, four samples per pixel.
+    /// </summary>
+    /// <param name="row">The row's samples, RGBA per pixel.</param>
+    /// <param name="width">Pixels in the row.</param>
+    public delegate void RowTransform(Span<float> row, int width);
+
+    /// <summary>The transform behind <see cref="Contrast"/>.</summary>
+    /// <param name="amount">Contrast multiplier about mid-grey.</param>
+    public static RowTransform ContrastRow(float amount)
+    {
+        RequireFinite(amount, nameof(amount));
+        return (row, width) =>
+        {
+            for (var i = 0; i < width * 4; i += 4)
+            {
+                row[i] = (row[i] - 0.5f) * amount + 0.5f;
+                row[i + 1] = (row[i + 1] - 0.5f) * amount + 0.5f;
+                row[i + 2] = (row[i + 2] - 0.5f) * amount + 0.5f;
+            }
+        };
+    }
+
+    /// <summary>The transform behind <see cref="Invert"/>.</summary>
+    public static RowTransform InvertRow() => (row, width) =>
+    {
+        for (var i = 0; i < width * 4; i += 4)
+        {
+            row[i] = 1f - row[i];
+            row[i + 1] = 1f - row[i + 1];
+            row[i + 2] = 1f - row[i + 2];
+        }
+    };
+
+    /// <summary>The transform behind <see cref="Brightness"/>.</summary>
+    /// <param name="amount">Added to the colour channels, in sample units.</param>
+    public static RowTransform BrightnessRow(float amount)
+    {
+        RequireFinite(amount, nameof(amount));
+        return (row, width) =>
+        {
+            for (var i = 0; i < width * 4; i += 4)
+            {
+                row[i] += amount;
+                row[i + 1] += amount;
+                row[i + 2] += amount;
+            }
+        };
+    }
+
+    /// <summary>The transform behind <see cref="Sepia"/>; channel-mixing, so it cannot be collapsed into tables.</summary>
+    /// <param name="amount">Blend towards sepia, 0 to 1.</param>
+    public static RowTransform SepiaRow(float amount = 1f)
+    {
+        RequireFinite(amount, nameof(amount));
+        var a = Math.Clamp(amount, 0f, 1f);
+        var inverse = 1f - a;
+        var m0 = inverse + (0.393f * a);
+        var m1 = 0.769f * a;
+        var m2 = 0.189f * a;
+        var m3 = 0.349f * a;
+        var m4 = inverse + (0.686f * a);
+        var m5 = 0.168f * a;
+        var m6 = 0.272f * a;
+        var m7 = 0.534f * a;
+        var m8 = inverse + (0.131f * a);
+
+        return (row, width) =>
+        {
+            for (var i = 0; i < width * 4; i += 4)
+            {
+                var r = row[i];
+                var g = row[i + 1];
+                var b = row[i + 2];
+                row[i] = (m0 * r) + (m1 * g) + (m2 * b);
+                row[i + 1] = (m3 * r) + (m4 * g) + (m5 * b);
+                row[i + 2] = (m6 * r) + (m7 * g) + (m8 * b);
+            }
+        };
+    }
 
     /// <summary>Test hook: forces the original float row path so the LUT twin can be compared byte for byte.</summary>
     internal static bool ForceScalarPoint;

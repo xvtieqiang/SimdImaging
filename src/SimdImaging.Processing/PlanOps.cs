@@ -145,6 +145,26 @@ public static class PlanOps
             (width, _, rows, _) => (long)rows * width * 16);
     }
 
+    /// <summary>
+    /// Several per-channel point transforms collapsed into one table and one pass.
+    /// </summary>
+    /// <remarks>
+    /// Band-safe and point-category. The transforms must be per-channel; a mixing one is refused when the step runs,
+    /// because a table cannot represent it.
+    /// </remarks>
+    /// <param name="transforms">The transforms, applied in order.</param>
+    /// <exception cref="ArgumentException">No transforms were given.</exception>
+    public static ImageOp PointChain(params PointOps.RowTransform[] transforms)
+    {
+        if (transforms.Length == 0)
+            throw new ArgumentException("A chain needs at least one transform.", nameof(transforms));
+
+        var chain = transforms.ToArray();
+        return new ImageOp("point-chain", OpCategory.Point, 0, 0,
+            PlanSteps.Point(v => FilterOps.PointChain(v, chain)),
+            (_, _, _, _) => 0);
+    }
+
     /// <summary>3x3 erosion; one row and one column.</summary>
     public static ImageOp Erode3x3() => Neighborhood("erode", 1, v => FilterOps.Erode3x3(v));
 

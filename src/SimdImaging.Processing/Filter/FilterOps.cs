@@ -1028,6 +1028,141 @@ public static class FilterOps
     }
 
     /// <summary>
+    /// Collapses several per-channel point transforms into one 256-entry-per-channel table and applies it in a single
+    /// pass over the image.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why tables and not fused arithmetic.</b> Fusing five transforms into one loop was tried first: it removed
+    /// four of five memory round trips and measured 33.1 ms at 1080p against 11.9 ms for the chain run operator by
+    /// operator. The fusion replaced per-pixel <i>lookups</i> with per-pixel <i>arithmetic</i>, and that trade loses.
+    /// Collapsing the tables keeps the lookup and removes the passes: 5 tables and 5 passes become 1 and 1.
+    /// </para>
+    /// <para>
+    /// <b>Why it is exact.</b> The table is built by walking the transforms over each of the 256 code values, applying
+    /// the same <c>ToByte</c> rounding between steps that the individual operators apply when they write. Composed
+    /// this way the table is the sequential result for every possible input byte, not an approximation of it.
+    /// </para>
+    /// <para>
+    /// <b>What it refuses.</b> A transform that mixes channels — sepia, grayscale, hue rotation — has no per-channel
+    /// table: baking it would sample only the grey axis and return the wrong colour for everything else. Chains
+    /// containing one are refused rather than silently degraded, and so are formats other than 8-bit, where the
+    /// per-operator rounding rules differ.
+    /// </para>
+    /// </remarks>
+    /// <param name="source">The pixels.</param>
+    /// <param name="transforms">The transforms, applied in order.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentException"><paramref name="transforms"/> is empty.</exception>
+    /// <exception cref="NotSupportedException">The format is not 8-bit, or a transform mixes channels.</exception>
+    public static WorkingBuffer PointChain(PixelView source, ReadOnlySpan<PointOps.RowTransform> transforms,
+        IPixelPool? pool = null) =>
+        Apply(source, PointChainTable.Create(transforms.ToArray()), pool);
+
+    /// <summary>Applies a pre-built chain table.</summary>
+    /// <param name="source">The pixels; 8-bit.</param>
+    /// <param name="table">The table, which may be reused across images and threads.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="NotSupportedException">The format is not <see cref="WorkingFormat.Rgba8"/>.</exception>
+    public static WorkingBuffer Apply(PixelView source, PointChainTable table, IPixelPool? pool = null)
+    {
+        if (source.Format != WorkingFormat.Rgba8)
+            throw new NotSupportedException("PointChain is 8-bit only; chain the operators individually otherwise.");
+
+        var bytes = table.Bytes;
+        var width = source.Width;
+        var height = source.Height;
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+
+        RowParallel.For(width, height, (start, end) =>
+        {
+            for (var y = start; y < end; y++)
+            {
+                var from = source.Row(y);
+                var to = destination.View.Row(y);
+                for (var i = 0; i < width * 4; i += 4)
+                {
+                    to[i] = bytes[from[i]];
+                    to[i + 1] = bytes[256 + from[i + 1]];
+                    to[i + 2] = bytes[512 + from[i + 2]];
+                    to[i + 3] = bytes[768 + from[i + 3]];
+                }
+            }
+        });
+
+        return destination;
+    }
+
+    /// <summary>
+    /// Whether a transform's output channel depends only on the same input channel. Probed rather than declared: a
+    /// declaration can be wrong, and the failure would be a wrong colour rather than an error.
+    /// </summary>
+    internal static bool IsPerChannel(PointOps.RowTransform transform)
+    {
+        Span<float> first = stackalloc float[4];
+        Span<float> second = stackalloc float[4];
+
+        foreach (var level in (ReadOnlySpan<float>)[0f, 0.5f, 1f])
+        {
+            for (var c = 0; c < 4; c++)
+            {
+                // Two rows that agree on channel c and disagree everywhere else: if the outputs agree on c, the
+                // transform does not read the other channels.
+                first.Clear();
+                second.Clear();
+                first[c] = level;
+                second[c] = level;
+                for (var other = 0; other < 4; other++)
+                {
+                    if (other != c)
+                        second[other] = 1f - level;
+                }
+
+                transform(first, 1);
+                transform(second, 1);
+                if (first[c] != second[c])
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The composed table: channel-major, 256 entries each, built by running the whole chain over every input byte
+    /// with the operators' own rounding between steps.
+    /// </summary>
+    internal static byte[] BuildChainTable(PointOps.RowTransform[] chain)
+    {
+        var table = new byte[4 * 256];
+        Span<float> row = stackalloc float[4];
+
+        for (var c = 0; c < 4; c++)
+        {
+            for (var value = 0; value < 256; value++)
+            {
+                row.Clear();
+                row[c] = value * (1f / 255f);
+
+                for (var i = 0; i < chain.Length; i++)
+                {
+                    chain[i](row, 1);
+
+                    // Multiply by the reciprocal, exactly as Pixels.ReadRowRaw does when it decodes a byte. Dividing
+                    // by 255f instead is one ulp different for some values and the difference reaches the output as a
+                    // whole level.
+                    for (var s = 0; s < 4; s++)
+                        row[s] = Pixels.ToByte(row[s]) * (1f / 255f);
+                }
+
+                table[(c * 256) + value] = Pixels.ToByte(row[c]);
+            }
+        }
+
+        return table;
+    }
+
+    /// <summary>
     /// Median over a square window of odd side <c>2r+1</c>. All four channels are median-filtered, alpha included —
     /// that is what <see cref="Median3x3"/> does, and the two paths are required to agree byte for byte.
     /// </summary>
