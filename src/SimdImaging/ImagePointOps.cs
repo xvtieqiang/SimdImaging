@@ -10,7 +10,7 @@ public sealed partial class Image
     public Image Invert(IPixelPool? pool = null) =>
         ReplaceBuffer(PointOps.Invert(this[0].Pixels.View, pool));
 
-    /// <summary>Adds <paramref name="amount"/> in sample units (0.5 = half the range).</summary>
+    /// <summary>Adds <paramref name="shift"/> in sample units (0.5 = half the range).</summary>
     public Image Brightness(float shift = 0f, IPixelPool? pool = null) =>
         ReplaceBuffer(PointOps.Brightness(this[0].Pixels.View, shift, pool));
 
@@ -29,7 +29,7 @@ public sealed partial class Image
         ReplaceBuffer(FilterOps.Apply(this[0].Pixels.View, table, pool));
 
     /// <summary>Scales contrast about mid-grey.</summary>
-    /// <param name="amount">1 is unchanged, below 1 flattens towards grey, above 1 increases it. 0 collapses the
+    /// <param name="gain">1 is unchanged, below 1 flattens towards grey, above 1 increases it. 0 collapses the
     /// picture to a flat mid-grey; 2 doubles the distance from mid-grey. Typical range 0.5–1.5.</param>
     /// <param name="pool">Where the destination is rented.</param>
     public Image Contrast(float gain = 1f, IPixelPool? pool = null) =>
@@ -38,7 +38,8 @@ public sealed partial class Image
     /// <summary>Scales saturation around luma.</summary>
     /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    /// <remarks>0 is greyscale, 1 is identity, 1.6 is a strong pop, above 2 clips fast.</remarks>
+    /// <remarks>0 is greyscale, 1 is identity, 1.6 is a strong pop, above 2 clips fast. Not range-checked: a
+    /// multiplier is defined at any value, and negative inverts.</remarks>
     public Image Saturation(float gain = 1f, bool bt709 = false, IPixelPool? pool = null) =>
         ReplaceBuffer(PointOps.Saturation(this[0].Pixels.View, gain, bt709, pool));
 
@@ -91,16 +92,16 @@ public sealed partial class Image
     /// <summary>Vibrance: boosts muted colours more than already-saturated ones.</summary>
     /// <remarks>0 is unchanged, 0.5 is a clear lift on skin and sky, 1 is already strong. Unlike
     /// <see cref="Saturation"/> it leaves saturated colours alone, so it rarely clips.</remarks>
-    /// <param name="amount">Strength.</param>
+    /// <param name="lift">Strength.</param>
     /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
     /// <param name="pool">Where the destination is rented.</param>
     public Image Vibrance(float lift = 0f, bool bt709 = false, IPixelPool? pool = null) =>
         ReplaceBuffer(PointOps.Vibrance(this[0].Pixels.View, lift, bt709, pool));
 
     /// <summary>White balance shift.</summary>
-    /// <remarks>0 is neutral. Positive warms (orange), negative cools (blue). ±1 is the practical limit: beyond it
-    /// the opposite channel starts clipping on ordinary photographs. Typical range ±0.35.</remarks>
-    /// <param name="amount">Signed shift, positive warms.</param>
+    /// <remarks>0 is neutral, positive warms (orange), negative cools (blue). <b>Enforced range −1..1</b>: past it the
+    /// opposite channel clips through and the result stops being a white-balance shift. Typical value ±0.35.</remarks>
+    /// <param name="shift">Signed shift in −1..1, positive warms. Out of range throws.</param>
     /// <param name="pool">Where the destination is rented.</param>
     public Image Temperature(float shift = 0f, IPixelPool? pool = null) =>
         ReplaceBuffer(PointOps.Temperature(this[0].Pixels.View, shift, pool));

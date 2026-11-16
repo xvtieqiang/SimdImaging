@@ -185,7 +185,13 @@ public static class PointOps
     public static RowTransform SepiaRow(float amount = 1f)
     {
         RequireFinite(amount, nameof(amount));
-        var a = Math.Clamp(amount, 0f, 1f);
+
+        // Rejected rather than clamped. Truncating 2 to 1 would turn a caller's mistake into a plausible picture,
+        // which is the failure mode the Brightness guard above exists to prevent.
+        if (amount < 0f || amount > 1f)
+            throw new ArgumentOutOfRangeException(nameof(amount), amount, "Sepia blend must be within 0..1.");
+
+        var a = amount;
         var inverse = 1f - a;
         var m0 = inverse + (0.393f * a);
         var m1 = 0.769f * a;
@@ -375,7 +381,13 @@ public static class PointOps
     public static WorkingBuffer Sepia(PixelView source, float amount = 1f, IPixelPool? pool = null)
     {
         RequireFinite(amount, nameof(amount));
-        var a = Math.Clamp(amount, 0f, 1f);
+
+        // Rejected rather than clamped. Truncating 2 to 1 would turn a caller's mistake into a plausible picture,
+        // which is the failure mode the Brightness guard above exists to prevent.
+        if (amount < 0f || amount > 1f)
+            throw new ArgumentOutOfRangeException(nameof(amount), amount, "Sepia blend must be within 0..1.");
+
+        var a = amount;
         var inverse = 1f - a;
 
         Span<float> matrix = stackalloc float[12]
@@ -550,7 +562,13 @@ public static class PointOps
     public static WorkingBuffer Temperature(PixelView source, float amount, IPixelPool? pool = null)
     {
         RequireFinite(amount, nameof(amount));
-        var clamped = Math.Clamp(amount, -1f, 1f);
+
+        // Same rule as sepia: ±1 is where the shift stops meaning anything, so going past it is a mistake worth
+        // reporting rather than a value worth truncating.
+        if (amount < -1f || amount > 1f)
+            throw new ArgumentOutOfRangeException(nameof(amount), amount, "Temperature shift must be within -1..1.");
+
+        var clamped = amount;
         var redGain = 1f + clamped * 0.3f;
         var blueGain = 1f - clamped * 0.3f;
 

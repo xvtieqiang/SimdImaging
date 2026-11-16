@@ -20,12 +20,12 @@ public sealed partial class Image
     public Image Median3x3(IPixelPool? pool = null) =>
         ReplaceBuffer(FilterOps.Median3x3(this[0].Pixels.View, pool));
 
-    /// <summary>Unsharp mask; <paramref name="amount"/> 0 is identity.</summary>
+    /// <summary>Unsharp mask; a <paramref name="gain"/> of 0 is identity.</summary>
     public Image Sharpen(float gain = 0.5f, float sigma = 1f, IPixelPool? pool = null) =>
         ReplaceBuffer(FilterOps.Sharpen(this[0].Pixels.View, gain, sigma, pool));
 
     /// <summary>Gaussian sharpen: negative Gaussian shell around a boosted centre, applied as one kernel.</summary>
-    /// <param name="amount">Edge gain. 0 is a no-op, 0.5 is a normal sharpen, above 1.5 shows halos on text.</param>
+    /// <param name="gain">Edge gain. 0 is a no-op, 0.5 is a normal sharpen, above 1.5 shows halos on text.</param>
     /// <param name="sigma">Radius of the shell; 1.0 suits a full-size photograph, 0.6 suits a downscale.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="sigma"/> is not finite and positive.</exception>
@@ -108,7 +108,7 @@ public sealed partial class Image
 
     /// <summary>Radial darkening toward the corners.</summary>
     /// <param name="radius">Where the falloff starts, as a fraction of the half-diagonal (0..1).</param>
-    /// <param name="strength">Corner darkening, 0..1.</param>
+    /// <param name="darkening">Corner darkening, 0..1.</param>
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">The radius or darkening is outside its range.</exception>
     public Image Vignette(float radius = 0.75f, float darkening = 1f, IPixelPool? pool = null) =>
@@ -137,8 +137,7 @@ public sealed partial class Image
         ReplaceBuffer(ClaheOps.Clahe(this[0].Pixels.View, tilesX, tilesY, clipLimit, pool));
 
     /// <summary>Adds reproducible noise; the same seed always produces the same image.</summary>
-    /// <param name="amount">Amplitude in normalised units, 0..1.</param>
-    /// <param name="amount">Amplitude in normalised units, 0..1; 0.05 is visible grain on a mid-tone, 0.2 is heavy.</param>
+    /// <param name="amplitude">Amplitude in normalised units, 0..1; 0.05 is visible grain on a mid-tone, 0.2 is heavy.</param>
     /// <param name="kind">Uniform or Gaussian.</param>
     /// <param name="seed">Sequence seed: the same seed and the same image always give the same grain.</param>
     /// <param name="pool">Where the destination is rented.</param>

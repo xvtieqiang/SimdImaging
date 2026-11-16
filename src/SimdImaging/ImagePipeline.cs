@@ -75,7 +75,7 @@ public sealed class ImagePipeline
     /// <summary>Mirrors top to bottom. Ends the current band pass.</summary>
     public ImagePipeline FlipVertical() => Geometry(src => src.FlipVertical(_pool));
 
-    /// <summary>Brightness by <paramref name="amount"/>.</summary>
+    /// <summary>Brightness by <paramref name="shift"/>.</summary>
     public ImagePipeline Brightness(float shift = 0f) => Step(PlanOps.Brightness(shift));
 
     /// <summary>Contrast about the mid-point.</summary>
@@ -132,7 +132,7 @@ public sealed class ImagePipeline
         Step(PlanOps.Convolve(kernel, radius, border, bias, constantValue));
 
     /// <summary>Warm or cool shift.</summary>
-    /// <param name="amount">Positive warms, negative cools.</param>
+    /// <param name="shift">Positive warms, negative cools.</param>
     public ImagePipeline Temperature(float shift = 0f) => Step(PlanOps.Temperature(shift));
 
     /// <summary>Tone curve through the given points.</summary>
@@ -140,19 +140,19 @@ public sealed class ImagePipeline
     public ImagePipeline Curves(params CurvePoint[] points) => Step(PlanOps.Curves(points));
 
     /// <summary>Saturation weighted towards already-saturated colours.</summary>
-    /// <param name="amount">0 is greyscale, 1 is identity.</param>
+    /// <param name="lift">0 is unchanged, 0.5 is a clear lift, 1 is already strong. Leaves saturated colours alone.</param>
     /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
     public ImagePipeline Vibrance(float lift = 0f, bool bt709 = false) => Step(PlanOps.Vibrance(lift, bt709));
 
     /// <summary>Seeded grain; whole-image because the generator advances per pixel.</summary>
-    /// <param name="amount">Amplitude in normalised units.</param>
+    /// <param name="amplitude">Amplitude in normalised units.</param>
     /// <param name="kind">Uniform or Gaussian.</param>
     /// <param name="seed">Sequence seed.</param>
     public ImagePipeline Noise(float amplitude = 0.05f, NoiseKind kind = NoiseKind.Gaussian, uint seed = 1) =>
         Step(PlanOps.Noise(amplitude, kind, seed));
 
     /// <summary>Unsharp mask built from a negative Gaussian.</summary>
-    /// <param name="amount">Strength.</param>
+    /// <param name="gain">Strength.</param>
     /// <param name="sigma">Gaussian sigma.</param>
     public ImagePipeline GaussianSharpen(float gain = 0.5f, float sigma = 1f) =>
         Step(PlanOps.GaussianSharpen(gain, sigma));
