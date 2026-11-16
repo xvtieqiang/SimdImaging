@@ -75,6 +75,12 @@ internal static class PeakMemory
         var width = int.Parse(args[3], CultureInfo.InvariantCulture);
         var height = int.Parse(args[4], CultureInfo.InvariantCulture);
 
+        // Band height is a memory knob for the separable blurs: each worker holds one band of float scratch.
+        // Set here rather than in the child's arguments so the peak can be swept per process without changing
+        // the parent's invocation shape.
+        if (int.TryParse(Environment.GetEnvironmentVariable("SIMDIMAGING_BAND_ROWS"), out var bandRows) && bandRows > 0)
+            Processing.FilterOps.BandRowsOverride = bandRows;
+
         var data = Fixture.Make(width, height);
         using var ours = Fixture.Ours(data, width, height);
         using var theirs = Fixture.Theirs(data, width, height);
