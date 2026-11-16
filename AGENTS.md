@@ -90,6 +90,20 @@ bash tests/SimdImaging.AotSmoke/run.sh            # needs the C++ workload (see 
 - `IlcInstructionSet=avx2` is required for the x64 AOT publish, or ILC folds `Avx2.IsSupported` to false and
   trims the AVX2 kernels — a green smoke that never ran them.
 
+## Writing a per-pixel loop
+
+- **Hoist anything row- or column-shaped out of the pixel loop.** Three separate operators lost 20–250× to the
+  same mistake in one day: exposure fusion called `ReadRowRaw` inside the x loop (29.6 s → 186 ms), the general
+  convolution read its ring per sample, and the median rebuilt `source.Row()` for every sample (136 ms → 45 ms).
+  Before writing the inner loop, ask what it touches that is not a single pixel, and move that out.
+
+## RowParallel
+
+- `RowParallel.For(width, height, body)` — the **first** argument is the width, not a range start. Passing `0` there
+  makes `0 × height` fall under the work threshold and silently runs the body on one thread. Two operators lost
+  4–7× to this in one day (NLM, then the general convolution), and neither threw: the only symptom was a number
+  that looked like a slow algorithm. When a parallel loop shows no speed-up, check this before profiling.
+
 ## Output contracts
 
 - Integer pipelines are byte-exact across SIMD tiers and platforms. Float pipelines freeze the operation

@@ -187,6 +187,18 @@ using (var nlm = image.NonLocalMeans(2, 1, 0.15f))
 using (var llf = image.LocalLaplacian(levels: 3, samples: 8, alpha: 0.3f))
     Console.WriteLine($"ll sha={Hash(llf.WritablePixels)}");
 
+var Box5 = new float[25];
+for (var i = 0; i < Box5.Length; i++)
+    Box5[i] = 1f / 25f;
+
+// The general convolution and the wide median: both are new code paths (a border-mapped kernel and a sliding
+// histogram) and neither is exercised by the 3x3 specialisations above.
+using (var conv = image.Convolve(Box5, 2, BorderMode.Mirror))
+    Console.WriteLine($"convolve sha={Hash(conv.WritablePixels)}");
+
+using (var med = image.Median(2))
+    Console.WriteLine($"median5 sha={Hash(med.WritablePixels)}");
+
 // Dehazing and exposure fusion: both go through code paths the other operators do not - a guided filter driven by
 // a luma guide, and a Laplacian pyramid whose levels are rebuilt per channel - so neither is covered by the
 // operators above. Without a hash here, "AOT is a first-class citizen" would not be true of them.
