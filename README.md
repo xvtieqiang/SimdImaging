@@ -34,7 +34,7 @@ Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueR
 - 第一个向量内核已落地（Rgba8 预乘行读取 + 水平/垂直两遍向量化）：4K→1080p bicubic **200 → 97–111 ms（≈1.8–2.1×）**，
   Lanczos3 243 → 107–123 ms（≈2.0–2.3×）。此后 `Median3x3` / `BokehBlur` / `Convolve2D` 等热点也已 SIMD 化、多个重算子改行带并行；
   **点算子走字节域 LUT 快路径，未做 SIMD 向量化**。明细见
-  [`benchmarks/README.md`](benchmarks/README.md) 与 [`docs/known-gaps.md`](docs/known-gaps.md)。
+  [`docs/measurements.md`](docs/measurements.md) 与 [`docs/known-gaps.md`](docs/known-gaps.md)。
 - **NativeAOT 已验证**：两次发布（AVX2 基线 / 默认 SSE2 基线）与 JIT 逐字节一致，覆盖编解码**和**几何
   算子（crop / bicubic·Lanczos3 resize / 16 位 resize / rotate / flip / pad / composite）。
 
@@ -143,7 +143,9 @@ photo.Mutate(p => p.Resize(800, 600).Saturation(1.2f));
 | [`docs/architecture.md`](docs/architecture.md) | 分层、与 SimdCodecs 的边界、缓冲抽象、SIMD 策略、AOT、测试与基准方法、里程碑、风险 |
 | [`docs/operators.md`](docs/operators.md) | 119 个算子的完整清单（语义 / 实现策略 / 确定性 / 阶段）+ ImageSharp 功能对标 |
 | [`docs/pipeline-coverage.md`](docs/pipeline-coverage.md) | 哪些算子能进链、halo 从哪来、哪些需要整图 |
+| [`docs/measurements.md`](docs/measurements.md) | 各基准模式的结论与关键数字（按主题分组） |
 | [`docs/report-2026-11-16.md`](docs/report-2026-11-16.md) | 2026-11-16 的改动与实测数字（含负结论） |
+| [`benchmarks/README.md`](benchmarks/README.md) | 基准怎么跑：模式清单、计时口径、结果在哪 |
 | [`docs/known-gaps.md`](docs/known-gaps.md) | 未达标项、已否决方向、测量方法论 |
 
 ## 一句话设计
