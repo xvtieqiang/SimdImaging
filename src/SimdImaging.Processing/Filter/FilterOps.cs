@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Processing;
@@ -587,12 +588,39 @@ public static class FilterOps
     /// <c>min(1, √(gx² + gy²) / 4)</c>: the Sobel kernel sums to 4 per axis, so dividing by 4 keeps a full
     /// black/white edge inside [0,1] instead of clipping every strong edge to white.
     /// </summary>
-    public static WorkingBuffer Sobel(PixelView source, bool bt709 = false, IPixelPool? pool = null)
+    public static WorkingBuffer Sobel(PixelView source, bool bt709 = false, IPixelPool? pool = null) =>
+        Gradient(source, 1f, 2f, 1f, 0.25f, bt709, pool);
+
+    /// <summary>Prewitt gradient magnitude: equal weights instead of Sobel's centre-weighted row.</summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public static WorkingBuffer Prewitt(PixelView source, bool bt709 = false, IPixelPool? pool = null) =>
+        Gradient(source, 1f, 1f, 1f, 1f / 3f, bt709, pool);
+
+    /// <summary>
+    /// Scharr gradient magnitude: 3/10/3 weights, which approximate rotational symmetry better than Sobel's 1/2/1.
+    /// </summary>
+    /// <param name="source">The pixels.</param>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public static WorkingBuffer Scharr(PixelView source, bool bt709 = false, IPixelPool? pool = null) =>
+        Gradient(source, 3f, 10f, 3f, 1f / 16f, bt709, pool);
+
+    /// <summary>
+    /// The three gradient operators, which differ only in their weights: <paramref name="top"/>,
+    /// <paramref name="middle"/> and <paramref name="bottom"/> are the vertical weights of one side, applied mirrored.
+    /// </summary>
+    private static WorkingBuffer Gradient(PixelView source, float top, float middle, float bottom, float scale,
+        bool bt709, IPixelPool? pool)
     {
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
         var (lr, lg, lb) = bt709 ? (0.2126f, 0.7152f, 0.0722f) : (0.299f, 0.587f, 0.114f);
+        var w0 = top;
+        var w1 = middle;
+        var w2 = bottom;
 
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var luma = new float[3 * width];
@@ -644,12 +672,12 @@ public static class FilterOps
                     var left = Math.Clamp(x - 1, 0, width - 1);
                     var right = Math.Clamp(x + 1, 0, width - 1);
 
-                    var gx = (top[right] + 2f * middle[right] + bottom[right])
-                             - (top[left] + 2f * middle[left] + bottom[left]);
-                    var gy = (bottom[left] + 2f * bottom[x] + bottom[right])
-                             - (top[left] + 2f * top[x] + top[right]);
+                    var gx = ((w0 * top[right]) + (w1 * middle[right]) + (w2 * bottom[right]))
+                             - ((w0 * top[left]) + (w1 * middle[left]) + (w2 * bottom[left]));
+                    var gy = ((w0 * bottom[left]) + (w1 * bottom[x]) + (w2 * bottom[right]))
+                             - ((w0 * top[left]) + (w1 * top[x]) + (w2 * top[right]));
 
-                    var magnitude = MathF.Sqrt(gx * gx + gy * gy) * 0.25f;
+                    var magnitude = MathF.Sqrt((gx * gx) + (gy * gy)) * scale;
                     if (magnitude > 1f)
                         magnitude = 1f;
 
@@ -1584,6 +1612,206 @@ public static class FilterOps
 
         var folded = ((value % period) + period) % period;
         return folded < length ? folded : period - folded;
+    }
+
+    /// <summary>
+    /// Erosion or dilation with a square window of odd side <c>2r+1</c>, per channel, alpha included.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separable, so the square window is a horizontal pass followed by a vertical one. Rather than write the vertical
+    /// pass as a second implementation with its own indexing — which is where strided reads and off-by-ones live —
+    /// the image is transposed, the same row routine runs again, and the result is transposed back. One kernel to
+    /// verify instead of two, and the transpose already exists for seam carving.
+    /// </para>
+    /// <para>
+    /// Each pass is a monotonic deque: indices whose values increase (or decrease) along the row, with the expired
+    /// front dropped and the dominated back popped. A pixel costs O(1) amortised whatever the radius, which is why
+    /// 15×15 costs about what 3×3 does rather than 225 comparisons.
+    /// </para>
+    /// <para>
+    /// Exact: min and max select, they do not compute, so the answer is the value the window contains. The test
+    /// compares against a naive window scan byte for byte.
+    /// </para>
+    /// <para>
+    /// Memory: two extra frames (the horizontal result and the transpose) beyond the destination, declared through
+    /// <c>PlanStep.Scratch</c> where it is used in a plan.
+    /// </para>
+    /// </remarks>
+    /// <param name="source">The pixels.</param>
+    /// <param name="radius">Window radius; 1 is 3×3.</param>
+    /// <param name="minimum">True to erode (minimum), false to dilate (maximum).</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The radius is not positive.</exception>
+    public static WorkingBuffer Morph(PixelView source, int radius, bool minimum, IPixelPool? pool = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+
+        if (radius == 1)
+            return Morph3x3(source, minimum, pool);
+
+        using var horizontal = SlideRows(source, radius, minimum, pool);
+        using var transposed = Orientation.Transpose(horizontal.View, anti: false, pool);
+        using var vertical = SlideRows(transposed.View, radius, minimum, pool);
+        return Orientation.Transpose(vertical.View, anti: false, pool);
+    }
+
+    /// <summary>
+    /// One separable pass: sliding minimum or maximum along each row, edges replicated, by van Herk and Gil-Werman.
+    /// </summary>
+    /// <remarks>
+    /// The row is padded to a whole number of windows, then two sweeps are enough: a prefix running within each
+    /// block and a suffix running back through it. The answer for a window is the combination of the suffix that
+    /// starts in it and the prefix that ends in it — O(1) per pixel, no queue, no branches inside the pixel loop.
+    /// A monotonic deque does the same job and was tried first; it was four times as long and wrong in six places.
+    /// </remarks>
+    private static WorkingBuffer SlideRows(PixelView source, int radius, bool minimum, IPixelPool? pool)
+    {
+        var width = source.Width;
+        var height = source.Height;
+        var window = (radius * 2) + 1;
+        var paddedWidth = width + (radius * 2);
+        var blocks = ((paddedWidth + window - 1) / window) * window;
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+
+        RowParallel.For(width, height, (start, end) =>
+        {
+            var row = new float[width * 4];
+            var padded = new float[blocks * 4];
+            var prefix = new float[blocks * 4];
+            var suffix = new float[blocks * 4];
+            var output = new float[width * 4];
+
+            for (var y = start; y < end; y++)
+            {
+                Pixels.ReadRowRaw(source.Row(y), width, source.Format, row);
+
+                // Replicate the edges, then keep replicating to fill the last partial block.
+                for (var x = 0; x < blocks; x++)
+                {
+                    var from = Math.Clamp(x - radius, 0, width - 1);
+                    for (var c = 0; c < 4; c++)
+                        padded[(x * 4) + c] = row[(from * 4) + c];
+                }
+
+                for (var block = 0; block < blocks; block += window)
+                {
+                    for (var c = 0; c < 4; c++)
+                    {
+                        var running = padded[(block * 4) + c];
+                        for (var k = 0; k < window; k++)
+                        {
+                            var value = padded[((block + k) * 4) + c];
+                            running = minimum ? MathF.Min(running, value) : MathF.Max(running, value);
+                            prefix[((block + k) * 4) + c] = running;
+                        }
+
+                        running = padded[((block + window - 1) * 4) + c];
+                        for (var k = window - 1; k >= 0; k--)
+                        {
+                            var value = padded[((block + k) * 4) + c];
+                            running = minimum ? MathF.Min(running, value) : MathF.Max(running, value);
+                            suffix[((block + k) * 4) + c] = running;
+                        }
+                    }
+                }
+
+                for (var x = 0; x < width; x++)
+                {
+                    var tail = x + window - 1;
+                    for (var c = 0; c < 4; c++)
+                    {
+                        var left = suffix[(x * 4) + c];
+                        var right = prefix[(tail * 4) + c];
+                        output[(x * 4) + c] = minimum ? MathF.Min(left, right) : MathF.Max(left, right);
+                    }
+                }
+
+                Pixels.WriteRowRaw(output, width, source.Format, destination.View.Row(y));
+            }
+        });
+
+        return destination;
+    }
+
+    /// <summary>
+    /// Laplacian of the luma, absolute value: the second derivative, so a ramp reads zero and an edge reads a peak.
+    /// </summary>
+    /// <remarks>
+    /// The 3×3 kernel is <c>[0 1 0; 1 −4 1; 0 1 0]</c> applied to BT.601 (or BT.709) luma; the result is <c>|∇²L|</c>
+    /// with no scaling, so a unit step edge reads 1.0 after clamping. Edges replicate. There is a naive reference in
+    /// the tests, and the two are compared byte for byte — a signed kernel is exactly where an off-by-one in the
+    /// absolute value would hide.
+    /// </remarks>
+    /// <param name="source">The pixels.</param>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public static WorkingBuffer Laplacian(PixelView source, bool bt709 = false, IPixelPool? pool = null)
+    {
+        var width = source.Width;
+        var height = source.Height;
+        var stride = width * 4;
+        var (lr, lg, lb) = bt709 ? (0.2126f, 0.7152f, 0.0722f) : (0.299f, 0.587f, 0.114f);
+
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+        var view = destination.View;
+
+        RowParallel.For(width, height, (start, end) =>
+        {
+            var row = new float[stride];
+            var outputRow = new float[stride];
+            var luma = new float[3 * width];
+            var computed = start - 2;
+
+            void EnsureLuma(int y)
+            {
+                for (var current = computed + 1; current <= y; current++)
+                {
+                    var clamped = Math.Clamp(current, 0, height - 1);
+                    Pixels.ReadRowRaw(source.Row(clamped), width, source.Format, row);
+                    var target = luma.AsSpan((current % 3 + 3) % 3 * width, width);
+                    for (var x = 0; x < width; x++)
+                    {
+                        var o = x * 4;
+                        target[x] = (row[o] * lr) + (row[o + 1] * lg) + (row[o + 2] * lb);
+                    }
+                }
+
+                computed = Math.Max(computed, y);
+            }
+
+            for (var y = start; y < end; y++)
+            {
+                EnsureLuma(y + 1);
+
+                var top = luma.AsSpan(((y - 1) % 3 + 3) % 3 * width, width);
+                var middle = luma.AsSpan((y % 3) * width, width);
+                var bottom = luma.AsSpan(((y + 1) % 3) * width, width);
+
+                Pixels.ReadRowRaw(source.Row(y), width, source.Format, row);
+
+                for (var x = 0; x < width; x++)
+                {
+                    var left = Math.Clamp(x - 1, 0, width - 1);
+                    var right = Math.Clamp(x + 1, 0, width - 1);
+
+                    var value = (4f * middle[x]) - (middle[left] + middle[right] + top[x] + bottom[x]);
+                    var magnitude = MathF.Abs(value);
+                    if (magnitude > 1f)
+                        magnitude = 1f;
+
+                    var o = x * 4;
+                    outputRow[o] = magnitude;
+                    outputRow[o + 1] = magnitude;
+                    outputRow[o + 2] = magnitude;
+                    outputRow[o + 3] = row[o + 3];
+                }
+
+                Pixels.WriteRowRaw(outputRow, width, source.Format, view.Row(y));
+            }
+        });
+
+        return destination;
     }
 
     /// <summary>

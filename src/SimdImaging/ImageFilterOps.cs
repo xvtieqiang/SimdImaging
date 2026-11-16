@@ -71,6 +71,31 @@ public sealed partial class Image
     public Image Sobel(bool bt709 = false, IPixelPool? pool = null) =>
         ReplaceBuffer(FilterOps.Sobel(this[0].Pixels.View, bt709, pool));
 
+    /// <summary>Erosion or dilation with a square window of odd side <c>2r+1</c>.</summary>
+    /// <param name="radius">Window radius; 1 is 3×3.</param>
+    /// <param name="kind">Erode or dilate.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Morph(int radius, Morphology kind, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.Morph(this[0].Pixels.View, radius, kind == Morphology.Erode, pool));
+
+    /// <summary>Prewitt gradient magnitude of the luma.</summary>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Prewitt(bool bt709 = false, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.Prewitt(this[0].Pixels.View, bt709, pool));
+
+    /// <summary>Scharr gradient magnitude of the luma.</summary>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Scharr(bool bt709 = false, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.Scharr(this[0].Pixels.View, bt709, pool));
+
+    /// <summary>Laplacian magnitude of the luma; a ramp reads zero, an edge reads a peak.</summary>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Laplacian(bool bt709 = false, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.Laplacian(this[0].Pixels.View, bt709, pool));
+
     /// <summary>Pixelates into square blocks of the given edge length; 1 is a copy.</summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="blockSize"/> is not positive.</exception>
     public Image Pixelate(int blockSize = 8, IPixelPool? pool = null) =>

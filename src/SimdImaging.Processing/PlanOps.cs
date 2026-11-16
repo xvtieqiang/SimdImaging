@@ -165,6 +165,16 @@ public static class PlanOps
             (_, _, _, _) => 0);
     }
 
+    /// <summary>
+    /// Erosion or dilation with a square window of odd side <c>2r+1</c>.
+    /// </summary>
+    /// <param name="radius">Window radius; 1 is 3×3.</param>
+    /// <param name="kind">Erode or dilate.</param>
+    public static ImageOp Morph(int radius, Abstractions.Morphology kind = Abstractions.Morphology.Erode) =>
+        Neighborhood("morph", radius, v => FilterOps.Morph(v, radius, kind == Abstractions.Morphology.Erode),
+            // The separable passes hold the horizontal result plus its transpose: two extra frames.
+            (width, height, _, _) => 2L * width * height * 4);
+
     /// <summary>3x3 erosion; one row and one column.</summary>
     public static ImageOp Erode3x3() => Neighborhood("erode", 1, v => FilterOps.Erode3x3(v));
 

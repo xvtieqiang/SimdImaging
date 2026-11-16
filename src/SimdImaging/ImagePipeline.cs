@@ -129,6 +129,12 @@ public sealed class ImagePipeline
         BorderMode border = BorderMode.Clamp, float bias = 0f, float constantValue = 0f) =>
         Step(PlanOps.Convolve(kernel, radius, border, bias, constantValue));
 
+    /// <summary>Erosion or dilation with a square window of odd side <c>2r+1</c>.</summary>
+    /// <param name="radius">Window radius; 1 is 3×3.</param>
+    /// <param name="kind">Erode or dilate.</param>
+    public ImagePipeline Morph(int radius, Morphology kind = Morphology.Erode) =>
+        Step(PlanOps.Morph(radius, kind));
+
     /// <summary>Several per-channel point transforms collapsed into one table and one pass (8-bit).</summary>
     /// <param name="transforms">The transforms, applied in order.</param>
     public ImagePipeline PointChain(params PointOps.RowTransform[] transforms) =>
