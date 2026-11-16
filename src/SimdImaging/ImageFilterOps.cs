@@ -156,6 +156,12 @@ public sealed partial class Image
         IPixelPool? pool = null) =>
         ReplaceBuffer(NonLocalMeansOps.NonLocalMeans(this[0].Pixels.View, searchRadius, patchRadius, h, sigma, pool));
 
+    /// <summary>Median over a square window of odd side <c>2r+1</c>; all four channels, alpha included.</summary>
+    /// <param name="radius">Window radius: 1 is 3×3, 2 is 5×5.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Median(int radius = 1, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.Median(this[0].Pixels.View, radius, pool));
+
     /// <summary>Convolves with an arbitrary odd kernel and a selectable border mode.</summary>
     /// <param name="kernel">Weights, row-major, <c>(2r+1)²</c> of them.</param>
     /// <param name="radius">Kernel radius; the side is <c>2×radius+1</c>.</param>

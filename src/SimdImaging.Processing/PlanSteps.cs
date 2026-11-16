@@ -71,6 +71,45 @@ internal static class PlanSteps
         };
     }
 
+    /// <summary>Adapts a neighbourhood operator that needs to know where its window sits in the image.</summary>
+    /// <remarks>
+    /// A bordered convolution cannot be banded with <see cref="Neighborhood(Func{PixelView,WorkingBuffer},int,int)"/>:
+    /// Mirror and Wrap have to reflect or wrap about the <b>image</b> edge, and the operator only sees its window, so
+    /// it would reflect about the band edge and produce a seam. The window's origin and the image size are exactly
+    /// what tells the two apart, so they are handed over.
+    /// </remarks>
+    /// <param name="operator">Runs over a window and gets the context that locates it.</param>
+    /// <param name="haloX">Columns of context the operator reads.</param>
+    /// <param name="haloY">Rows of context the operator reads.</param>
+    public static OpKernel Neighborhood(Func<PixelView, BandContext, PixelView, WorkingBuffer> @operator,
+        int haloX, int haloY)
+    {
+        ArgumentNullException.ThrowIfNull(@operator);
+        ArgumentOutOfRangeException.ThrowIfNegative(haloX);
+        ArgumentOutOfRangeException.ThrowIfNegative(haloY);
+
+        return (source, destination, destinationRect, sourceRect) =>
+        {
+            var window = source.Slice(sourceRect);
+            var context = new BandContext(source.Width, source.Height, sourceRect.X, sourceRect.Y);
+
+            RowParallel.EnterNested();
+            try
+            {
+                // The whole image goes along with the window: a Wrap border reads the opposite edge, which the window
+                // only holds when the band happens to cover the image. Handing over the full view costs nothing and
+                // means a banded plan can serve every border mode instead of three.
+                using var result = @operator(window, context, source);
+                var offsetY = destinationRect.Y - sourceRect.Y;
+                CopyRows(result.View, offsetY, destination, destinationRect.Y, destinationRect.Height);
+            }
+            finally
+            {
+                RowParallel.ExitNested();
+            }
+        };
+    }
+
     /// <summary>Adapts an operator that needs the whole image (histogram, quantise, CLAHE).</summary>
     /// <param name="operator">Runs the operator over the full view.</param>
     public static OpKernel Global(Func<PixelView, WorkingBuffer> @operator)

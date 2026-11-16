@@ -100,6 +100,51 @@ public static class PlanOps
     /// <summary>3x3 median; one row and one column of context.</summary>
     public static ImageOp Median3x3() => Neighborhood("median", 1, v => FilterOps.Median3x3(v));
 
+    /// <summary>
+    /// Median with radius <paramref name="radius"/>; the support is the window, so the halo is the radius.
+    /// </summary>
+    /// <remarks>
+    /// Band-safe for the same reason <see cref="Median3x3"/> is: every read is clamped to the view it was handed, and
+    /// the executor widens that view by the halo, so an interior pixel sees its real neighbours and a pixel on the
+    /// image edge sees the edge. The 8-bit path's histogram is per call, not shared between bands.
+    /// </remarks>
+    /// <param name="radius">Window radius; 1 is 3×3, up to 8.</param>
+    public static ImageOp Median(int radius) =>
+        Neighborhood("median", radius, v => FilterOps.Median(v, radius),
+            // Four channels are medianed, read from a band of rows widened by the radius on each side.
+            (width, _, rows, _) => (long)rows * width * 4);
+
+    /// <summary>
+    /// Convolution with an arbitrary odd kernel and any border mode.
+    /// </summary>
+    /// <remarks>
+    /// The kernel is copied, because the step outlives the call that built it. Band-safe through
+    /// <see cref="BandContext"/>: the operator maps taps in image coordinates, so Mirror and Wrap reflect about the
+    /// image edge rather than the band edge.
+    /// </remarks>
+    /// <param name="kernel">Weights, row-major, <c>(2r+1)²</c> of them.</param>
+    /// <param name="radius">Kernel radius; the side is <c>2×radius+1</c>.</param>
+    /// <param name="border">How to read outside the image.</param>
+    /// <param name="bias">Added after the sum, in sample units.</param>
+    /// <param name="constantValue">Value used by <see cref="BorderMode.Constant"/>.</param>
+    /// <exception cref="ArgumentException">The kernel length is not <c>(2r+1)²</c>.</exception>
+    public static ImageOp Convolve(ReadOnlySpan<float> kernel, int radius,
+        BorderMode border = BorderMode.Clamp, float bias = 0f, float constantValue = 0f)
+    {
+        var side = (radius * 2) + 1;
+        if (kernel.Length != side * side)
+            throw new ArgumentException($"A {side}×{side} kernel needs {side * side} weights.", nameof(kernel));
+
+        var weights = kernel.ToArray();
+        return new ImageOp("convolve", OpCategory.Neighborhood, radius, radius,
+            PlanSteps.Neighborhood(
+                (window, context, full) =>
+                    FilterOps.ConvolveBanded(window, context, full, weights, radius, border, bias, constantValue),
+                radius, radius),
+            // One float RGBA copy of the window, which is a band plus the halo on both sides.
+            (width, _, rows, _) => (long)rows * width * 16);
+    }
+
     /// <summary>3x3 erosion; one row and one column.</summary>
     public static ImageOp Erode3x3() => Neighborhood("erode", 1, v => FilterOps.Erode3x3(v));
 

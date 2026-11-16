@@ -884,6 +884,420 @@ public static class FilterOps
     }
 
     /// <summary>
+    /// Bordered convolution over a band window, using the window's position in the image to place the border.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The standalone <see cref="Convolve"/> maps taps against the view it was given, which is correct only when that
+    /// view is the whole image. In a band, Mirror and Wrap must still reflect or wrap about the image edge, so the
+    /// mapping has to happen in image coordinates and then come back to window coordinates; that is what
+    /// <paramref name="context"/> supplies.
+    /// </para>
+    /// <para>
+    /// The window is converted to floats once per call rather than through a row ring: Wrap can map a tap to the far
+    /// side of the image, so the rows a pixel touches are not a contiguous band and a small ring cannot hold them.
+    /// The cost is the window, which is what the executor already sizes.
+    /// </para>
+    /// </remarks>
+    /// <param name="window">The band window, already widened by the halo and clamped to the image.</param>
+    /// <param name="context">Where that window sits in the image.</param>
+    /// <param name="kernel">Weights, row-major, <c>(2r+1)²</c> of them.</param>
+    /// <param name="radius">Kernel radius.</param>
+    /// <param name="border">How to read outside the image.</param>
+    /// <param name="bias">Added after the sum, in sample units.</param>
+    /// <param name="constantValue">Value used by <see cref="BorderMode.Constant"/>.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public static WorkingBuffer ConvolveBanded(PixelView window, BandContext context, PixelView full,
+        ReadOnlySpan<float> kernel, int radius, BorderMode border, float bias = 0f, float constantValue = 0f,
+        IPixelPool? pool = null)
+    {
+        var width = window.Width;
+        var height = window.Height;
+        var stride = width * 4;
+        var side = (radius * 2) + 1;
+        var sum = new float[stride];
+        var destination = WorkingBuffer.Rent(width, height, window.Format, pool);
+
+        // Wrap reads rows from the opposite edge, which the window only holds by accident. Rather than mixing two
+        // sources — which produced a two-level disagreement the first time — every tap comes from the full view and
+        // the row cache keeps it to one decode per row. Clamp, Mirror and Constant stay on the window, which is
+        // always enough for them.
+        var fromFull = border == BorderMode.Wrap;
+        var plane = fromFull ? null : new float[height * stride];
+        var rowCache = new float[full.Width * 4];
+        var cachedRow = -1;
+        var row = new float[stride];
+
+        if (plane is not null)
+        {
+            for (var y = 0; y < height; y++)
+            {
+                Pixels.ReadRowRaw(window.Row(y), width, window.Format, row);
+                row.CopyTo(plane, y * stride);
+            }
+        }
+
+        for (var y = 0; y < height; y++)
+        {
+            Array.Clear(sum);
+            var imageY = context.OriginY + y;
+
+            for (var tapY = -radius; tapY <= radius; tapY++)
+            {
+                var wantedImageY = Map(imageY + tapY, context.ImageHeight, border);
+                var kernelRow = (tapY + radius) * side;
+                var rowOffset = -1;
+
+                if (wantedImageY >= 0)
+                {
+                    if (fromFull)
+                    {
+                        if (cachedRow != wantedImageY)
+                        {
+                            Pixels.ReadRowRaw(full.Row(wantedImageY), full.Width, full.Format, rowCache);
+                            cachedRow = wantedImageY;
+                        }
+                    }
+                    else
+                    {
+                        rowOffset = (wantedImageY - context.OriginY) * stride;
+                    }
+                }
+
+                for (var tapX = -radius; tapX <= radius; tapX++)
+                {
+                    var weight = kernel[kernelRow + tapX + radius];
+                    if (weight == 0f)
+                        continue;
+
+                    for (var x = 0; x < width; x++)
+                    {
+                        var wantedImageX = Map(context.OriginX + x + tapX, context.ImageWidth, border);
+                        var o = x * 4;
+
+                        if (wantedImageX < 0 || wantedImageY < 0)
+                        {
+                            sum[o] += weight * constantValue;
+                            sum[o + 1] += weight * constantValue;
+                            sum[o + 2] += weight * constantValue;
+                            continue;
+                        }
+
+                        if (fromFull)
+                        {
+                            var i = wantedImageX * 4;
+                            sum[o] += weight * rowCache[i];
+                            sum[o + 1] += weight * rowCache[i + 1];
+                            sum[o + 2] += weight * rowCache[i + 2];
+                            continue;
+                        }
+
+                        // A tap can leave the window only on a halo row or column, which the adapter discards.
+                        var columnOffset = wantedImageX - context.OriginX;
+                        if (rowOffset < 0 || rowOffset + stride > plane!.Length
+                            || columnOffset < 0 || columnOffset >= width)
+                        {
+                            continue;
+                        }
+
+                        var p = rowOffset + (columnOffset * 4);
+                        sum[o] += weight * plane[p];
+                        sum[o + 1] += weight * plane[p + 1];
+                        sum[o + 2] += weight * plane[p + 2];
+                    }
+                }
+            }
+
+            for (var x = 0; x < width; x++)
+            {
+                var o = x * 4;
+                sum[o] += bias;
+                sum[o + 1] += bias;
+                sum[o + 2] += bias;
+            }
+
+            // Alpha is copied, never convolved: the source row is the same row this output row will produce.
+            Pixels.ReadRowRaw(window.Row(y), width, window.Format, row);
+            for (var x = 0; x < width; x++)
+                sum[(x * 4) + 3] = row[(x * 4) + 3];
+
+            Pixels.WriteRowRaw(sum, width, window.Format, destination.View.Row(y));
+        }
+
+        return destination;
+    }
+
+    /// <summary>
+    /// Median over a square window of odd side <c>2r+1</c>. All four channels are median-filtered, alpha included —
+    /// that is what <see cref="Median3x3"/> does, and the two paths are required to agree byte for byte.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why a histogram and not a sort.</b> The first version of this sorted every window from scratch and cost
+    /// <c>O(n² log n)</c> per pixel: 5×5 measured 1.2 s at 1080p and 9×9 measured 12.4 s, which is why radius above
+    /// two was refused. That ceiling was the algorithm's, not the operator's. Huang's sliding histogram keeps one
+    /// 256-bin count per window column and one total, updates 2·(2r+1) bins per step, and moves the median pointer
+    /// only as far as the update moved it — <c>O(r)</c> per pixel with no per-pixel clear.
+    /// </para>
+    /// <para>
+    /// <b>Exactness.</b> Binning is exact for <see cref="WorkingFormat.Rgba8"/> because there are exactly 256 code
+    /// values; the histogram path therefore returns the same bytes as sorting, and a test holds it to the sort path
+    /// byte for byte. Wider formats keep the sort: a 16-bit histogram would need 65 536 bins per column, which is
+    /// 256 KiB per window column and slower than the sort it replaces.
+    /// </para>
+    /// </remarks>
+    /// <param name="source">The pixels.</param>
+    /// <param name="radius">Window radius: 1 is 3×3 (the fast path), 2 is 5×5, and so on.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The radius is not positive, or above 8.</exception>
+    public static WorkingBuffer Median(PixelView source, int radius = 1, IPixelPool? pool = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        if (radius > 8)
+            throw new ArgumentOutOfRangeException(nameof(radius), radius, "Radius above 8 is not supported.");
+
+        if (radius == 1)
+            return Median3x3(source, pool);
+
+        return source.Format == WorkingFormat.Rgba8
+            ? MedianBytes(source, radius, pool)
+            : MedianFloats(source, radius, pool);
+    }
+
+    /// <summary>Sliding-histogram median for 8-bit input, one channel at a time.</summary>
+    private static WorkingBuffer MedianBytes(PixelView source, int radius, IPixelPool? pool)
+    {
+        var width = source.Width;
+        var height = source.Height;
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+        var view = destination.View;
+        var side = (radius * 2) + 1;
+
+        RowParallel.For(width, height, (start, end) =>
+        {
+            var span = side;
+            var columnHistograms = new int[span * 256];
+            var histogram = new int[256];
+            var output = new byte[width * 4];
+            var threshold = (side * side) / 2;
+
+            var stride = width * 4;
+            var windowRows = new byte[span * stride];
+            for (var y = start; y < end; y++)
+            {
+                // Copy the window's rows once per output row. Calling `source.Row()` per sample was the remaining
+                // cost after the median pointer: it is a bounds check and a slice, and the histogram path touches
+                // 2·(2r+1) samples per pixel per channel. Copying 2r+1 rows per output row is 5×7.7 KiB at 1080p.
+                for (var dy = -radius; dy <= radius; dy++)
+                {
+                    source.Row(Math.Clamp(y + dy, 0, height - 1))
+                        .CopyTo(windowRows.AsSpan((dy + radius) * stride, stride));
+                }
+
+                Array.Clear(columnHistograms);
+                Array.Clear(histogram);
+
+                for (var column = 0; column < span; column++)
+                {
+                    var x = Math.Clamp(column - radius, 0, width - 1);
+                    for (var dy = -radius; dy <= radius; dy++)
+                    {
+                        var value = windowRows[((dy + radius) * stride) + (x * 4)];
+                        columnHistograms[(column * 256) + value]++;
+                        histogram[value]++;
+                    }
+                }
+
+                var median = MedianFromHistogram(histogram, threshold, out var below);
+                for (var x = 0; x < width; x++)
+                {
+                    // The histogram above tracks channel 0 only; the other three are rebuilt below, one channel at a
+                    // time, because a shared 256-bin histogram would not fit the median pointer logic.
+                    output[(x * 4) + 0] = (byte)median;
+
+                    var leaving = Math.Clamp(x - radius, 0, width - 1);
+                    var entering = Math.Clamp(x + radius + 1, 0, width - 1);
+                    SlideColumn(columnHistograms, histogram, span, leaving, entering, width, windowRows, stride,
+                        radius, 0, ref median, ref below, threshold);
+                }
+
+                for (var channel = 1; channel < 4; channel++)
+                {
+                    Array.Clear(columnHistograms);
+                    Array.Clear(histogram);
+
+                    for (var column = 0; column < span; column++)
+                    {
+                        var x = Math.Clamp(column - radius, 0, width - 1);
+                        for (var dy = -radius; dy <= radius; dy++)
+                        {
+                            var value = windowRows[((dy + radius) * stride) + (x * 4) + channel];
+                            columnHistograms[(column * 256) + value]++;
+                            histogram[value]++;
+                        }
+                    }
+
+                    var channelMedian = MedianFromHistogram(histogram, threshold, out var channelBelow);
+                    for (var x = 0; x < width; x++)
+                    {
+                        output[(x * 4) + channel] = (byte)channelMedian;
+
+                        var leaving = Math.Clamp(x - radius, 0, width - 1);
+                        var entering = Math.Clamp(x + radius + 1, 0, width - 1);
+                        SlideColumn(columnHistograms, histogram, span, leaving, entering, width, windowRows, stride,
+                            radius, channel, ref channelMedian, ref channelBelow, threshold);
+                    }
+                }
+
+                output.AsSpan().CopyTo(view.Row(y));
+            }
+        });
+
+        return destination;
+    }
+
+    /// <summary>
+    /// Removes the leaving column's samples, adds the entering column's, and moves the median pointer only as far as
+    /// the change moved it. Re-scanning all 256 bins per pixel was the remaining cost after the histogram replaced
+    /// the sort: 5×5 measured 216 ms at 1080p with the scan and 1.2 s with the sort.
+    /// </summary>
+    private static void SlideColumn(int[] columnHistograms, int[] histogram, int span, int leaving, int entering,
+        int width, byte[] windowRows, int stride, int radius, int channel,
+        ref int median, ref int below, int threshold)
+    {
+        var slot = leaving % span;
+        for (var dy = -radius; dy <= radius; dy++)
+        {
+            var value = windowRows[((dy + radius) * stride) + (leaving * 4) + channel];
+            columnHistograms[(slot * 256) + value]--;
+            histogram[value]--;
+            if (value < median)
+                below--;
+        }
+
+        slot = entering % span;
+        for (var dy = -radius; dy <= radius; dy++)
+        {
+            var value = windowRows[((dy + radius) * stride) + (entering * 4) + channel];
+            columnHistograms[(slot * 256) + value]++;
+            histogram[value]++;
+            if (value < median)
+                below++;
+        }
+
+        while (below > threshold && median > 0)
+        {
+            median--;
+            below -= histogram[median];
+        }
+
+        while (below + histogram[median] <= threshold && median < 255)
+        {
+            below += histogram[median];
+            median++;
+        }
+    }
+
+    /// <summary>The value at rank <paramref name="threshold"/> in the histogram, plus how many samples are below it.</summary>
+    private static int MedianFromHistogram(int[] histogram, int threshold, out int below)
+    {
+        below = 0;
+        for (var value = 0; value < 256; value++)
+        {
+            if (below + histogram[value] > threshold)
+                return value;
+
+            below += histogram[value];
+        }
+
+        return 255;
+    }
+
+    /// <summary>Sort-based median for formats wider than 8 bits, where a 256-bin histogram would not be exact.</summary>
+    private static WorkingBuffer MedianFloats(PixelView source, int radius, IPixelPool? pool)
+    {
+        var width = source.Width;
+        var height = source.Height;
+        var stride = width * 4;
+        var ringRows = (radius * 2) + 1;
+        var samples = ringRows * ringRows;
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+        var view = destination.View;
+        var ring = new float[ringRows * stride];
+        var loaded = new int[ringRows];
+        Array.Fill(loaded, -1);
+        var row = new float[stride];
+        var output = new float[stride];
+        var window = new float[samples];
+
+        try
+        {
+            for (var y = 0; y < height; y++)
+            {
+                for (var tap = -radius; tap <= radius; tap++)
+                {
+                    var wanted = Math.Clamp(y + tap, 0, height - 1);
+                    var slot = wanted % ringRows;
+                    if (loaded[slot] == wanted)
+                        continue;
+
+                    Pixels.ReadRowRaw(source.Row(wanted), width, source.Format, row);
+                    row.CopyTo(ring, slot * stride);
+                    loaded[slot] = wanted;
+                }
+
+                for (var x = 0; x < width; x++)
+                {
+                    for (var c = 0; c < 4; c++)
+                    {
+                        var filled = 0;
+                        for (var tapY = -radius; tapY <= radius; tapY++)
+                        {
+                            var wanted = Math.Clamp(y + tapY, 0, height - 1);
+                            var offset = (wanted % ringRows) * stride;
+                            for (var tapX = -radius; tapX <= radius; tapX++)
+                            {
+                                var sourceX = Math.Clamp(x + tapX, 0, width - 1);
+                                window[filled++] = ring[offset + (sourceX * 4) + c];
+                            }
+                        }
+
+                        output[(x * 4) + c] = Middle(window, samples);
+                    }
+                }
+
+                Pixels.WriteRowRaw(output, width, source.Format, view.Row(y));
+            }
+
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Median of the buffer's first <paramref name="count"/> values, by insertion sort in place.</summary>
+    private static float Middle(float[] values, int count)
+    {
+        for (var i = 1; i < count; i++)
+        {
+            var value = values[i];
+            var j = i - 1;
+            while (j >= 0 && values[j] > value)
+            {
+                values[j + 1] = values[j];
+                j--;
+            }
+
+            values[j + 1] = value;
+        }
+
+        return values[count / 2];
+    }
+
+    /// <summary>
     /// Separable-or-not 2D convolution with an arbitrary odd kernel and a selectable border mode.
     /// </summary>
     /// <remarks>
@@ -920,21 +1334,32 @@ public static class FilterOps
         var stride = width * 4;
         var rows = side;
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
-        var ring = new float[rows * stride];
-        var loaded = new int[rows];
-        Array.Fill(loaded, -1);
-        var row = new float[stride];
-        var sum = new float[stride];
-        try
+
+        // Wrap needs rows that are `height - 2r` apart at once, so the ring of 2r+1 rows cannot hold them: it would
+        // hand back the row that used to live in that slot. Those taps are read straight from the source instead.
+        var wraps = border == BorderMode.Wrap;
+
+        // A span cannot be captured by the worker lambda; the kernel is tiny, so a copy per call is nothing.
+        var weights = kernel.ToArray();
+
+        RowParallel.For(width, height, (start, end) =>
         {
-            for (var y = 0; y < height; y++)
+            var ring = new float[rows * stride];
+            var loaded = new int[rows];
+            Array.Fill(loaded, -1);
+            var row = new float[stride];
+            var sum = new float[stride];
+            var wrapRow = new float[stride];
+            var wrapCached = -1;
+
+            for (var y = start; y < end; y++)
             {
                 // Fill the ring once per row, and read the outgoing row's alpha once: doing either inside the x
                 // loop converts each row `width` times, which is the mistake that made exposure fusion 159x slower.
                 for (var tapY = -radius; tapY <= radius; tapY++)
                 {
                     var wanted = Map(y + tapY, height, border);
-                    if (wanted < 0)
+                    if (wanted < 0 || wraps)
                         continue;
 
                     var slot = wanted % rows;
@@ -952,12 +1377,18 @@ public static class FilterOps
                 for (var tapY = -radius; tapY <= radius; tapY++)
                 {
                     var wanted = Map(y + tapY, height, border);
-                    var baseOffset = wanted < 0 ? -1 : (wanted % rows) * stride;
+                    var baseOffset = wanted < 0 || wraps ? -1 : (wanted % rows) * stride;
                     var kernelRow = (tapY + radius) * side;
+
+                    if (wraps && wanted >= 0 && wrapCached != wanted)
+                    {
+                        Pixels.ReadRowRaw(source.Row(wanted), width, source.Format, wrapRow);
+                        wrapCached = wanted;
+                    }
 
                     for (var tapX = -radius; tapX <= radius; tapX++)
                     {
-                        var weight = kernel[kernelRow + tapX + radius];
+                        var weight = weights[kernelRow + tapX + radius];
                         if (weight == 0f)
                             continue;
 
@@ -967,9 +1398,11 @@ public static class FilterOps
                             var o = x * 4;
                             for (var c = 0; c < 3; c++)
                             {
-                                var sample = sourceX < 0 || baseOffset < 0
+                                var sample = sourceX < 0 || (baseOffset < 0 && !wraps)
                                     ? constantValue
-                                    : ring[baseOffset + (sourceX * 4) + c];
+                                    : wraps
+                                        ? wrapRow[(sourceX * 4) + c]
+                                        : ring[baseOffset + (sourceX * 4) + c];
                                 sum[o + c] += weight * sample;
                             }
                         }
@@ -987,14 +1420,9 @@ public static class FilterOps
 
                 Pixels.WriteRowRaw(sum, width, source.Format, destination.View.Row(y));
             }
+        });
 
-            return destination;
-        }
-        catch
-        {
-            destination.Dispose();
-            throw;
-        }
+        return destination;
     }
 
     /// <summary>Maps an out-of-range coordinate to a real one, or to −1 for <see cref="BorderMode.Constant"/>.</summary>

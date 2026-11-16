@@ -33,6 +33,10 @@ for (var i = 0; i < pixels.Length; i++)
 
 // 1080p twin for the seconds-class operators (non-local means): 4K would turn one sample into a minute.
 using var half = Image.Create(1920, 1080, WorkingFormat.Rgba8);
+var Box25 = new float[25];
+for (var i = 0; i < Box25.Length; i++)
+    Box25[i] = 1f / 25f;
+
 var halfPixels = half.WritablePixels;
 for (var i = 0; i < halfPixels.Length; i++)
     halfPixels[i] = (byte)((i * 37 + 11) & 0xFF);
@@ -179,6 +183,42 @@ Measure("nlm 1080p S=5 P=2 h=0.1", () =>
 {
     using var result = half.NonLocalMeans(5, 2, 0.1f);
     return result.Width * result.Height;
+});
+
+Measure("median 1080p 3x3", () =>
+{
+    using var result = half.Median(1);
+    return result.Width * result.Height;
+});
+
+Measure("median 1080p 5x5", () =>
+{
+    using var result = half.Median(2);
+    return result.Width * result.Height;
+});
+
+Measure("median 1080p 7x7", () =>
+{
+    using var result = half.Median(3);
+    return result.Width * result.Height;
+});
+
+Measure("median 1080p 9x9", () =>
+{
+    using var result = half.Median(4);
+    return result.Width * result.Height;
+});
+
+Measure("convolve 1080p 5x5 (direct)", () =>
+{
+    using var result = FilterOps.Convolve(half[0].Pixels.View, Box25, 2);
+    return half.Width * half.Height;
+});
+
+Measure("convolve 1080p 5x5 (plan)", () =>
+{
+    using var result = half.Pipe().Convolve(Box25, 2).ToImage();
+    return half.Width * half.Height;
 });
 
 Measure("fusion 1080p x3", () =>

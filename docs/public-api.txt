@@ -319,6 +319,7 @@
   SimdImaging.Image.LoadAsync(System.String path, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<SimdImaging.Image>
   SimdImaging.Image.LocalLaplacian(System.Int32 levels, System.Int32 samples, System.Single alpha, System.Single beta, System.Single sigmaR, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.MapToPalette(SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
+  SimdImaging.Image.Median(System.Int32 radius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Median3x3(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Metadata : Sdcb.SimdCodecs.Abstractions.ImageMetadata { get; }
   SimdImaging.Image.MinMax() -> System.ValueTuple<SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange>
@@ -403,6 +404,7 @@
   SimdImaging.ImagePipeline.Clahe(System.Int32 tilesX, System.Int32 tilesY, System.Single clipLimit) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Close3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Contrast(System.Single amount) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Convolve(System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Crop(Sdcb.SimdCodecs.Abstractions.PixelRect region) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Dehaze(System.Int32 patchRadius, System.Single omega, System.Single tMin, System.Int32 refineRadius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Dilate3x3() -> SimdImaging.ImagePipeline
@@ -418,6 +420,7 @@
   SimdImaging.ImagePipeline.Invert() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.LocalLaplacian(System.Int32 levels, System.Int32 samples) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Median(System.Int32 radius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Median3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.MotionBlur(System.Int32 length, System.Single angleDegrees) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.NonLocalMeans(System.Int32 searchRadius, System.Int32 patchRadius, System.Single h) -> SimdImaging.ImagePipeline
@@ -450,6 +453,18 @@
   SimdImaging.Processing.AnalysisOps.Psnr(SimdImaging.Abstractions.PixelView a, SimdImaging.Abstractions.PixelView b) -> System.Double
   SimdImaging.Processing.AnalysisOps.Ssim(SimdImaging.Abstractions.PixelView a, SimdImaging.Abstractions.PixelView b) -> System.Double
   SimdImaging.Processing.BackgroundOps.ReplaceBackground(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.RgbaColor replacement, System.Single tolerance, System.Single feather, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
+  SimdImaging.Processing.BandContext.#ctor(System.Int32 ImageWidth, System.Int32 ImageHeight, System.Int32 OriginX, System.Int32 OriginY)
+  SimdImaging.Processing.BandContext.Deconstruct(System.Int32& ImageWidth, System.Int32& ImageHeight, System.Int32& OriginX, System.Int32& OriginY) -> System.Void
+  SimdImaging.Processing.BandContext.Equals(SimdImaging.Processing.BandContext other) -> System.Boolean
+  SimdImaging.Processing.BandContext.Equals(System.Object obj) -> System.Boolean
+  SimdImaging.Processing.BandContext.GetHashCode() -> System.Int32
+  SimdImaging.Processing.BandContext.ImageHeight : System.Int32 { get; set; }
+  SimdImaging.Processing.BandContext.ImageWidth : System.Int32 { get; set; }
+  SimdImaging.Processing.BandContext.OriginX : System.Int32 { get; set; }
+  SimdImaging.Processing.BandContext.OriginY : System.Int32 { get; set; }
+  SimdImaging.Processing.BandContext.ToString() -> System.String
+  SimdImaging.Processing.BandContext.op_Equality(SimdImaging.Processing.BandContext left, SimdImaging.Processing.BandContext right) -> System.Boolean
+  SimdImaging.Processing.BandContext.op_Inequality(SimdImaging.Processing.BandContext left, SimdImaging.Processing.BandContext right) -> System.Boolean
   SimdImaging.Processing.Blend.Apply(SimdImaging.Abstractions.PixelView background, SimdImaging.Abstractions.PixelView overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.BlendMode mode, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.BlendMode.Add = 12
   SimdImaging.Processing.BlendMode.Color = 16
@@ -613,12 +628,14 @@
   SimdImaging.Processing.FilterOps.Close3x3(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Convolve(SimdImaging.Abstractions.PixelView source, System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Convolve3x3(SimdImaging.Abstractions.PixelView source, System.ReadOnlySpan<System.Single> kernel, System.Single bias, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
+  SimdImaging.Processing.FilterOps.ConvolveBanded(SimdImaging.Abstractions.PixelView window, SimdImaging.Processing.BandContext context, SimdImaging.Abstractions.PixelView full, System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Dilate3x3(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Emboss(SimdImaging.Abstractions.PixelView source, System.Single strength, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Erode3x3(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.GaussianBlur(SimdImaging.Abstractions.PixelView source, System.Single sigma, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.GaussianSharpen(SimdImaging.Abstractions.PixelView source, System.Single amount, System.Single sigma, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Glow(SimdImaging.Abstractions.PixelView source, System.Single threshold, System.Single sigma, System.Single amount, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
+  SimdImaging.Processing.FilterOps.Median(SimdImaging.Abstractions.PixelView source, System.Int32 radius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Median3x3(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.MotionBlur(SimdImaging.Abstractions.PixelView source, System.Int32 length, System.Single angleDegrees, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Open3x3(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
@@ -851,6 +868,7 @@
   SimdImaging.Processing.PlanOps.Clahe(System.Int32 tilesX, System.Int32 tilesY, System.Single clipLimit) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Close3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Contrast(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Convolve(System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dehaze(System.Int32 patchRadius, System.Single omega, System.Single tMin, System.Int32 refineRadius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dilate3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Emboss() -> SimdImaging.Processing.ImageOp
@@ -863,6 +881,7 @@
   SimdImaging.Processing.PlanOps.Invert() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Levels(System.Single black, System.Single white, System.Single gamma) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.LocalLaplacian(System.Int32 levels, System.Int32 samples) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Median(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Median3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.MotionBlur(System.Int32 length, System.Single angleDegrees) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.NonLocalMeans(System.Int32 searchRadius, System.Int32 patchRadius, System.Single h) -> SimdImaging.Processing.ImageOp
@@ -1118,6 +1137,7 @@ struct SimdImaging.Abstractions.PixelPoint
 struct SimdImaging.Abstractions.PixelView
 struct SimdImaging.Abstractions.RgbaColor
 struct SimdImaging.Abstractions.SampleOptions
+struct SimdImaging.Processing.BandContext
 struct SimdImaging.Processing.ChannelRange
 struct SimdImaging.Processing.ChannelStatistics
 struct SimdImaging.Processing.ColorBalanceShifts

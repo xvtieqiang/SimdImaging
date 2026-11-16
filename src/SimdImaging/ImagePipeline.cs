@@ -120,6 +120,19 @@ public sealed class ImagePipeline
     /// <summary>3x3 median.</summary>
     public ImagePipeline Median3x3() => Step(PlanOps.Median3x3());
 
+    /// <summary>Convolution with an arbitrary odd kernel and any border mode.</summary>
+    /// <param name="kernel">Weights, row-major, <c>(2r+1)²</c> of them.</param>
+    /// <param name="radius">Kernel radius.</param>
+    /// <param name="border">How to read outside the image.</param>
+    /// <param name="bias">Added after the sum, in sample units.</param>
+    public ImagePipeline Convolve(ReadOnlySpan<float> kernel, int radius,
+        BorderMode border = BorderMode.Clamp, float bias = 0f, float constantValue = 0f) =>
+        Step(PlanOps.Convolve(kernel, radius, border, bias, constantValue));
+
+    /// <summary>Median with radius <paramref name="radius"/> (1 is 3×3, up to 8).</summary>
+    /// <param name="radius">Window radius.</param>
+    public ImagePipeline Median(int radius) => Step(PlanOps.Median(radius));
+
     /// <summary>3x3 erosion.</summary>
     public ImagePipeline Erode3x3() => Step(PlanOps.Erode3x3());
 
