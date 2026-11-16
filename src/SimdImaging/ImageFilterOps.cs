@@ -76,7 +76,9 @@ public sealed partial class Image
     /// <param name="kind">Erode or dilate.</param>
     /// <param name="pool">Where the destination is rented.</param>
     public Image Morph(int radius, Morphology kind, IPixelPool? pool = null) =>
-        ReplaceBuffer(FilterOps.Morph(this[0].Pixels.View, radius, kind == Morphology.Erode, pool));
+        kind is Morphology.Open or Morphology.Close or Morphology.TopHat or Morphology.BlackHat
+            ? ReplaceBuffer(FilterOps.MorphCombine(this[0].Pixels.View, radius, kind, pool))
+            : ReplaceBuffer(FilterOps.Morph(this[0].Pixels.View, radius, kind == Morphology.Erode, pool));
 
     /// <summary>Prewitt gradient magnitude of the luma.</summary>
     /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>

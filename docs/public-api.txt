@@ -90,8 +90,12 @@
   SimdImaging.Abstractions.MemoryEstimate.Workers : System.Int32 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.op_Equality(SimdImaging.Abstractions.MemoryEstimate left, SimdImaging.Abstractions.MemoryEstimate right) -> System.Boolean
   SimdImaging.Abstractions.MemoryEstimate.op_Inequality(SimdImaging.Abstractions.MemoryEstimate left, SimdImaging.Abstractions.MemoryEstimate right) -> System.Boolean
+  SimdImaging.Abstractions.Morphology.BlackHat = 5
+  SimdImaging.Abstractions.Morphology.Close = 3
   SimdImaging.Abstractions.Morphology.Dilate = 1
   SimdImaging.Abstractions.Morphology.Erode = 0
+  SimdImaging.Abstractions.Morphology.Open = 2
+  SimdImaging.Abstractions.Morphology.TopHat = 4
   SimdImaging.Abstractions.OpCategory.Composite = 5
   SimdImaging.Abstractions.OpCategory.Geometric = 3
   SimdImaging.Abstractions.OpCategory.Global = 4
@@ -650,6 +654,7 @@
   SimdImaging.Processing.FilterOps.Median(SimdImaging.Abstractions.PixelView source, System.Int32 radius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Median3x3(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Morph(SimdImaging.Abstractions.PixelView source, System.Int32 radius, System.Boolean minimum, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
+  SimdImaging.Processing.FilterOps.MorphCombine(SimdImaging.Abstractions.PixelView source, System.Int32 radius, SimdImaging.Abstractions.Morphology kind, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.MotionBlur(SimdImaging.Abstractions.PixelView source, System.Int32 length, System.Single angleDegrees, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Open3x3(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Pixelate(SimdImaging.Abstractions.PixelView source, System.Int32 blockSize, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer

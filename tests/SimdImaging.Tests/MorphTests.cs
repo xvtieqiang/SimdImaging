@@ -90,6 +90,53 @@ public class MorphTests
                 $"row {y} differs");
     }
 
+    /// <summary>
+    /// Opening and closing are compositions, so they must equal doing the two primitives by hand — byte for byte, no
+    /// tolerance, because every step is selection or a clamped subtraction.
+    /// </summary>
+    [Theory]
+    [InlineData(2, Morphology.Open)]
+    [InlineData(2, Morphology.Close)]
+    [InlineData(3, Morphology.Open)]
+    [InlineData(3, Morphology.Close)]
+    public void Combinations_MatchThePrimitivesByHand(int radius, Morphology kind)
+    {
+        using var image = Pattern();
+
+        using var first = image.Morph(radius, kind == Morphology.Open ? Morphology.Erode : Morphology.Dilate);
+        using var second = first.Morph(radius, kind == Morphology.Open ? Morphology.Dilate : Morphology.Erode);
+
+        using var combined = image.Morph(radius, kind);
+
+        combined.WritablePixels.ToArray().ShouldBe(second.WritablePixels.ToArray());
+    }
+
+    /// <summary>
+    /// Top-hat is what the opening removed: zero on a flat image, and the bright speck itself on a speckled one.
+    /// Black-hat is the mirror, so a bright speck leaves it at zero.
+    /// </summary>
+    [Fact]
+    public void Hats_FollowFromTheCombinations()
+    {
+        using var image = Image.Create(15, 15, WorkingFormat.Rgba8);
+        var span = image.WritablePixels;
+        for (var i = 0; i < span.Length; i += 4)
+        {
+            span[i] = span[i + 1] = span[i + 2] = 60;
+            span[i + 3] = 255;
+        }
+
+        var speck = ((7 * 15) + 7) * 4;
+        span[speck] = span[speck + 1] = span[speck + 2] = 200;
+
+        using var topHat = image.Morph(2, Morphology.TopHat);
+        using var blackHat = image.Morph(2, Morphology.BlackHat);
+
+        topHat.WritablePixels[speck].ShouldBe((byte)140, "the top-hat holds the speck the opening removed");
+        blackHat.WritablePixels[speck].ShouldBe((byte)0, "a bright speck leaves the black-hat empty");
+        topHat.WritablePixels[0].ShouldBe((byte)0, "a flat region has nothing to remove");
+    }
+
     /// <summary>Radius 1 keeps the 3×3 fast path, so the two must agree.</summary>
     [Fact]
     public void RadiusOne_MatchesTheThreeByThreePath()

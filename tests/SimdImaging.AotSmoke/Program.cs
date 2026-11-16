@@ -191,6 +191,14 @@ using (var llf = image.LocalLaplacian(levels: 3, samples: 8, alpha: 0.3f))
 using (var morph = image.Morph(3, Morphology.Erode))
     Console.WriteLine($"morph sha={Hash(morph.WritablePixels)}");
 
+// The combinations exist only by composition, so a trimming change that drops the second primitive would show up
+// here and nowhere else.
+using (var open = image.Morph(2, Morphology.Open))
+    Console.WriteLine($"morph.open sha={Hash(open.WritablePixels)}");
+
+using (var topHat = image.Morph(2, Morphology.TopHat))
+    Console.WriteLine($"morph.tophat sha={Hash(topHat.WritablePixels)}");
+
 using (var lap = image.Laplacian())
     Console.WriteLine($"laplacian sha={Hash(lap.WritablePixels)}");
 

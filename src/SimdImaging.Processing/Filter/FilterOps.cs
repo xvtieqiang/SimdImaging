@@ -1657,6 +1657,88 @@ public static class FilterOps
     }
 
     /// <summary>
+    /// Opening, closing, top-hat or black-hat: the four morphology combinations, each built from the two primitives.
+    /// </summary>
+    /// <remarks>
+    /// Composition rather than a fourth algorithm: opening is erosion then dilation, closing the reverse, and the two
+    /// hats are differences between the source and one of those. Every step is exact integer selection or a clamped
+    /// subtraction, so the result equals doing it by hand with <see cref="Morph"/>.
+    /// </remarks>
+    /// <param name="source">The pixels.</param>
+    /// <param name="radius">Window radius; 1 is 3×3.</param>
+    /// <param name="kind">Which combination.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The radius is not positive, or the kind is not a combination.</exception>
+    public static WorkingBuffer MorphCombine(PixelView source, int radius, Morphology kind, IPixelPool? pool = null)
+    {
+        switch (kind)
+        {
+            case Morphology.Open:
+            {
+                using var eroded = Morph(source, radius, true, null);
+                return Morph(eroded.View, radius, false, pool);
+            }
+
+            case Morphology.Close:
+            {
+                using var dilated = Morph(source, radius, false, null);
+                return Morph(dilated.View, radius, true, pool);
+            }
+
+            case Morphology.TopHat:
+            {
+                using var opened = MorphCombine(source, radius, Morphology.Open, null);
+                return Difference(source, opened.View, subtractOpened: true, pool);
+            }
+
+            case Morphology.BlackHat:
+            {
+                using var closed = MorphCombine(source, radius, Morphology.Close, null);
+                return Difference(source, closed.View, subtractOpened: false, pool);
+            }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, "Not a morphology combination.");
+        }
+    }
+
+    /// <summary>Per-channel clamped difference: source − opened, or closed − source.</summary>
+    private static WorkingBuffer Difference(PixelView source, PixelView other, bool subtractOpened, IPixelPool? pool)
+    {
+        var width = source.Width;
+        var destination = WorkingBuffer.Rent(width, source.Height, source.Format, pool);
+
+        RowParallel.For(width, source.Height, (start, end) =>
+        {
+            var left = new float[width * 4];
+            var right = new float[width * 4];
+            var output = new float[width * 4];
+
+            for (var y = start; y < end; y++)
+            {
+                Pixels.ReadRowRaw(source.Row(y), width, source.Format, left);
+                Pixels.ReadRowRaw(other.Row(y), width, source.Format, right);
+
+                for (var i = 0; i < width * 4; i += 4)
+                {
+                    for (var c = 0; c < 3; c++)
+                    {
+                        output[i + c] = subtractOpened
+                            ? MathF.Max(0f, left[i + c] - right[i + c])
+                            : MathF.Max(0f, right[i + c] - left[i + c]);
+                    }
+
+                    output[i + 3] = left[i + 3];
+                }
+
+                Pixels.WriteRowRaw(output, width, source.Format, destination.View.Row(y));
+            }
+        });
+
+        return destination;
+    }
+
+    /// <summary>
     /// One separable pass: sliding minimum or maximum along each row, edges replicated, by van Herk and Gil-Werman.
     /// </summary>
     /// <remarks>
