@@ -316,7 +316,7 @@ async function runCompare() {
       ? `<figure><figcaption>${escapeHtml(x.title)}</figcaption>
            <div class="err">${escapeHtml(x.error)}</div></figure>`
       : `<figure>
-           <figcaption>${escapeHtml(x.title)} · ${x.steps} 步 · ${f(x.ms, 0)} ms</figcaption>
+           <figcaption>${escapeHtml(x.title)} · ${f(x.ms, 0)} ms</figcaption>
            <img src="/api/output/${x.outputId}" alt="">
          </figure>`).join('');
 
@@ -642,40 +642,22 @@ function show(j) {
   appendRow(state.op, j);
 }
 
-/// The chain view. Every thumbnail here is a real step output captured by the plan's observer, not a
-/// reconstruction — which is the whole point: when step 3 is where the shadows crush, it is visible instead
-/// of having to be inferred from the final frame.
+/// The chain view. One picture: a recipe is a pipeline now, so there are no per-step outputs to show — the
+/// chain runs as one plan and returns its result. Timing and parameters are what the bench adds on top.
 function showChain(j) {
-  const steps = j.steps || [];
-  const final = steps[steps.length - 1];
-
   $('#stage').innerHTML = `<div class="pair">
       <figure><figcaption>原图</figcaption><img src="/api/source/${state.image.id}" alt=""></figure>
-      <figure><figcaption>结果 · ${j.title}</figcaption><img id="chainBig" src="/api/output/${final.outputId}" alt=""></figure>
+      <figure><figcaption>结果 · ${j.title}</figcaption><img src="/api/output/${j.outputId}" alt=""></figure>
     </div>`;
-
-  const rows = steps.map((s, i) => {
-    const last = i === steps.length - 1;
-    return `<div class="step" data-id="${s.outputId}">
-      <img src="/api/output/${s.outputId}" alt="">
-      <span class="sname">${last ? s.name : `${i + 1}. ${s.name}`}</span>
-      <span class="smeta">${s.category}${last ? '' : ' · ' + f(s.ms, 2) + ' ms'}</span>
-    </div>`;
-  }).join('');
 
   const params = Object.entries(j.parameters || {}).map(([k, v]) => `${k}=${v}`).join(' ');
   $('#result').innerHTML = `
-    <div class="kv"><span>链路</span><span>${steps.length - 1} 步 · ${j.width} × ${j.height}</span></div>
+    <div class="kv"><span>尺寸</span><span>${j.width} × ${j.height}</span></div>
     <div class="kv"><span>总耗时</span><span class="big">${f(j.totalMs, 2)} ms</span></div>
     <div class="kv"><span>分配</span><span>${f(j.allocKiB, 0)} KiB</span></div>
     <div class="kv"><span>工作集</span><span>${f(j.workingSetMiB, 1)} MiB</span></div>
     ${params ? `<div class="kv"><span>参数</span><span>${params}</span></div>` : ''}
-    <p class="hint" style="margin:10px 0 0">点任意一步在左侧看大图。步内耗时是单次观测、且紧挨着 PNG 编码，
-      只用来看"时间花在哪"；总耗时才是七次采样取最快的结果。</p>
-    <div class="steps">${rows}</div>`;
-
-  for (const el of document.querySelectorAll('.step'))
-    el.onclick = () => { $('#chainBig').src = `/api/output/${el.dataset.id}`; };
+    <p class="hint" style="margin:10px 0 0">整条配方一次执行：两步预热后取七次里最快的一次。</p>`;
 
   appendRow({ title: j.title }, {
     parameters: j.parameters, oursMs: j.totalMs, oursAllocKiB: j.allocKiB,
