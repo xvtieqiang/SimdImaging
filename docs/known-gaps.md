@@ -1,6 +1,6 @@
 # Known gaps
 
-> **文档口径（2026-11-07 清理）**：本目录只保留四份——`architecture.md`（设计）、`operators.md`（算子表）、`known-gaps.md`（本账本）、`compare-4.1.3-2026-11-07.md`（对外结果）；`audit-2026-11-07.md` 是最近一轮独立复审。11-07 之前的全部过程文档（11 份 + 2 份一次性调研）已打包进 `_archive-before-2026-11-07.tar.gz`，**正文里指向它们的链接现在会失效**，需要时从压缩包取。
+> **文档口径（2026-11-07 清理）**：本目录只保留四份——`architecture.md`（设计）、`operators.md`（算子表与流水线判据）、`known-gaps.md`（本账本）、`measurements.md`（实测结果）。11-07 之前的全部过程文档（11 份 + 2 份一次性调研）已打包进 `_archive-before-2026-11-07.tar.gz`，**正文里指向它们的链接现在会失效**，需要时从压缩包取。
 
 有意不做、做到什么程度、以及对标里"少"的部分。仿 SimdCodecs 的同名文档：这里只写事实与原因，不写"后续支持"。
 
@@ -169,10 +169,71 @@
 「连续点算子走 `ProcessingPlan` 单遍执行」，`Run` 却是纯顺序循环，**注释与代码不符**。
 现在只有 `Image.Pipe()`（返回新图）与 `Image.Mutate(p => …)`（原地），后者接收同一个 `ImagePipeline` 类型。
 
-**计划融合在随机链上不等价（2026-11-16 发现，未修）**：把随机链的算子表从 5 个手挑的扩到 **17 个（参数也随机）**
-之后，40 条链里有 **8 条**在 `ProcessingPlan` 下与「逐次调用」**字节不一致**；`bandRows=4` 时**单独一步 `Sharpen`**
-就能复现，首个差异在**第 8 行**——正是第二、三带的接缝，指向 halo 行没被取够。`bandRows=1` 下不含邻域步的链也在
-**第一个像素**就分叉，所以接缝不是唯一位置。
+**去雾在真实图片上暴露的两处失效（2026-11-16，已修，附证据）**：合成雾测试全绿之后拿 5 张真实照片跑，两处立刻现形：
+
+| 症状 | 根因 | 处理 |
+|---|---|---|
+| 深色物体周围一圈**白边光晕** | 用**盒式平滑**细化透射率，背景的低透射率越过轮廓漏到物体上，物体被除以不属于它的 t | 改为**导向滤波**（guide = 雾图 luma，5 次盒均值求 a/b）——论文本来就是这么做的 |
+| 明亮平坦的**天空变成彩色噪点** | 天空暗通道高 → 先验判定「几乎无透射」→ 除以 t0=0.1，**10 倍增益放大 8 位梯度** | 加**天空保护**：暗通道 > 0.70 的像素透射率不低于 0.6（放大限制在 ~1.7×） |
+
+两条判据都进了测试（`BrightSky_IsNotAmplified`），修完 `cc0-architecture` 的天空干净、轮廓清晰。
+
+**已知限制：对没有雾的图用去雾会破坏暗部。** `J=(I−A)/t+A` 是围绕大气光**扩张对比**，t<1 时暗的会更暗——
+这不是 bug，是公式。样例 `photo-mist.jpg` 是一张刻意低饱和的青调照片（本身无雾），去雾后暗部被压、颜色变艳，
+属于**用错工具**，不是算子错。真正需要去雾的输入是低对比、有灰白幕的图像。
+
+**曝光融合的域选择（2026-11-16，已按论文实现）**：初版只做逐像素加权混合，接缝处会出现可见台阶——那版**没有提交**，重做成
+Laplacian 金字塔混合：每帧解交织成 4 个通道平面建 Laplacian 金字塔，权重建 Gaussian 金字塔，逐层加权后 collapse。
+通道串行处理把峰值压到一个通道的金字塔（全通道并行要 ×4）。
+
+**接缝实测**：构造「两帧各自平滑、只有胜者切换」的场景，胜者边界处相邻像素最大台阶 **37 级**；同样场景下逐像素混合
+的台阶是两帧在该处的差值 **~153 级**。这是本算子「金字塔有没有起作用」的唯一判据，写在
+`ExposureFusionTests.WinnerChangesWithoutAStep` 里。
+
+**同一轮修掉的性能缺陷**：初版在 `for x` 循环内调用 `Pixels.ReadRowRaw`，每行被转换 `width × 帧数` 次——1080p 三帧
+实测 **29.6 s**。把行读提到 x 循环外后 **186 ms（159×）**。`MathF.Pow` 也曾被怀疑，实测只占很小一部分。
+
+**计划级内存预算与算子工作集（2026-11-16 审查后修）**：审查指出「`MaxWorkingBytes` 根本不统计算子 Scratch」——属实，
+且比描述更彻底：`ProcessingPlan.EstimateWorkingBytes` 全函数**没有一处引用 `PlanStep.Scratch`**，而
+`MemoryEstimator.Estimate` 是另一套公式、确实会读。同一件事两个数，且执行器用错的那个。
+
+同轮核实与处理：
+
+| 审查项 | 核实 | 处理 |
+|---|---|---|
+| 预算忽略 operator scratch | **属实**（`ProcessingPlan.cs` 旧 `EstimateWorkingBytes`） | 删掉私有公式，执行器改用 `MemoryEstimator`，**只保留一套** |
+| 未声明被当成 0 静默放行 | **属实**（公共路径 `PlanOps` 从不声明） | 新增 `ExecuteOptions.AllowUnestimatedScratch`，默认 `false`：有上限但步骤未声明时**明确抛出**，消息里给出步数 |
+| `PlanOps` 不传 Scratch | 属实（`ImageOp` 连字段都没有） | `ImageOp` 增加 `Scratch`（签名 `(width, height, rows, format)`，能表达整图项）；**22 个工厂全部声明**，唯一例外 `LocalLaplacian` 由测试按名字钉住 |
+| 单步 Neighborhood 估算按整图 | **属实且方向是高估**：执行器只看 category，不看步数 | 改为「非 Global/Composite 一律按带高 + halo」 |
+| Global 的 scratch 乘 worker | **属实且是高估**：Global 在调用线程整图跑一次 | 拆成 `PerWorkerBytes`（× workers）与 `WholeImageScratchBytes`（× 1），`PeakBytes = max` 语义 |
+| 测试注释「单步整图」与实现矛盾 | 属实 | 测试改为按带高断言，并新增「未声明即拒绝」用例 |
+
+**声明来自读代码**，每条都附了推导（`GuidedFilter` 是「band+4r 行 × 5 张平面 + 整图副本」，`NLM` 是「行环 + 6 个
+宽度数组」，`CLAHE` 是「tile 数 × 3 通道 × 256 桶」）。`Point` 声明 **0** 而不是留空——**零是声明，空是承认不知道**。
+
+**仍未做**：逐算子的**活动容量实测**（`new[]` / `ArrayPool` / `FloatScratch` 分开统计峰值）。当前声明是静态推导，
+有两条已知偏差：`ArrayPool.Rent` 可能返回更长的数组（未建模）、`FloatScratch` 的复用让「租用」与「常驻」不同。
+`CountingPool` 只看得见 `IPixelPool` 的租用，这条边界没有变。`LocalLaplacian` 无声明（金字塔尺寸依赖层数与
+采样网格，且自带 2 GiB 上限），含它的计划设上限时会被拒绝。
+
+**计划融合的随机链等价性（2026-11-16 发现，同日结案）**：把随机链的算子表从 5 个手挑的扩到 17 个（参数也随机）后，
+40 条链里有 8 条与逐步执行**字节不一致**。查下去，**两处原因都在调用方的 halo 声明，不在执行器**：
+
+1. **`Sharpen` 是模糊型锐化**（内部 `GaussianBlur(σ=1)`），支撑是 `ceil(3σ)=3` 行，不是 3×3 卷积的 1 行；
+2. **`Pixelate` 块对齐**，带边界可切在块中间，**任何常数 halo 都表达不了**，只能声明 `Global`。
+
+改完这两条声明即全部一致。**这个缺陷条目一度写成「未修」并让两个用例 `Skip`，是过时的**——现在的状态是：
+
+| 用例 | 覆盖 | 状态 |
+|---|---|---|
+| `RandomChains_MatchStepByStep` | **3 种格式 × 4 种带高 × 4 种并行度 × 25 条 = 300 条随机链** | 通过 |
+| `GlobalAndNeighbourhoodSteps_Mix` | 整图步与邻域步混排 + 跨带接缝，三格式 | 通过 |
+| `ASingleSharpenStep_MatchesTheWholeImage` | 单步 `Sharpen` + 带接缝 | 通过 |
+
+同一轮扩展还**揪出一个真 bug**：`Histogram` 只钳了上界，`Rgba32F` 经对比度类算子后可产生负值 → 负索引 →
+`IndexOutOfRangeException`（`Equalize` 在浮点图上直接崩）。已改为两端钳制。
+
+教训：**「算子表够宽」这件事只能靠扩表证明**。5 个算子的 160 条链全绿，只值它样本的价值。
 
 **之前用 5 个算子跑过 160 条链全绿——那个结果只值它样本的价值**：它验证的是生成器恰好抽到的形状。扩展算子表
 才把其余部分暴露出来，这正是 `FusedChainPropertyTests` 现在改为记录缺陷而不是证明的原因（两个用例 `Skip`，
@@ -263,7 +324,7 @@ gather（LL、ICC CLUT）。它们不是"没来得及写"，是**按现有契约
 而改累加结构就要承认输出变化、重跑全部黄金与三档矩阵。这是一次独立的、有风险的重构，不能顺手做。
 
 **第四档（AVX-512）**：`PlanarConvolve` 的三个循环已有 `Vector512` 路径（2026-11-15）。本机无硬件，
-正确性用 `Vector512<T>` 的软件实现验证（与标量/256 逐字节相同），吞吐仍无数据——见 `simd-tiers-evaluation.md`。
+正确性用 `Vector512<T>` 的软件实现验证（与标量/256 逐字节相同），吞吐仍无数据——见下节评估记录。
 
 ## M5 验收（完成，2026-11-15）
 
@@ -330,7 +391,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 |---|---|
 | 入口形态 | `NonLocalMeansOps.NonLocalMeans` + `Image.NonLocalMeans`；`LocalLaplacianOps.LocalLaplacian` + `Image.LocalLaplacian`。NLM 是 `OpCategory.Neighborhood`（halo = `searchRadius + patchRadius`），可切带、可融合；LL 是 `Global`（整幅金字塔），必为融合段边界，`PlanReport.FallbackReason = CategoryBoundary` 有断言 |
 | NLM 契约 | 精确、无剪枝：候选 dy→dx 升序，double 累加，`(float)(acc/sumW)` 一次截断；`w = exp(−max(d²_norm − 2σ², 0)/h²)`，`d²_norm` 已按 code range 平方归一（否则同一 `h` 在不同位深表示不同强度）；straight alpha，alpha 参与距离与平均（与 `Bilateral` 同一条取舍）。Rgba8 用 int32 整数距离（可结合 ⇒ AVX2 与标量同值，有孪生测试）；Rgba16 用 long（int32 在 65535² 就溢出）；Rgba32F 用 double 冻结序 |
-| NLM 成本 | 1080p Rgba8 实测：默认 **S=3/P=1 5.8 s**，质量档 **S=5/P=2 16.1 s**（本机 best-of-1 一次预热）。默认值按实测从计划的 S=5/P=2 下调——计划里「SIMD 后 0.7–1.2 s」的估计低了 13×。SIMD 化 SSD 后 **exp 是地板**（每候选一次 `Math.Exp`，~2.5e8 次/1080p），整数 d² 的 memo 对噪声图命中率低，未做；剪枝不做（会改变结果） |
+| NLM 成本 | 1080p Rgba8 实测：改动前默认 **S=3/P=1 6.7 s**、质量档 **S=5/P=2 19.8 s**；**滚动列和 SSD 落地后 867 ms / 2372 ms（7.7× / 8.4×）**，与逐 tap 路径逐字节一致（`RollingSsdMatchesPerTap_ByteForByte`）。同一轮还修了 `RowParallel.For(0, height, …)` 首参传 0 导致**只跑单线程**——那 6.7 s 里有一半是没用上多核。消融见 `benchmarks/README.md`：整段 patch 扫描占 **78.7%**、`exp` 19%、访存 10.6%、无 `sqrt`。**剪枝仍不做**（会改变结果） |
 | NLM 的 halo 前提 | 可切带依赖四条同时成立：整幅宽视图、对**自己收到的视图** clamp、无整图统计、行环按 `start−(S+P)` 播种。第四条照 `Bilateral` 的 `computed = start - 1` 写必错，`3×3 图 + S=5` 的用例专门守它 |
 | LL 契约 | Paris remap（`α=β=1` 为恒等）；**按层选样**（第 l 层用输入 G 金字塔第 l 层的强度挑最近样本，用全分辨率选样会让粗层选错、出阶梯）；**基带用原始 G_{L-1}**，不是 remap 后的残差——否则常数图会被最近的采样强度拖走；8/16-bit 用按 code value 索引的每样本表（与直算逐字节一致，有 `ForceDirectRemap` 对拍），Rgba32F 逐像素 `Math.Pow`；层原生存储 |
 | LL 增益与量测 | 细节增益由「采样间距 / σr」决定：默认 32 样本、σr=0.15、α=0.3 实测 **1.5×** 纹波放大（`BoostsLocalContrastWithoutMovingTheMean` 的阈值按此定 1.3×）。**未做样本间线性插值**——它能把量化台阶抹平，但不会显著提高斜率；提高增益的现实手段是加 `samples` 或降 `σr`，两者都写在 xmldoc |
@@ -355,7 +416,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 | **增量能量更新：实测否决（2026-11-16 重新量过）** | 旧理由说「受影响列无上界」。那个论证只对「按当前坐标存能量」成立，**不能作为否决依据**。真正的否决依据是消融数字：把 `Energy()` 整个短路（标量与 `WriteRow4` 两处都短路，只测时间，字节必然变）后，1080p 删 50 列的 `FindSeam` 从 **400.5 → 331.4 ms**——能量只占 `FindSeam` 的 **17%**、总时长的 **14%**。即使缓存命中率 100%，也拿不到两成，而增量实现还要付映射 gather 的代价。**瓶颈是 DP 递推本身**（O(W·H)，已 4-lane 向量化），不是能量。详见 `docs/measurements.md` 的 seamprofile 一节 |
 | ⚠ RL 的 halo 随迭代增长 | RL 作为计划步时支撑是 `iterations × PSF 半径`，不是 PSF 半径：第 2 次迭代的估计依赖第 1 次在 ±r 内的结果，逐次外扩。声明成一个半径时，融合/逐步两条路径都对（它们用同样的窗口），但 band 边界会比整图调用差 1 LSB——`RunningAsAPlanStep_MatchesTheWholeImageCall` 是唯一能抓到的测试，`RequiredHalo` / `RequiredHaloMotion` 是给调用方的正确值 |
 | Seam **不是** plan step | 它改变尺寸，与 `Crop`/`Resize` 同类，不进 `ProcessingPlan`（plan 按 `width×height` 租缓冲）。`operators.md` 有 GEO-4 与 GEO-21 的逐条对照，防再次混淆 |
-| FFT 反卷积 | **评估后不落地**，见 [`fft-evaluation.md`](fft-evaluation.md)：1080p 补零 2048² 每次迭代 4 次变换 ≈1.84 GFLOP，是直接卷积（9.1e7）的 20×；交叉点 σ≈18 px；且蝶形顺序随档位变，D1 只能靠冻结标量 FFT，正好抵消优势 |
+| FFT 反卷积 | **评估后不落地**，见 评估记录（见下节）：1080p 补零 2048² 每次迭代 4 次变换 ≈1.84 GFLOP，是直接卷积（9.1e7）的 20×；交叉点 σ≈18 px；且蝶形顺序随档位变，D1 只能靠冻结标量 FFT，正好抵消优势 |
 | ⚠ `MaxWorkingBytes` 盲区 | 与 M11 同一条：`EstimateWorkingBytes` 只算 plan 自己的缓冲，看不到 RL 的 95 MiB 平面。**M14 起可用**：`RichardsonLucyOps.ScratchBytes` 是声明函数，`plan.Add("rl", …, scratch: RichardsonLucyOps.ScratchBytes)` 之后 `MemoryEstimator` 会把它算进每 worker 项（1080p 单步计划 = 48 B/px × workers）；不声明则仍然报 `HasEstimatedTerms = false`，不假装知道 |
 
 ## M13 HDR GainMap 与 ICC LUT（完成，2026-11-14）
@@ -422,7 +483,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 | 实测（1080p，8px 棋盘蒙版，分配 45 KiB） | 分块前 **43.1 ms**（43.6 / 42.6），分块后 **40.6 ms**（39.5 / 40.7 / 40.8 / 41.8 / 40.1 五跑）—— **−5.8%**。仍留 `null`：更早那对 **41.0 / 49.9**（+21.7%）就是「门槛会被自己的实测打穿」的反例 |
 | 分块转置（已做，收益有限） | 列遍改为 64 列、列主序 tile：源行一次读 256 B 而不是每元素一条缓存行，tile 的 64 条目标行跨行驻留 L1，扫描在 L2 里跑（1080p 276 KB）。**只值 5.8%** ⇒ 瓶颈不在访存，而在两遍 1-D 扫描本身：每样本一次除法（`Intersection`）加数据相关的回溯 / 前进分支，串行依赖，SIMD 无从下手。此前「列方向跨整行访问是主要成本」是推断，已被这次 A/B 推翻 |
 | 高窄图越界（已修，P0） | `height > width` 时列遍把 `height` 个样本写进按 `width` 租的 scratch，直接 `IndexOutOfRangeException`；此前所有用例都是宽 ≥ 高（5×1、9×7、64×48……），从未覆盖。修复 = scratch 取 `max(width, height)` + 列遍不再借用行缓冲；`ATallImageIsTransformedColumnByColumn`（3×40）修复前确实抛，现钉住 |
-| 同批（2026-11-14） | ①**cross guided filter 已补**：`GuidedFilterOps.GuidedFilter(source, guide, ...)` 与门面 `Image.GuidedFilter(guide, ...)`，`a = cov(I,G)/(var(G)+eps)`、`b = mean(I) − a·mean(G)`；guide 与 source 是同一块内存时回落自导向老路径（逐字节相同，`GuidedFilterTests` 5 例钉住，含 window 参考对拍）。4K r=4 实测 **774 ms / 分配 17 MB**（自导向同次 582 ms / 10.7 MB）。②**domain transform 已评估、不落地**：`docs/domain-transform-evaluation.md`（54 个平面遍 + 每像素 18 次 exp，卖点已被箱均值 O(1)/px 覆盖） |
+| 同批（2026-11-14） | ①**cross guided filter 已补**：`GuidedFilterOps.GuidedFilter(source, guide, ...)` 与门面 `Image.GuidedFilter(guide, ...)`，`a = cov(I,G)/(var(G)+eps)`、`b = mean(I) − a·mean(G)`；guide 与 source 是同一块内存时回落自导向老路径（逐字节相同，`GuidedFilterTests` 5 例钉住，含 window 参考对拍）。4K r=4 实测 **774 ms / 分配 17 MB**（自导向同次 582 ms / 10.7 MB）。②**domain transform 已评估、不落地**：下节评估记录（54 个平面遍 + 每像素 18 次 exp，卖点已被箱均值 O(1)/px 覆盖） |
 | 口径 | `operators.md` 记 `ANL-9`、总数 119；`docs/contracts.md` 30 条；M15 基线已重录：`guided.cross` 设 15% 门槛（两跑 2.4%），`dt` 在文件里但留 `null` |
 
 ## P0 正确性与采样精度（M7，2026-11-14）
@@ -557,7 +618,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 
 | 项 | 边界 |
 |---|---|
-| COL-30 IccTransform | RGB 的 **matrix/TRC 与 LUT 型都支持**：`mft1` / `mft2` / `mAB` / `mBA` 的 `A2B0` / `B2A0`，PCS 为 XYZ 或 Lab，1D 预整形 + 3D CLUT 四面体 + 输出 1D。仍拒绝：非 RGB 设备空间（CMYK / 灰度 / Lab）、`mft1` + PCSXYZ（规范本身未定义 8 位 XYZ）、只有 Intent 1/2 的 profile、`mft` 的非恒等矩阵。边界与数值契约见 [`icc-boundary-decision.md`](icc-boundary-decision.md) |
+| COL-30 IccTransform | RGB 的 **matrix/TRC 与 LUT 型都支持**：`mft1` / `mft2` / `mAB` / `mBA` 的 `A2B0` / `B2A0`，PCS 为 XYZ 或 Lab，1D 预整形 + 3D CLUT 四面体 + 输出 1D。仍拒绝：非 RGB 设备空间（CMYK / 灰度 / Lab）、`mft1` + PCSXYZ（规范本身未定义 8 位 XYZ）、只有 Intent 1/2 的 profile、`mft` 的非恒等矩阵。边界与数值契约见 评估记录（见下节） |
 | 多帧保存 | `Save` / `Encode` 对 `FrameCount > 1` 抛 `NotSupportedException`，而不是只写第 0 帧。要导出动画得先 `KeepFrames` 选一帧 |
 | 多帧解码路径 | 静图仍走零拷贝 span 路径；多帧需要会话持有数据，会先 `ToArray()` 复制一次 |
 | IO-8 Thumbnail | 没有 DCT 域下推（JPEG 1/8 缩放），缩略图来自解码器内置预览或整图缩放 |
@@ -574,9 +635,9 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 | 文字 | ImageSharp 靠 `SixLabors.Fonts`；我们不做 |
 | 重采样器 | ~~只实现 5 种~~ **2026-11-15 补齐**：16 个成员 / 15 个核，覆盖 4.1.3 全部 15 个 `KnownResamplers` 名称（实测反射是 15 个，此前写 16 是错的）。数值各自实现、不逐位对齐，属 B2 口径 |
 | Brightness 参数语义 | 本库**自有设计**是加性偏移（0.2 = +0.2×满量程）；参照实现同名 API 是另一套语义，同参数对拍 PSNR 仅 **4.23 dB**。这是功能对比时发现的「名称相同、语义不同」事实，**不是缺陷**：本项目按自己的语义文档使用，**不为兼容其他项目改 API、不提供兼容模式/兼容参数**。对标表必须写出口径，不得据同名宣称覆盖 |
-| 4.1.3 同进程 A/B | 已解决：`docs/sixlabors.lic` 在位，对比工程通过 `SixLaborsLicenseFile` 按路径引用，Release 构建与 4.1.3 黑盒 A/B 均已跑通（见 `docs/compare-4.1.3-2026-11-06.md` 与 `docs/optimization-4.1.3-2026-11-06.md`） |
+| 4.1.3 同进程 A/B | 已解决：`docs/sixlabors.lic` 在位，对比工程通过 `SixLaborsLicenseFile` 按路径引用，Release 构建与 4.1.3 黑盒 A/B 均已跑通（数字见 `docs/measurements.md`） |
 
-## 审计确认的缺口（2026-11-06，`audit-2026-11-06.md` 核对结果）
+## 独立审计确认的缺口（2026-11-06）
 
 | 项 | 事实 | 状态 |
 |---|---|---|
@@ -1113,3 +1174,16 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 以及最根本的一条：**不需要那个许可**。
 
 ⚠ 清单里 B2 是迁移事故的高发区——编译能过、图看着差不多、但数值不同。它比 B1 的编译错误贵得多。
+
+## 评估记录（原独立文档，2026-11-16 并入）
+
+> 这些方向做过评估、结论是否决或限定，删掉了独立文档以免与代码漂移；原始推理在提交历史里。
+
+| 方向 | 结论 |
+|---|---|
+| **FFT / 频域处理** | 不落地。整条流水线（填充、变换、点乘、逆变换）比空域更慢，且多一层浮点误差 |
+| **域变换（Domain Transform）** | 不落地。保边滤波的质量/成本比不如已有的 guided 与双边，且边缘停止判据要额外调参 |
+| **AVX-512** | 已在 `PlanarConvolve` 实现并用 `ForceVector512` 在软件模拟下验正确性（与标量/256 逐字节一致）；**无硬件可测吞吐**，故不宣称速度 |
+| **LUT 实验（点算子向量化）** | 不做。字节域查表已领先对手 1.4–4×，向量化只加风险 |
+| **ICC 边界** | 只做 matrix/TRC 与 RGB LUT 型 profile；非 RGB 设备空间仍是缺口 |
+| **ICC 同图对拍** | **确认不可行（2026-11-16）**：ImageSharp 4.1.3 的 profile→profile 转换在 `ColorProfileConverterExtensionsIcc`，反射显示 `public=False`，而本仓库只比对公开面。改为**自洽验证**（`benchmarks ... icc`）：恒等 ΔE **0.000**、sRGB→P3→sRGB 往返最大 ΔE **0.654**、中性轴 **0.000**，素材是 CC0 的 Compact ICC Profiles |

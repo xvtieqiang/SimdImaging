@@ -12,8 +12,8 @@
 
 | 方向 | 目标 | 现状 |
 |---|---|---|
-| **1. 基础图像处理** | 性能、精度、完整性超过普通 .NET 图片库 | 119 个算子、三工作格式、**16 个重采样器**（15 个核，`Triangle`≡`Bilinear`、`CatmullRom`≡`Bicubic`；见 `docs/operators.md`）；Resize 4K→1080p 比 ImageSharp 快 1.8–2.3×（同参数对拍） |
-| **2. 高级计算摄影** | 去模糊、去噪、去雾、HDR、多帧融合、频域处理 | 去模糊（Richardson-Lucy 高斯/运动 PSF）、去噪（NLM / 局部拉普拉斯 / 双边 / 导向）、HDR（5 种色调映射 + 增益图 + Ultra HDR 读写）、去雾与多帧融合**未做**、频域处理**评估后不落地**（`docs/fft-evaluation.md`） |
+| **1. 基础图像处理** | 性能、精度、完整性超过普通 .NET 图片库 | 算子清单见 `docs/operators.md`、三工作格式、**16 个重采样器**（15 个核，`Triangle`≡`Bilinear`、`CatmullRom`≡`Bicubic`；见 `docs/operators.md`）；Resize 4K→1080p 比 ImageSharp 快 1.8–2.3×（同参数对拍） |
+| **2. 高级计算摄影** | 去模糊、去噪、去雾、HDR、多帧融合、频域处理 | 去模糊（Richardson-Lucy 高斯/运动 PSF）、去噪（NLM / 局部拉普拉斯 / 双边 / 导向）、HDR（5 种色调映射 + 增益图 + Ultra HDR 读写）、去雾（暗通道先验，1080p 187 ms；FLT-24）、多帧曝光融合（Laplacian 金字塔混合，1080p×3 593 ms；FLT-25）、频域处理**评估后不落地**（评估记录见 `docs/known-gaps.md`） |
 | **3. 计算架构** | 纯托管 SIMD、融合执行、内存预算、NativeAOT | 纯托管零原生依赖；三档 SIMD 逐字节一致，AVX-512 已进卷积内核；`ProcessingPlan` 分段融合；`MemoryBudget` + `MemoryEstimator`；NativeAOT 作为构建门禁 |
 | **4. 图像数据保真** | 16-bit、32-bit float、HDR、Alpha、色彩管理 | 全链路 Rgba16 不塌 8 位；Rgba32F 的 HDR>1 不钳位；直通 alpha 与预乘语义分离；ICC matrix/TRC **与 RGB LUT** + CIEDE2000 |
 
@@ -84,7 +84,7 @@ using var edited = photo.Pipe()
 
 个别算子需要整图（`Vignette`、`CLAHE`、`LocalLaplacian`、`Normalize`、`AdaptiveThreshold`、`Pixelate`），
 链会把它们当独立一段整体执行——**写法不变**，代价是该步多一张中间图（和直接调用它一样）。
-逐条判定与原因见 [`docs/pipeline-coverage.md`](docs/pipeline-coverage.md)。
+逐条判定与原因见 [`docs/operators.md`](docs/operators.md)。
 
 ### 需要控制解码 / 编码时
 
@@ -140,13 +140,15 @@ photo.Mutate(p => p.Resize(800, 600).Saturation(1.2f));
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | 分层、与 SimdCodecs 的边界、缓冲抽象、SIMD 策略、AOT、测试与基准方法、里程碑、风险 |
-| [`docs/operators.md`](docs/operators.md) | 119 个算子的完整清单（语义 / 实现策略 / 确定性 / 阶段）+ ImageSharp 功能对标 |
-| [`docs/pipeline-coverage.md`](docs/pipeline-coverage.md) | 哪些算子能进链、halo 从哪来、哪些需要整图 |
-| [`docs/measurements.md`](docs/measurements.md) | 各基准模式的结论与关键数字（按主题分组） |
-| [`docs/report-2026-11-16.md`](docs/report-2026-11-16.md) | 2026-11-16 的改动与实测数字（含负结论） |
-| [`benchmarks/README.md`](benchmarks/README.md) | 基准怎么跑：模式清单、计时口径、结果在哪 |
-| [`docs/known-gaps.md`](docs/known-gaps.md) | 未达标项、已否决方向、测量方法论 |
+| [`docs/architecture.md`](docs/architecture.md) | 分层、边界、SIMD 策略、AOT、里程碑 |
+| [`docs/operators.md`](docs/operators.md) | 算子清单 + 进不进流水线的判据 |
+| [`docs/known-gaps.md`](docs/known-gaps.md) | 未达标项、已否决方向、评估记录、方法论 |
+| [`docs/measurements.md`](docs/measurements.md) | 各基准模式的结论与数字 |
+| [`docs/contracts.md`](docs/contracts.md) | 对外契约 |
+| [`benchmarks/README.md`](benchmarks/README.md) | 基准怎么跑 |
+
+> 2026-11-16 合并：原 `pipeline-coverage` 并入 `operators`，日期类报告（`report-*`、`roadmap-*`）与六份评估文档
+> 并入 `known-gaps` 的「评估记录」。**文档只保留现状，过程进提交历史**——两份东西写同一件事，早晚对不齐。
 
 ## 一句话设计
 

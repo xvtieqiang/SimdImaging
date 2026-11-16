@@ -187,6 +187,15 @@ using (var nlm = image.NonLocalMeans(2, 1, 0.15f))
 using (var llf = image.LocalLaplacian(levels: 3, samples: 8, alpha: 0.3f))
     Console.WriteLine($"ll sha={Hash(llf.WritablePixels)}");
 
+// Dehazing and exposure fusion: both go through code paths the other operators do not - a guided filter driven by
+// a luma guide, and a Laplacian pyramid whose levels are rebuilt per channel - so neither is covered by the
+// operators above. Without a hash here, "AOT is a first-class citizen" would not be true of them.
+using (var dh = image.Dehaze(patchRadius: 4, omega: 0.95f, tMin: 0.1f, refineRadius: 6))
+    Console.WriteLine($"dehaze sha={Hash(dh.WritablePixels)}");
+
+using (var fuse = Image.FuseExposures([image, image]))
+    Console.WriteLine($"fusion sha={Hash(fuse.WritablePixels)}");
+
 // M12: deconvolution (separable and sparse kernels through PlanarConvolve) and seam carving (integer DP
 // path selection, then pixel moves through the lossless transpose for the horizontal axis).
 using (var rl = image.RichardsonLucy(1.2f, 3))

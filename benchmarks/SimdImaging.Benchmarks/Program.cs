@@ -181,6 +181,18 @@ Measure("nlm 1080p S=5 P=2 h=0.1", () =>
     return result.Width * result.Height;
 });
 
+Measure("fusion 1080p x3", () =>
+{
+    using var result = Image.FuseExposures([half, half, half]);
+    return result.Width * result.Height;
+});
+
+Measure("dehaze 1080p r=7 refine=20", () =>
+{
+    using var result = half.Dehaze();
+    return result.Width * result.Height;
+});
+
 Measure("ll 1080p L=5 S=32", () =>
 {
     using var result = half.LocalLaplacian();

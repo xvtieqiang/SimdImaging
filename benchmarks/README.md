@@ -42,6 +42,8 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks -- [轮次]
 | `seamprofile` | 接缝裁剪分段剖析 |
 | `fusion` | 融合是否发生（按池租用次数判定） |
 | `batch` | 批量场景（多张图连续处理） |
+| `icc` | ICC 变换的自洽验证（恒等 / 往返 / 中性轴） |
+| `realworld` | 真实照片跑全部算子（`SIMDIMAGING_DUMP_DIR` 可导出对比图） |
 | `disposecheck` | 忘记 `using` 的代价 |
 | `nlm-ablate` | NLM 内层消融 |
 | `nlm-bench <宽x高> <S> <P>` | NLM 端到端秒表 + 输出 SHA 字节锚点 |
@@ -55,13 +57,30 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks -- [轮次]
 | `bash benchmarks/repeat.sh <模式> <宽x高> <轮次>` | 多轮取中位，标出真落后与噪声 |
 | `bash benchmarks/check-baseline.sh` | 与 `baselines/*.json` 的记录值比，越阈值即失败 |
 
+## ICC 素材
+
+`icc` 模式要两个 RGB profile，放在 `tests/Fixtures/.cache/icc/`（**不入库**，与语料同规矩）。
+来自 [Compact ICC Profiles](https://github.com/saucecontrol/Compact-ICC-Profiles)（CC0）：
+
+```bash
+mkdir -p tests/Fixtures/.cache/icc
+for n in srgb-v4 DisplayP3-v4 AdobeCompat-v2; do
+  curl -sSL -o "tests/Fixtures/.cache/icc/$n.icc" \
+    "https://raw.githubusercontent.com/saucecontrol/Compact-ICC-Profiles/master/profiles/$n.icc"
+done
+sha256sum tests/Fixtures/.cache/icc/*.icc
+# srgb-v4.icc        c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353
+# DisplayP3-v4.icc   cb51de38e482ee974c0c76b9689e16aad04bad16e226fed2f30c842d15ff3a3d
+# AdobeCompat-v2.icc 60fb2adecacf82132db0b1c09b303316f3bbd9e2823e7ba096d01627d12d57c9
+```
+
 ## 结果去哪
 
 | 位置 | 内容 |
 |---|---|
 | `results/` | 每次运行的原始报告（自动生成，带日期与模式） |
 | [`docs/measurements.md`](../docs/measurements.md) | 各模式的结论与关键数字（人工整理） |
-| [`docs/report-2026-11-16.md`](../docs/report-2026-11-16.md) | 按日期的工作与实测报告 |
+| [`docs/measurements.md`](../docs/measurements.md) | 按日期的工作与实测报告 |
 | [`docs/known-gaps.md`](../docs/known-gaps.md) | 未达标项、已否决方向、方法论教训 |
 
 ## 新增实验的工作流
