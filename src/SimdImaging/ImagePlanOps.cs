@@ -7,6 +7,35 @@ namespace SimdImaging;
 public sealed partial class Image
 {
     /// <summary>
+    /// Fuses several exposures of the same scene into one frame.
+    /// </summary>
+    /// <param name="frames">At least two frames, all the same size. The first one supplies the format and header.</param>
+    /// <param name="contrast">Exponent on local contrast in the per-pixel score.</param>
+    /// <param name="saturation">Exponent on colour saturation.</param>
+    /// <param name="exposure">Exponent on well-exposedness.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <returns>A new image; the frames are not modified.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="frames"/> is null.</exception>
+    /// <exception cref="ArgumentException">Fewer than two frames, or their sizes differ.</exception>
+    public static Image FuseExposures(IReadOnlyList<Image> frames,
+        float contrast = 1f, float saturation = 1f, float exposure = 1f, IPixelPool? pool = null)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        if (frames.Count < 2)
+            throw new ArgumentException("Fusion needs at least two frames.", nameof(frames));
+
+        var views = new PixelView[frames.Count];
+        for (var i = 0; i < frames.Count; i++)
+        {
+            ArgumentNullException.ThrowIfNull(frames[i]);
+            views[i] = frames[i][0].Pixels.View;
+        }
+
+        return frames[0].ReplaceBuffer(
+            ExposureFusionOps.Fuse(views, pool: pool, contrast: contrast, saturation: saturation, exposure: exposure));
+    }
+
+    /// <summary>
     /// Runs <paramref name="plan"/> over this image and returns the last step's result. Same-size steps are
     /// split into row bands; global steps run whole.
     /// </summary>

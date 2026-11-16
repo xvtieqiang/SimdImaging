@@ -156,6 +156,16 @@ public sealed partial class Image
         IPixelPool? pool = null) =>
         ReplaceBuffer(NonLocalMeansOps.NonLocalMeans(this[0].Pixels.View, searchRadius, patchRadius, h, sigma, pool));
 
+    /// <summary>Removes haze with the dark-channel prior.</summary>
+    /// <param name="patchRadius">Patch the dark channel and transmission are taken over.</param>
+    /// <param name="omega">How much haze to remove; 0.95 keeps a little depth, 1 removes it all.</param>
+    /// <param name="tMin">Floor on transmission, which bounds the amplification to <c>1/tMin</c>.</param>
+    /// <param name="refineRadius">Box radius that smooths the transmission map; 0 leaves the blocky map.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Dehaze(int patchRadius = 7, float omega = 0.95f, float tMin = 0.1f, int refineRadius = 20,
+        IPixelPool? pool = null) =>
+        ReplaceBuffer(DehazeOps.Dehaze(this[0].Pixels.View, patchRadius, omega, tMin, refineRadius, pool));
+
     /// <summary>Local Laplacian detail enhancement; <c>alpha = beta = 1</c> is the identity.</summary>
     /// <param name="levels">Laplacian levels; clamped so the coarsest level stays usable.</param>
     /// <param name="samples">How many intensities the remap is evaluated at.</param>
