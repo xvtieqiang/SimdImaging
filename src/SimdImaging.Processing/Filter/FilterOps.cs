@@ -884,6 +884,146 @@ public static class FilterOps
     }
 
     /// <summary>
+    /// Separable-or-not 2D convolution with an arbitrary odd kernel and a selectable border mode.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The general path: a ring of <c>2r+1</c> converted rows, then a per-pixel accumulation over the taps. Alpha is
+    /// copied through untouched, as in <see cref="Convolve3x3"/>, because a kernel is defined on colour, not on
+    /// coverage. <see cref="Convolve3x3"/> stays the faster route for the common case and must produce the same
+    /// bytes as this one with a 3×3 kernel and <see cref="BorderMode.Clamp"/>; a test holds the two together.
+    /// </para>
+    /// <para>
+    /// Not separable: a separable implementation would need the kernel's rank structure decided at call time, and
+    /// for the radii this exists for (5×5 through 15×15) the extra pass costs more than it saves.
+    /// </para>
+    /// </remarks>
+    /// <param name="source">The pixels.</param>
+    /// <param name="kernel">Weights, row-major, <c>(2r+1)²</c> of them.</param>
+    /// <param name="radius">Kernel radius; the kernel side is <c>2×radius+1</c>.</param>
+    /// <param name="border">How to read outside the image.</param>
+    /// <param name="bias">Added after the sum, in sample units.</param>
+    /// <param name="constantValue">Sample value used by <see cref="BorderMode.Constant"/>.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The radius is negative.</exception>
+    /// <exception cref="ArgumentException">The kernel length is not <c>(2r+1)²</c>.</exception>
+    public static WorkingBuffer Convolve(PixelView source, ReadOnlySpan<float> kernel, int radius,
+        BorderMode border = BorderMode.Clamp, float bias = 0f, float constantValue = 0f, IPixelPool? pool = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(radius);
+        var side = (radius * 2) + 1;
+        if (kernel.Length != side * side)
+            throw new ArgumentException($"A {(side)}×{(side)} kernel needs {side * side} weights.", nameof(kernel));
+
+        var width = source.Width;
+        var height = source.Height;
+        var stride = width * 4;
+        var rows = side;
+        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+        var ring = new float[rows * stride];
+        var loaded = new int[rows];
+        Array.Fill(loaded, -1);
+        var row = new float[stride];
+        var sum = new float[stride];
+        try
+        {
+            for (var y = 0; y < height; y++)
+            {
+                // Fill the ring once per row, and read the outgoing row's alpha once: doing either inside the x
+                // loop converts each row `width` times, which is the mistake that made exposure fusion 159x slower.
+                for (var tapY = -radius; tapY <= radius; tapY++)
+                {
+                    var wanted = Map(y + tapY, height, border);
+                    if (wanted < 0)
+                        continue;
+
+                    var slot = wanted % rows;
+                    if (loaded[slot] == wanted)
+                        continue;
+
+                    Pixels.ReadRowRaw(source.Row(wanted), width, source.Format, row);
+                    row.CopyTo(ring, slot * stride);
+                    loaded[slot] = wanted;
+                }
+
+                Pixels.ReadRowRaw(source.Row(y), width, source.Format, row);
+                Array.Clear(sum);
+
+                for (var tapY = -radius; tapY <= radius; tapY++)
+                {
+                    var wanted = Map(y + tapY, height, border);
+                    var baseOffset = wanted < 0 ? -1 : (wanted % rows) * stride;
+                    var kernelRow = (tapY + radius) * side;
+
+                    for (var tapX = -radius; tapX <= radius; tapX++)
+                    {
+                        var weight = kernel[kernelRow + tapX + radius];
+                        if (weight == 0f)
+                            continue;
+
+                        for (var x = 0; x < width; x++)
+                        {
+                            var sourceX = Map(x + tapX, width, border);
+                            var o = x * 4;
+                            for (var c = 0; c < 3; c++)
+                            {
+                                var sample = sourceX < 0 || baseOffset < 0
+                                    ? constantValue
+                                    : ring[baseOffset + (sourceX * 4) + c];
+                                sum[o + c] += weight * sample;
+                            }
+                        }
+                    }
+                }
+
+                for (var x = 0; x < width; x++)
+                {
+                    var o = x * 4;
+                    sum[o] += bias;
+                    sum[o + 1] += bias;
+                    sum[o + 2] += bias;
+                    sum[o + 3] = row[o + 3];
+                }
+
+                Pixels.WriteRowRaw(sum, width, source.Format, destination.View.Row(y));
+            }
+
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Maps an out-of-range coordinate to a real one, or to −1 for <see cref="BorderMode.Constant"/>.</summary>
+    private static int Map(int value, int length, BorderMode border)
+    {
+        if (value >= 0 && value < length)
+            return value;
+
+        return border switch
+        {
+            BorderMode.Clamp => Math.Clamp(value, 0, length - 1),
+            BorderMode.Mirror => Mirror(value, length),
+            BorderMode.Wrap => ((value % length) + length) % length,
+            _ => -1,
+        };
+    }
+
+    private static int Mirror(int value, int length)
+    {
+        // Reflect about the edge pixel: ... 2,1,0,1,2 ...
+        var period = (length * 2) - 2;
+        if (period <= 0)
+            return 0;
+
+        var folded = ((value % period) + period) % period;
+        return folded < length ? folded : period - folded;
+    }
+
+    /// <summary>
     /// 3×3 convolution on the colour channels; alpha is preserved. Edges replicate. The kernel is applied to
     /// straight colour (a sharpen or emboss kernel is defined on values, not on premultiplied coverage).
     /// </summary>

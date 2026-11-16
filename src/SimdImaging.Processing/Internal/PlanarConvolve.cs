@@ -33,7 +33,18 @@ internal static class PlanarConvolve
     internal static bool ForceVector512;
 
     /// <summary>Widest tier that will run: 512 when the hardware (or the test hook) allows and scalar is not forced.</summary>
-    internal static bool Use512 => !ForceScalar && (Vector512.IsHardwareAccelerated || ForceVector512);
+    /// <summary>
+    /// Whether the 512-bit path may run. Some server SKUs clock down under AVX-512 and are slower with it than
+    /// without, so the tier is switchable at process start: <c>SIMDIMAGING_DISABLE_AVX512=1</c>. Read once, so a
+    /// benchmark cannot change the answer half way through a run.
+    /// </summary>
+    private static readonly bool Avx512Allowed =
+        Environment.GetEnvironmentVariable("SIMDIMAGING_DISABLE_AVX512") is not "1";
+
+    // The switch turns the real-hardware path off; ForceVector512 is a test hook and outranks it, or the
+    // equivalence tests could not run on a machine whose environment happens to disable the tier.
+    internal static bool Use512 =>
+        !ForceScalar && (ForceVector512 || (Avx512Allowed && Vector512.IsHardwareAccelerated));
 
     private static bool Use256 => !ForceScalar && !Use512 && Vector256.IsHardwareAccelerated;
 

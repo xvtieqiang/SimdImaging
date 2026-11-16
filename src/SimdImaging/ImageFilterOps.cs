@@ -156,6 +156,17 @@ public sealed partial class Image
         IPixelPool? pool = null) =>
         ReplaceBuffer(NonLocalMeansOps.NonLocalMeans(this[0].Pixels.View, searchRadius, patchRadius, h, sigma, pool));
 
+    /// <summary>Convolves with an arbitrary odd kernel and a selectable border mode.</summary>
+    /// <param name="kernel">Weights, row-major, <c>(2r+1)²</c> of them.</param>
+    /// <param name="radius">Kernel radius; the side is <c>2×radius+1</c>.</param>
+    /// <param name="border">How to read outside the image.</param>
+    /// <param name="bias">Added after the sum, in sample units.</param>
+    /// <param name="constantValue">Sample used by <see cref="BorderMode.Constant"/>.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Convolve(ReadOnlySpan<float> kernel, int radius, BorderMode border = BorderMode.Clamp,
+        float bias = 0f, float constantValue = 0f, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.Convolve(this[0].Pixels.View, kernel, radius, border, bias, constantValue, pool));
+
     /// <summary>Removes haze with the dark-channel prior.</summary>
     /// <param name="patchRadius">Patch the dark channel and transmission are taken over.</param>
     /// <param name="omega">How much haze to remove; 0.95 keeps a little depth, 1 removes it all.</param>

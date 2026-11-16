@@ -6,6 +6,10 @@
   SimdImaging.Abstractions.ArrayPixelPool.Rent(System.Int32 length) -> System.Buffers.IMemoryOwner<System.Byte>
   SimdImaging.Abstractions.ArrayPixelPool.Shared : SimdImaging.Abstractions.ArrayPixelPool { get; }
   SimdImaging.Abstractions.ArrayPixelPool.Trim() -> System.Void
+  SimdImaging.Abstractions.BorderMode.Clamp = 0
+  SimdImaging.Abstractions.BorderMode.Constant = 3
+  SimdImaging.Abstractions.BorderMode.Mirror = 1
+  SimdImaging.Abstractions.BorderMode.Wrap = 2
   SimdImaging.Abstractions.ColorPalette.#ctor(System.ReadOnlySpan<SimdImaging.Abstractions.RgbaColor> colors)
   SimdImaging.Abstractions.ColorPalette.Colors : System.ReadOnlySpan<SimdImaging.Abstractions.RgbaColor> { get; }
   SimdImaging.Abstractions.ColorPalette.Count : System.Int32 { get; }
@@ -251,6 +255,7 @@
   SimdImaging.Image.Composite(SimdImaging.Image overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.PorterDuff mode, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Contrast(System.Single amount, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.ConvertColorSpace(SimdImaging.Processing.ColorSpace target, SimdImaging.Processing.YCbCrStandard ycbcr, System.Boolean limitedRange, SimdImaging.Processing.WhitePoint white, SimdImaging.Processing.ChromaticAdaptation adaptation, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
+  SimdImaging.Image.Convolve(System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Convolve3x3(System.ReadOnlySpan<System.Single> kernel, System.Single bias, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.CopyMetadataFrom(SimdImaging.Image source) -> SimdImaging.Image
   SimdImaging.Image.Create(System.Int32 width, System.Int32 height, SimdImaging.Abstractions.WorkingFormat format, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
@@ -606,6 +611,7 @@
   SimdImaging.Processing.FilterOps.BokehBlur(SimdImaging.Abstractions.PixelView source, System.Int32 radius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.BoxBlur(SimdImaging.Abstractions.PixelView source, System.Int32 radius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Close3x3(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
+  SimdImaging.Processing.FilterOps.Convolve(SimdImaging.Abstractions.PixelView source, System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Convolve3x3(SimdImaging.Abstractions.PixelView source, System.ReadOnlySpan<System.Single> kernel, System.Single bias, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Dilate3x3(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.FilterOps.Emboss(SimdImaging.Abstractions.PixelView source, System.Single strength, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
@@ -1072,6 +1078,7 @@ delegate SimdImaging.Processing.Geometry.PixelWarp
 delegate SimdImaging.Processing.OpKernel
 delegate SimdImaging.Processing.PlanObserver
 enum SimdImaging.Abstractions.AlphaMode
+enum SimdImaging.Abstractions.BorderMode
 enum SimdImaging.Abstractions.EdgeMode
 enum SimdImaging.Abstractions.OpCategory
 enum SimdImaging.Abstractions.OutOfGamutPolicy
