@@ -221,6 +221,18 @@ Measure("convolve 1080p 5x5 (plan)", () =>
     return half.Width * half.Height;
 });
 
+Measure("morph 1080p 3x3", () =>
+{
+    using var result = half.Morph(1, Morphology.Erode);
+    return result.Width * result.Height;
+});
+
+Measure("morph 1080p 15x15", () =>
+{
+    using var result = half.Morph(7, Morphology.Erode);
+    return result.Width * result.Height;
+});
+
 Measure("fusion 1080p x3", () =>
 {
     using var result = Image.FuseExposures([half, half, half]);

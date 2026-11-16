@@ -187,6 +187,13 @@ using (var nlm = image.NonLocalMeans(2, 1, 0.15f))
 using (var llf = image.LocalLaplacian(levels: 3, samples: 8, alpha: 0.3f))
     Console.WriteLine($"ll sha={Hash(llf.WritablePixels)}");
 
+// Morphology with a large window (van Herk, not the 3x3 specialisation) and the Laplacian's signed kernel.
+using (var morph = image.Morph(3, Morphology.Erode))
+    Console.WriteLine($"morph sha={Hash(morph.WritablePixels)}");
+
+using (var lap = image.Laplacian())
+    Console.WriteLine($"laplacian sha={Hash(lap.WritablePixels)}");
+
 var Box5 = new float[25];
 for (var i = 0; i < Box5.Length; i++)
     Box5[i] = 1f / 25f;

@@ -142,6 +142,12 @@ fi
 
 if [ "$want_perf" = "1" ]; then
     report "5/6 performance baseline (opt-in; same machine + same binary only)"
+
+    # Let the machine settle before timing. Run straight after the AOT publishes, `gainmap resize 1080p->720p` read
+    # +42.6% against a 38% threshold and failed the gate; twenty seconds later the same run read +1.3%. The publish
+    # had been competing for the cores the measurement was about to use, and the calibration probes cannot correct
+    # for a load that is still finishing when the run starts.
+    sleep 20
     if bash benchmarks/check-baseline.sh; then
         pass "performance baseline check"
     else
