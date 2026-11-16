@@ -55,6 +55,22 @@ if (args.Length > 0 && args[0] == "records-ablate")
     return;
 }
 
+// Step-1 ablation for the non-local means inner loop. Pure measurement (no oracle, no shipped-code
+// change), exits before the report/oracle setup.
+if (args.Length > 0 && args[0] == "nlm-ablate")
+{
+    NlmAblation.Run();
+    return;
+}
+
+// End-to-end stopwatch for the product NLM operator at any size/radii, with an output-SHA byte-identity
+// anchor. Pure measurement, exits before the report/oracle setup.
+if (args.Length > 0 && args[0] == "nlm-bench")
+{
+    NlmBench.Run(args);
+    return;
+}
+
 var mode = args.Length > 0 ? args[0] : "all";
 var width = 1920;
 var height = 1080;

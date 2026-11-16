@@ -115,8 +115,8 @@ public sealed partial class Image : IDisposable
     /// Applies a chain to this image in place, returning it.
     /// </summary>
     /// <remarks>
-    /// Same chain as <see cref="Pipe()"/>, but the result replaces this image's frames instead of coming back as a
-    /// new image — for call sites that keep using the same variable. The old buffers go back to the pool once the
+    /// Same chain an <c>ImagePipeline</c> builds, but the result replaces this image's frames instead of
+    /// coming back as a new image — for call sites that keep using the same variable. The old buffers go back to the pool once the
     /// new ones are in place, and a throw leaves the image untouched.
     /// </remarks>
     /// <param name="steps">Records the operations, e.g. <c>p =&gt; p.Resize(32, 24).Grayscale()</c>.</param>

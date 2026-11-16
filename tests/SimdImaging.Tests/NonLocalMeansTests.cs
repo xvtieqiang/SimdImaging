@@ -187,6 +187,39 @@ public class NonLocalMeansTests
         }
     }
 
+    [Theory]
+    // Sizes are large enough to clear the clamp-free interior (width, height > 2*(S+P)+1), so these
+    // actually exercise the rolling column-sum path, not just the per-tap border fallback. Several radii,
+    // h and a non-zero sigma; Rgba16 is covered too. Rgba32F keeps the per-tap path and must be unchanged.
+    [InlineData(WorkingFormat.Rgba8, 40, 30, 3, 1, 0.1f, 0f)]
+    [InlineData(WorkingFormat.Rgba8, 48, 40, 5, 2, 0.2f, 0.05f)]
+    [InlineData(WorkingFormat.Rgba8, 64, 48, 2, 1, 0.15f, 0.02f)]
+    [InlineData(WorkingFormat.Rgba16, 40, 30, 3, 1, 0.08f, 0.01f)]
+    [InlineData(WorkingFormat.Rgba16, 48, 40, 5, 2, 0.15f, 0f)]
+    [InlineData(WorkingFormat.Rgba32F, 40, 30, 3, 1, 0.1f, 0f)]
+    public void RollingSsdMatchesPerTap_ByteForByte(WorkingFormat format, int width, int height,
+        int searchRadius, int patchRadius, float h, float sigma)
+    {
+        using var image = Noise(width, height, format, seed: 20261116);
+        var view = image[0].Pixels.View;
+
+        byte[] perTap;
+        NonLocalMeansOps.ForcePerTapSsd = true;
+        try
+        {
+            using var result = NonLocalMeansOps.NonLocalMeans(view, searchRadius, patchRadius, h, sigma);
+            perTap = result.View.Span.ToArray();
+        }
+        finally
+        {
+            NonLocalMeansOps.ForcePerTapSsd = false;
+        }
+
+        using var rolling = NonLocalMeansOps.NonLocalMeans(view, searchRadius, patchRadius, h, sigma);
+        rolling.View.Span.ToArray().ShouldBe(perTap,
+            $"{format} {width}x{height} S={searchRadius} P={patchRadius} h={h} sigma={sigma}: rolling SSD changed the bytes");
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private static void AssertMatchesReference(Image image, int searchRadius, int patchRadius, float h,

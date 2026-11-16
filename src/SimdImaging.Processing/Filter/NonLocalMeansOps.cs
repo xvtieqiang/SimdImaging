@@ -39,6 +39,11 @@ public static class NonLocalMeansOps
     /// Integer sums are associative, so the two must agree exactly — this is not a tolerance knob.</summary>
     internal static bool ForceScalarSsd;
 
+    /// <summary>Test hook: forces the original per-tap patch SSD (no rolling column sums), so the optimised
+    /// interior path can be compared byte for byte against the pre-optimisation algorithm at any size,
+    /// format and radii. Default off — the rolling path is the product path. Not an approximation knob.</summary>
+    internal static bool ForcePerTapSsd;
+
     /// <summary>Denoises <paramref name="source"/> with non-local means.</summary>
     /// <param name="source">The input pixels.</param>
     /// <param name="searchRadius">Half-width of the search window; 0 restricts the search to the pixel itself.</param>
@@ -89,11 +94,23 @@ public static class NonLocalMeansOps
         try
         {
             // One row band per worker; the ring is private to the worker, which is what makes the
-            // worker count unable to change a byte.
-            RowParallel.For(0, height, (start, end) =>
+            // worker count unable to change a byte. Pass the real width: For refuses to parallelise
+            // below 64 K pixels, and a zero width silently collapsed this seconds-class operator to
+            // one worker (see AGENTS.md / benchmarks/README.md NLM ablation).
+            RowParallel.For(width, height, (start, end) =>
             {
                 var ring = ArrayPool<byte>.Shared.Rent(ringBytes);
                 var output = ArrayPool<float>.Shared.Rent(width * 4);
+                // Rolling patch SSD needs a per-offset column-difference row and five per-column double
+                // accumulators; both are worker-private and reused for every row of the band. Rgba32F keeps
+                // the exact per-tap double/NaN path and needs none of this.
+                var useRolling = format != WorkingFormat.Rgba32F;
+                var col = useRolling ? ArrayPool<long>.Shared.Rent(width) : null;
+                var accR = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
+                var accG = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
+                var accB = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
+                var accA = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
+                var accW = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
                 try
                 {
                     // Seed at start - support, NOT at start: the first output row reads rows the band
@@ -108,15 +125,34 @@ public static class NonLocalMeansOps
                             source.Row(computed).CopyTo(ring.AsSpan((computed % ringRows) * stride, stride));
                         }
 
-                        for (var x = 0; x < width; x++)
-                            Accumulate(ring, ringRows, stride, width, height, format, x, y,
-                                searchRadius, patchRadius, normalizer, hSquared, twoSigmaSquared, output);
+                        // The rolling path needs a clamp-free interior: every patch row y+py and y+dy+py
+                        // and every column x+px and x+dx+px must be in range. Border rows/columns and the
+                        // float format fall back to the exact per-tap Accumulate, so their bytes never move.
+                        if (useRolling && !ForcePerTapSsd && y >= support && y <= height - 1 - support &&
+                            width >= 2 * support + 1)
+                        {
+                            RollingRow(ring, ringRows, stride, width, height, format, y,
+                                searchRadius, patchRadius, support, normalizer, hSquared, twoSigmaSquared,
+                                output, col!, accR!, accG!, accB!, accA!, accW!);
+                        }
+                        else
+                        {
+                            for (var x = 0; x < width; x++)
+                                Accumulate(ring, ringRows, stride, width, height, format, x, y,
+                                    searchRadius, patchRadius, normalizer, hSquared, twoSigmaSquared, output);
+                        }
 
                         Pixels.WriteRowRaw(output.AsSpan(0, width * 4), width, format, destination.View.Row(y));
                     }
                 }
                 finally
                 {
+                    if (col is not null) ArrayPool<long>.Shared.Return(col);
+                    if (accW is not null) ArrayPool<double>.Shared.Return(accW);
+                    if (accA is not null) ArrayPool<double>.Shared.Return(accA);
+                    if (accB is not null) ArrayPool<double>.Shared.Return(accB);
+                    if (accG is not null) ArrayPool<double>.Shared.Return(accG);
+                    if (accR is not null) ArrayPool<double>.Shared.Return(accR);
                     ArrayPool<float>.Shared.Return(output);
                     ArrayPool<byte>.Shared.Return(ring);
                 }
@@ -172,6 +208,119 @@ public static class NonLocalMeansOps
         output[offset + 1] = (float)(sumG / sumW);
         output[offset + 2] = (float)(sumB / sumW);
         output[offset + 3] = (float)(sumA / sumW);
+    }
+
+    /// <summary>
+    /// Rolling (incremental) patch SSD for one clamp-free interior output row of an integer format.
+    /// <para>
+    /// For a candidate offset (dx,dy) define the column-difference image
+    /// <c>col(u) = Σ_py Σ_c (A(u, y+py, c) − B(u+dx, y+dy+py, c))²</c>. The patch SSD at x is the
+    /// (2P+1)-wide box sum <c>ssd(x) = Σ_{px=−P..P} col(x+px)</c>, which slides in x with one subtraction
+    /// and one addition instead of recomputing (2P+1)² taps per candidate. On the clamp-free interior every
+    /// index is in range, so <c>col</c> and <c>ssd</c> are the exact integer distance the per-tap path
+    /// produces — integer addition is associative, so regrouping the taps cannot change a byte. The weight,
+    /// the candidate centre and the (dy then dx) accumulation order are therefore exactly those of
+    /// <see cref="Accumulate"/>.
+    /// </para>
+    /// <para>Border columns keep the per-tap path, where clamping changes the geometry; Rgba32F and border
+    /// rows never enter here (their double/NaN semantics need the frozen per-tap order).</para>
+    /// </summary>
+    private static void RollingRow(byte[] ring, int ringRows, int stride, int width, int height,
+        WorkingFormat format, int y, int searchRadius, int patchRadius, int support,
+        double normalizer, double hSquared, double twoSigmaSquared, float[] output,
+        long[] col, double[] accR, double[] accG, double[] accB, double[] accA, double[] accW)
+    {
+        var xLo = support;
+        var xHi = width - 1 - support;
+        var count = xHi - xLo + 1;
+        Array.Clear(accR, xLo, count);
+        Array.Clear(accG, xLo, count);
+        Array.Clear(accB, xLo, count);
+        Array.Clear(accA, xLo, count);
+        Array.Clear(accW, xLo, count);
+
+        var uLo = xLo - patchRadius;
+        var uHi = xHi + patchRadius;
+
+        for (var dy = -searchRadius; dy <= searchRadius; dy++)
+        {
+            var sy = y + dy;                       // interior row: y+dy is in [0, height-1]
+            var candidateRow = ring.AsSpan((sy % ringRows) * stride, stride);
+            for (var dx = -searchRadius; dx <= searchRadius; dx++)
+            {
+                for (var u = uLo; u <= uHi; u++)
+                    col[u] = ColumnDistance(ring, ringRows, stride, y, patchRadius, dx, dy, u, format);
+
+                long ssd = 0;
+                for (var t = -patchRadius; t <= patchRadius; t++)
+                    ssd += col[xLo + t];
+
+                for (var x = xLo; x <= xHi; x++)
+                {
+                    var weight = Math.Exp(-Math.Max(ssd * normalizer - twoSigmaSquared, 0.0) / hSquared);
+                    var sx = x + dx;               // interior column: x+dx is in [0, width-1]
+                    ReadCentre(candidateRow, sx * 4, format, out var r, out var g, out var b, out var a);
+                    accR[x] += r * weight;
+                    accG[x] += g * weight;
+                    accB[x] += b * weight;
+                    accA[x] += a * weight;
+                    accW[x] += weight;
+                    if (x < xHi)
+                        ssd += col[x + patchRadius + 1] - col[x - patchRadius];
+                }
+            }
+        }
+
+        for (var x = xLo; x <= xHi; x++)
+        {
+            var o = x * 4;
+            output[o] = (float)(accR[x] / accW[x]);
+            output[o + 1] = (float)(accG[x] / accW[x]);
+            output[o + 2] = (float)(accB[x] / accW[x]);
+            output[o + 3] = (float)(accA[x] / accW[x]);
+        }
+
+        for (var x = 0; x < xLo; x++)
+            Accumulate(ring, ringRows, stride, width, height, format, x, y,
+                searchRadius, patchRadius, normalizer, hSquared, twoSigmaSquared, output);
+        for (var x = xHi + 1; x < width; x++)
+            Accumulate(ring, ringRows, stride, width, height, format, x, y,
+                searchRadius, patchRadius, normalizer, hSquared, twoSigmaSquared, output);
+    }
+
+    /// <summary>The column-difference sum for one (dx,dy,u): the (2P+1) patch rows, four channels, exact
+    /// integer squares. Rgba8 stays in int (≤ 2.6e5 per row); Rgba16 uses long (a 65535² already needs it).</summary>
+    private static long ColumnDistance(byte[] ring, int ringRows, int stride,
+        int y, int patchRadius, int dx, int dy, int u, WorkingFormat format)
+    {
+        long col = 0;
+        var aCol = u * 4;
+        var bCol = (u + dx) * 4;
+        for (var py = -patchRadius; py <= patchRadius; py++)
+        {
+            var va = y + py;
+            var rowA = ring.AsSpan((va % ringRows) * stride, stride);
+            var rowB = ring.AsSpan(((va + dy) % ringRows) * stride, stride);
+            if (format == WorkingFormat.Rgba8)
+            {
+                var d0 = rowA[aCol] - rowB[bCol];
+                var d1 = rowA[aCol + 1] - rowB[bCol + 1];
+                var d2 = rowA[aCol + 2] - rowB[bCol + 2];
+                var d3 = rowA[aCol + 3] - rowB[bCol + 3];
+                col += d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+            }
+            else
+            {
+                var sa = MemoryMarshal.Cast<byte, ushort>(rowA);
+                var sb = MemoryMarshal.Cast<byte, ushort>(rowB);
+                long d0 = sa[aCol] - sb[bCol];
+                long d1 = sa[aCol + 1] - sb[bCol + 1];
+                long d2 = sa[aCol + 2] - sb[bCol + 2];
+                long d3 = sa[aCol + 3] - sb[bCol + 3];
+                col += d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+            }
+        }
+        return col;
     }
 
     private static void ReadCentre(ReadOnlySpan<byte> row, int offset, WorkingFormat format,

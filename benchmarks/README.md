@@ -643,3 +643,67 @@ stays at ~1 min; `--aot`, `--perf` and `simd-tiers.sh` are opt-in.
 
 Next measurement target: after vectorizing the write path, re-run this harness — if the end-to-end number
 does not move, the change does not land.
+
+## NLM 内层消融（`nlm-ablate`，2026-11-16）
+
+```
+dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- nlm-ablate
+```
+
+`NonLocalMeans` 是全库最慢算子（1080p S=3 P=1 h=0.1 实测 ~6.7 s）。**先量后改**：复刻 Rgba8 内层循环、
+用产品算子逐字节校验复刻件（`SHA 131CC440…`，两次独立运行都为 `True`），一次只把一处换成保持输入存活的
+替身（避免常量替身让上游 SSD 被 JIT 死代码消除），`Timing.Time` 交错取中位。两个独立进程各一轮，数字稳定：
+
+| 变体（1080p, S=3, P=1, h=0.1, σ=0） | RUN 1 | RUN 2 | Δ vs full |
+|---|---|---|---|
+| full（复刻基线） | 6931.9 ms | 6859.4 ms | — |
+| `−exp`（`Math.Exp` → `1−e`） | 5571.2 | 5553.0 | **19.0–19.6%** |
+| `−ssd-scan`（整段 patch 扫描 → O(1)） | 1479.0 | 1459.8 | **78.7%** |
+| `−ssd-sum`（平方乘加 → 差值和） | 6325.9 | 6258.8 | 8.7–8.8% |
+| `−mem`（patch 行读 → 热 L1 行） | 6198.8 | 6098.5 | 10.6–11.1% |
+| `−all`（exp + 整扫描） | 686.2 | 684.5 | 90.0–90.1% |
+
+四项占比与主因：
+
+| 组件 | 占比 | 对应第二步优化的天花板 |
+|---|---|---|
+| **patch SSD 整个扫描** | **78.7%** | **滚动 SSD（增量更新 patch 和）** |
+| └ 其中平方乘加算术 | 8.7–8.8% | — |
+| 平方根 sqrt | **0%（本实现无 sqrt**：`weight=exp(−SSD·normalizer/h²)`） | — |
+| 指数 expf | 19.0–19.6% | 权重表（整数 SSD 分档） |
+| 内存访问（patch 行读） | 10.6–11.1% | 行带分块 |
+
+**结论一：主因是 patch 扫描本身（78.7%），不是指数（19%）、不是访存（11%）、也没有 sqrt。** 消融第一版
+曾把「patch SSD 求和」窄化成「平方乘加」（只有 8.7%），据此会误选权重表；补测整个扫描的 O(1) 替身后排名
+才定下来——这正是「先量后否」。三个单替身 Δ 有重叠（扫描里既含访存也含平方），所以它们是**天花板而非划分**；
+`Σ(exp + 整扫描)` 与 `−all` 差 ~9% 属该重叠，量级自洽。
+
+**结论二：78.7% 里平方乘加只占 ~9 个百分点，其余是每 tap 的 `Math.Clamp`、`%ringRows`、span 构造与索引**——
+所以「滚动 SSD / 增量 patch 和」要消灭的是**整段扫描循环**，而非只替换平方。
+
+**附带发现（不在四项内，但决定绝对时长）**：`NonLocalMeansOps` 调 `RowParallel.For(0, height, …)`，首参传
+`width=0`，被 `RowParallel.For` 的 64K 像素门槛判成 **单线程**（`LastWorkerCount=1`）——AGENTS.md 里
+「`For` 低于 64K 静默退化、先查 `LastWorkerCount`」正是此坑。算子本已按「每 worker 一条行带、私有 ring」设计，
+`For(width, height, …)` 才让它真正并行；`DegreeDoesNotChangeBytes` 已覆盖 worker 数不变字节。这是与内层优化
+正交的杠杆，改实现时一并量。
+
+### 结果：滚动 SSD 落地后
+
+`nlm-bench` 是产品算子的端到端秒表（任意尺寸 / 半径，附带输出 SHA 作为字节锚点）：
+
+```
+dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- nlm-bench 1920x1080 3 1
+```
+
+| 配置 | 改动前 | 改动后（中位） | 变化 | 字节 |
+|---|---|---|---|---|
+| 1080p S=3 P=1 | 6676 ms | **867 ms** | **7.7×** | 锚点 `131CC44092703366` 匹配 |
+| 1080p S=5 P=2 | 19831 ms | **2372 ms** | **8.4×** | 由 `RollingSsdMatchesPerTap_ByteForByte` 覆盖 |
+| 4K S=3 P=1 | — | **3010 ms** | — | 同上 |
+
+实现要点：对每个候选偏移先算**列差分行** `col(u)`，patch SSD 变成它的 `(2P+1)` 宽滑动窗口和——
+每像素 O(1) 而非 O(P²)。边界行列与 `Rgba32F` 仍走原逐 tap 路径（浮点的 NaN/精确语义不变），
+`ForcePerTapSsd` 是**测试钩子**，用于在任意尺寸/格式/半径下与旧算法逐字节比对，不是近似开关。
+
+同一改动里修掉一个与内层无关的杠杆：`RowParallel.For(0, height, …)` 的首参传成了 `width=0`，
+被 64K 像素门槛判成单线程——**这个 6.7 s 里有一半是没用上多核**。改为 `For(width, height, …)`。
