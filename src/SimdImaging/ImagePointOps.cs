@@ -11,8 +11,8 @@ public sealed partial class Image
         ReplaceBuffer(PointOps.Invert(this[0].Pixels.View, pool));
 
     /// <summary>Adds <paramref name="amount"/> in sample units (0.5 = half the range).</summary>
-    public Image Brightness(float amount, IPixelPool? pool = null) =>
-        ReplaceBuffer(PointOps.Brightness(this[0].Pixels.View, amount, pool));
+    public Image Brightness(float shift = 0f, IPixelPool? pool = null) =>
+        ReplaceBuffer(PointOps.Brightness(this[0].Pixels.View, shift, pool));
 
     /// <summary>Scales contrast around mid-grey; 1 is identity.</summary>
     /// <summary>
@@ -28,12 +28,19 @@ public sealed partial class Image
     public Image PointChain(PointChainTable table, IPixelPool? pool = null) =>
         ReplaceBuffer(FilterOps.Apply(this[0].Pixels.View, table, pool));
 
-    public Image Contrast(float amount, IPixelPool? pool = null) =>
-        ReplaceBuffer(PointOps.Contrast(this[0].Pixels.View, amount, pool));
+    /// <summary>Scales contrast about mid-grey.</summary>
+    /// <param name="amount">1 is unchanged, below 1 flattens towards grey, above 1 increases it. 0 collapses the
+    /// picture to a flat mid-grey; 2 doubles the distance from mid-grey. Typical range 0.5–1.5.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Contrast(float gain = 1f, IPixelPool? pool = null) =>
+        ReplaceBuffer(PointOps.Contrast(this[0].Pixels.View, gain, pool));
 
-    /// <summary>Scales saturation around luma; 0 is greyscale, 1 is identity.</summary>
-    public Image Saturation(float amount, bool bt709 = false, IPixelPool? pool = null) =>
-        ReplaceBuffer(PointOps.Saturation(this[0].Pixels.View, amount, bt709, pool));
+    /// <summary>Scales saturation around luma.</summary>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    /// <remarks>0 is greyscale, 1 is identity, 1.6 is a strong pop, above 2 clips fast.</remarks>
+    public Image Saturation(float gain = 1f, bool bt709 = false, IPixelPool? pool = null) =>
+        ReplaceBuffer(PointOps.Saturation(this[0].Pixels.View, gain, bt709, pool));
 
     /// <summary>Replaces colour with its luma.</summary>
     public Image Grayscale(bool bt709 = false, IPixelPool? pool = null) =>
@@ -54,10 +61,20 @@ public sealed partial class Image
         ReplaceBuffer(PointOps.HueRotate(this[0].Pixels.View, degrees, pool));
 
     /// <summary>Blends towards sepia; 0 is identity, 1 is full sepia.</summary>
-    public Image Sepia(float amount = 1f, IPixelPool? pool = null) =>
-        ReplaceBuffer(PointOps.Sepia(this[0].Pixels.View, amount, pool));
+    public Image Sepia(float blend = 1f, IPixelPool? pool = null) =>
+        ReplaceBuffer(PointOps.Sepia(this[0].Pixels.View, blend, pool));
 
     /// <summary>Levels: input range, gamma, output range.</summary>
+    /// <remarks>
+    /// Every value is normalised: 0..1 corresponds to 0..255 on an 8-bit image, so a black point of 0.05 is what a
+    /// levels dialog calls "input 13".
+    /// </remarks>
+    /// <param name="inputBlack">Input level mapped to black, 0..1.</param>
+    /// <param name="inputWhite">Input level mapped to white, 0..1.</param>
+    /// <param name="gamma">Midtone bias; 1 is linear, below 1 brightens the mids, above 1 darkens them.</param>
+    /// <param name="outputBlack">Output level for black, 0..1. Above 0 is the faded-film look.</param>
+    /// <param name="outputWhite">Output level for white, 0..1. Below 1 is the faded-film look.</param>
+    /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException">The input range is empty or gamma is not positive.</exception>
     public Image Levels(float inputBlack, float inputWhite, float gamma = 1f, float outputBlack = 0f, float outputWhite = 1f,
         IPixelPool? pool = null) =>
@@ -72,12 +89,21 @@ public sealed partial class Image
         ReplaceBuffer(PointOps.Normalize(this[0].Pixels.View, pool));
 
     /// <summary>Vibrance: boosts muted colours more than already-saturated ones.</summary>
-    public Image Vibrance(float amount, bool bt709 = false, IPixelPool? pool = null) =>
-        ReplaceBuffer(PointOps.Vibrance(this[0].Pixels.View, amount, bt709, pool));
+    /// <remarks>0 is unchanged, 0.5 is a clear lift on skin and sky, 1 is already strong. Unlike
+    /// <see cref="Saturation"/> it leaves saturated colours alone, so it rarely clips.</remarks>
+    /// <param name="amount">Strength.</param>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Vibrance(float lift = 0f, bool bt709 = false, IPixelPool? pool = null) =>
+        ReplaceBuffer(PointOps.Vibrance(this[0].Pixels.View, lift, bt709, pool));
 
-    /// <summary>White balance: positive warms, negative cools.</summary>
-    public Image Temperature(float amount, IPixelPool? pool = null) =>
-        ReplaceBuffer(PointOps.Temperature(this[0].Pixels.View, amount, pool));
+    /// <summary>White balance shift.</summary>
+    /// <remarks>0 is neutral. Positive warms (orange), negative cools (blue). ±1 is the practical limit: beyond it
+    /// the opposite channel starts clipping on ordinary photographs. Typical range ±0.35.</remarks>
+    /// <param name="amount">Signed shift, positive warms.</param>
+    /// <param name="pool">Where the destination is rented.</param>
+    public Image Temperature(float shift = 0f, IPixelPool? pool = null) =>
+        ReplaceBuffer(PointOps.Temperature(this[0].Pixels.View, shift, pool));
 
     /// <summary>Blends the colour towards <paramref name="tint"/>.</summary>
     public Image Tint(RgbaColor tint, float amount = 0.5f, IPixelPool? pool = null) =>

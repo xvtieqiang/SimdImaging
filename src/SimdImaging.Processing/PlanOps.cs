@@ -73,8 +73,9 @@ public static class PlanOps
     public static ImageOp Posterize(int levels) => Point("posterize", v => PointOps.Posterize(v, levels));
 
     /// <summary>Remaps the tone curve between a black and a white point.</summary>
-    public static ImageOp Levels(float black, float white, float gamma) =>
-        Point("levels", v => PointOps.Levels(v, black, white, gamma));
+    public static ImageOp Levels(float inputBlack, float inputWhite, float gamma = 1f,
+        float outputBlack = 0f, float outputWhite = 1f) =>
+        Point("levels", v => PointOps.Levels(v, inputBlack, inputWhite, gamma, outputBlack, outputWhite));
 
     /// <summary>Gaussian blur; support is <c>ceil(3σ)</c>, which is where the halo comes from.</summary>
     public static ImageOp GaussianBlur(float sigma) =>
@@ -174,6 +175,44 @@ public static class PlanOps
         Neighborhood("morph", radius, v => FilterOps.Morph(v, radius, kind == Abstractions.Morphology.Erode),
             // The separable passes hold the horizontal result plus its transpose: two extra frames.
             (width, height, _, _) => 2L * width * height * 4);
+
+    /// <summary>Warm or cool shift.</summary>
+    /// <param name="amount">Positive warms, negative cools.</param>
+    public static ImageOp Temperature(float amount) =>
+        Point("temperature", v => PointOps.Temperature(v, amount));
+
+    /// <summary>Tone curve through the given points.</summary>
+    /// <param name="points">Control points, at least two.</param>
+    public static ImageOp Curves(ReadOnlySpan<CurvePoint> points)
+    {
+        var copy = points.ToArray();
+        return Point("curves", v => PointOps.Curves(v, copy));
+    }
+
+    /// <summary>Saturation weighted towards the colours that are already saturated.</summary>
+    /// <param name="amount">0 is greyscale, 1 is identity.</param>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    public static ImageOp Vibrance(float amount, bool bt709 = false) =>
+        Point("vibrance", v => PointOps.Vibrance(v, amount, bt709));
+
+    /// <summary>
+    /// Seeded grain. Global: the generator advances once per pixel across the whole image, so a band would replay
+    /// the same sequence and the grain would turn into stripes.
+    /// </summary>
+    /// <param name="amount">Amplitude in normalised units.</param>
+    /// <param name="kind">Uniform or Gaussian.</param>
+    /// <param name="seed">Sequence seed; the same seed always yields the same image.</param>
+    public static ImageOp Noise(float amount = 0.05f, NoiseKind kind = NoiseKind.Gaussian, uint seed = 1) =>
+        new("noise", OpCategory.Global, 0, 0,
+            PlanSteps.Global(v => NoiseOps.Noise(v, amount, kind, seed)),
+            (_, _, _, _) => 0L);
+
+    /// <summary>Unsharp mask built from a negative Gaussian.</summary>
+    /// <param name="amount">Strength.</param>
+    /// <param name="sigma">Gaussian sigma; the halo follows it.</param>
+    public static ImageOp GaussianSharpen(float amount = 0.5f, float sigma = 1f) =>
+        Neighborhood("gaussian-sharpen", (int)Math.Ceiling(3 * sigma),
+            v => FilterOps.GaussianSharpen(v, amount, sigma));
 
     /// <summary>3x3 erosion; one row and one column.</summary>
     public static ImageOp Erode3x3() => Neighborhood("erode", 1, v => FilterOps.Erode3x3(v));

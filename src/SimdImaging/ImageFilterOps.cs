@@ -21,13 +21,16 @@ public sealed partial class Image
         ReplaceBuffer(FilterOps.Median3x3(this[0].Pixels.View, pool));
 
     /// <summary>Unsharp mask; <paramref name="amount"/> 0 is identity.</summary>
-    public Image Sharpen(float amount = 0.5f, float sigma = 1f, IPixelPool? pool = null) =>
-        ReplaceBuffer(FilterOps.Sharpen(this[0].Pixels.View, amount, sigma, pool));
+    public Image Sharpen(float gain = 0.5f, float sigma = 1f, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.Sharpen(this[0].Pixels.View, gain, sigma, pool));
 
     /// <summary>Gaussian sharpen: negative Gaussian shell around a boosted centre, applied as one kernel.</summary>
+    /// <param name="amount">Edge gain. 0 is a no-op, 0.5 is a normal sharpen, above 1.5 shows halos on text.</param>
+    /// <param name="sigma">Radius of the shell; 1.0 suits a full-size photograph, 0.6 suits a downscale.</param>
+    /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="sigma"/> is not finite and positive.</exception>
-    public Image GaussianSharpen(float amount = 0.5f, float sigma = 1f, IPixelPool? pool = null) =>
-        ReplaceBuffer(FilterOps.GaussianSharpen(this[0].Pixels.View, amount, sigma, pool));
+    public Image GaussianSharpen(float gain = 0.5f, float sigma = 1f, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.GaussianSharpen(this[0].Pixels.View, gain, sigma, pool));
 
     /// <summary>3×3 convolution on colour channels; alpha is preserved.</summary>
     /// <exception cref="ArgumentException">The kernel is not nine values.</exception>
@@ -107,9 +110,9 @@ public sealed partial class Image
     /// <param name="radius">Where the falloff starts, as a fraction of the half-diagonal (0..1).</param>
     /// <param name="strength">Corner darkening, 0..1.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    /// <exception cref="ArgumentOutOfRangeException">The radius or strength is outside its range.</exception>
-    public Image Vignette(float radius = 0.75f, float strength = 1f, IPixelPool? pool = null) =>
-        ReplaceBuffer(FilterOps.Vignette(this[0].Pixels.View, radius, strength, pool));
+    /// <exception cref="ArgumentOutOfRangeException">The radius or darkening is outside its range.</exception>
+    public Image Vignette(float radius = 0.75f, float darkening = 1f, IPixelPool? pool = null) =>
+        ReplaceBuffer(FilterOps.Vignette(this[0].Pixels.View, radius, darkening, pool));
 
     /// <summary>Highlights above <paramref name="threshold"/> are blurred and added back as a halo.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The threshold, sigma or amount is out of range.</exception>
@@ -135,13 +138,14 @@ public sealed partial class Image
 
     /// <summary>Adds reproducible noise; the same seed always produces the same image.</summary>
     /// <param name="amount">Amplitude in normalised units, 0..1.</param>
+    /// <param name="amount">Amplitude in normalised units, 0..1; 0.05 is visible grain on a mid-tone, 0.2 is heavy.</param>
     /// <param name="kind">Uniform or Gaussian.</param>
-    /// <param name="seed">Sequence seed.</param>
+    /// <param name="seed">Sequence seed: the same seed and the same image always give the same grain.</param>
     /// <param name="pool">Where the destination is rented.</param>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="amount"/> is outside 0..1.</exception>
-    public Image Noise(float amount = 0.05f, NoiseKind kind = NoiseKind.Gaussian, uint seed = 1,
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="amplitude"/> is outside 0..1.</exception>
+    public Image Noise(float amplitude = 0.05f, NoiseKind kind = NoiseKind.Gaussian, uint seed = 1,
         IPixelPool? pool = null) =>
-        ReplaceBuffer(NoiseOps.Noise(this[0].Pixels.View, amount, kind, seed, pool));
+        ReplaceBuffer(NoiseOps.Noise(this[0].Pixels.View, amplitude, kind, seed, pool));
 
     /// <summary>Edge-preserving smoothing: flat areas average, edges stay.</summary>
     /// <param name="radius">Box radius in pixels.</param>

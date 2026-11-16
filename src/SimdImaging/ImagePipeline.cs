@@ -76,10 +76,10 @@ public sealed class ImagePipeline
     public ImagePipeline FlipVertical() => Geometry(src => src.FlipVertical(_pool));
 
     /// <summary>Brightness by <paramref name="amount"/>.</summary>
-    public ImagePipeline Brightness(float amount) => Step(PlanOps.Brightness(amount));
+    public ImagePipeline Brightness(float shift = 0f) => Step(PlanOps.Brightness(shift));
 
     /// <summary>Contrast about the mid-point.</summary>
-    public ImagePipeline Contrast(float amount) => Step(PlanOps.Contrast(amount));
+    public ImagePipeline Contrast(float gain = 1f) => Step(PlanOps.Contrast(gain));
 
     /// <summary>Gamma correction; above one darkens.</summary>
     public ImagePipeline Gamma(float gamma) => Step(PlanOps.Gamma(gamma));
@@ -91,16 +91,18 @@ public sealed class ImagePipeline
     public ImagePipeline Grayscale(bool bt709 = false) => Step(PlanOps.Grayscale(bt709));
 
     /// <summary>Blends towards sepia.</summary>
-    public ImagePipeline Sepia(float amount = 1f) => Step(PlanOps.Sepia(amount));
+    public ImagePipeline Sepia(float blend = 1f) => Step(PlanOps.Sepia(blend));
 
     /// <summary>Scales saturation about luma.</summary>
-    public ImagePipeline Saturation(float amount, bool bt709 = false) => Step(PlanOps.Saturation(amount, bt709));
+    public ImagePipeline Saturation(float gain = 1f, bool bt709 = false) => Step(PlanOps.Saturation(gain, bt709));
 
     /// <summary>Quantizes each channel to <paramref name="levels"/> steps.</summary>
     public ImagePipeline Posterize(int levels) => Step(PlanOps.Posterize(levels));
 
     /// <summary>Remaps the tone curve.</summary>
-    public ImagePipeline Levels(float black, float white, float gamma) => Step(PlanOps.Levels(black, white, gamma));
+    public ImagePipeline Levels(float inputBlack, float inputWhite, float gamma = 1f,
+        float outputBlack = 0f, float outputWhite = 1f) =>
+        Step(PlanOps.Levels(inputBlack, inputWhite, gamma, outputBlack, outputWhite));
 
     /// <summary>Gaussian blur.</summary>
     public ImagePipeline GaussianBlur(float sigma) => Step(PlanOps.GaussianBlur(sigma));
@@ -109,7 +111,7 @@ public sealed class ImagePipeline
     public ImagePipeline BoxBlur(int radius) => Step(PlanOps.BoxBlur(radius));
 
     /// <summary>Unsharp mask.</summary>
-    public ImagePipeline Sharpen(float amount = 0.5f, float sigma = 1f) => Step(PlanOps.Sharpen(amount, sigma));
+    public ImagePipeline Sharpen(float gain = 0.5f, float sigma = 1f) => Step(PlanOps.Sharpen(gain, sigma));
 
     /// <summary>3x3 emboss.</summary>
     public ImagePipeline Emboss() => Step(PlanOps.Emboss());
@@ -128,6 +130,32 @@ public sealed class ImagePipeline
     public ImagePipeline Convolve(ReadOnlySpan<float> kernel, int radius,
         BorderMode border = BorderMode.Clamp, float bias = 0f, float constantValue = 0f) =>
         Step(PlanOps.Convolve(kernel, radius, border, bias, constantValue));
+
+    /// <summary>Warm or cool shift.</summary>
+    /// <param name="amount">Positive warms, negative cools.</param>
+    public ImagePipeline Temperature(float shift = 0f) => Step(PlanOps.Temperature(shift));
+
+    /// <summary>Tone curve through the given points.</summary>
+    /// <param name="points">Control points, at least two.</param>
+    public ImagePipeline Curves(params CurvePoint[] points) => Step(PlanOps.Curves(points));
+
+    /// <summary>Saturation weighted towards already-saturated colours.</summary>
+    /// <param name="amount">0 is greyscale, 1 is identity.</param>
+    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
+    public ImagePipeline Vibrance(float lift = 0f, bool bt709 = false) => Step(PlanOps.Vibrance(lift, bt709));
+
+    /// <summary>Seeded grain; whole-image because the generator advances per pixel.</summary>
+    /// <param name="amount">Amplitude in normalised units.</param>
+    /// <param name="kind">Uniform or Gaussian.</param>
+    /// <param name="seed">Sequence seed.</param>
+    public ImagePipeline Noise(float amplitude = 0.05f, NoiseKind kind = NoiseKind.Gaussian, uint seed = 1) =>
+        Step(PlanOps.Noise(amplitude, kind, seed));
+
+    /// <summary>Unsharp mask built from a negative Gaussian.</summary>
+    /// <param name="amount">Strength.</param>
+    /// <param name="sigma">Gaussian sigma.</param>
+    public ImagePipeline GaussianSharpen(float gain = 0.5f, float sigma = 1f) =>
+        Step(PlanOps.GaussianSharpen(gain, sigma));
 
     /// <summary>Erosion or dilation with a square window of odd side <c>2r+1</c>.</summary>
     /// <param name="radius">Window radius; 1 is 3×3.</param>
@@ -179,8 +207,8 @@ public sealed class ImagePipeline
     public ImagePipeline OilPaint(int radius, int levels = 20) => Step(PlanOps.OilPaint(radius, levels));
 
     /// <summary>Vignette. Runs whole-image; costs one intermediate.</summary>
-    public ImagePipeline Vignette(float radius = 0.75f, float strength = 1f) =>
-        Step(PlanOps.Vignette(radius, strength));
+    public ImagePipeline Vignette(float radius = 0.75f, float darkening = 1f) =>
+        Step(PlanOps.Vignette(radius, darkening));
 
     /// <summary>CLAHE. Runs whole-image; costs one intermediate.</summary>
     public ImagePipeline Clahe(int tilesX = 8, int tilesY = 8, float clipLimit = 3f) =>
