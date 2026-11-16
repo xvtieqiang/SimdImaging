@@ -2,7 +2,7 @@ using System.Globalization;
 using SimdImaging.Comparison;
 
 // Comparison harness. Usage:
-//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|realworld|icc|disposecheck|fusion|batch|perf32|sizes|mem|seamprofile|matrix|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate] [WxH]
+//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|realworld|icc|disposecheck|fusion|batch|chainab|perf32|sizes|mem|seamprofile|matrix|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate] [WxH]
 // Not part of SimdImaging.slnx on purpose: the shipped solution must stay buildable without the
 // git-ignored Six Labors licence file (AGENTS.md clean-room rules).
 
@@ -206,6 +206,11 @@ try
     if (mode is "disposecheck")
     {
         DisposeCheck.Write(report, width, height);
+    }
+
+    if (mode is "chainab")
+    {
+        ChainAb.Write(report, width, height);
     }
 
     if (mode is "icc")

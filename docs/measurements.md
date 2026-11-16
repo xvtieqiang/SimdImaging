@@ -410,3 +410,36 @@ dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- nlm-bench 1
 
 同一改动里修掉一个与内层无关的杠杆：`RowParallel.For(0, height, …)` 的首参传成了 `width=0`，
 被 64K 像素门槛判成单线程——**这个 6.7 s 里有一半是没用上多核**。改为 `For(width, height, …)`。
+
+## 链式吞吐与冷启动（2026-11-16）
+
+### 点算子链：三条路径同价
+
+`chainab` 在同一进程里量同一套 5 步点链的三条路径：
+
+| 尺寸 | 融合计划 | 不融合 | 直调 |
+|---|---|---|---|
+| 1920×1080 | **17.2 ms** | 19.4 ms | 18.8 ms |
+| 16000×12000（192 MP） | **1109 ms** | 1147 ms | 1113 ms |
+
+三条同价、融合最快 ⇒ 点链里没有计划调度开销；192 MP 上完全打平，带宽受限。
+原始报告：`2026-11-16.chainab2.chainab.md`、`2026-11-16.chain192.chainab.md`。
+
+**链路性能以 `cores` 模式为准**（独立子进程、交错 21 轮取最小值，不受共享线程池污染）；
+单算子 7/7 领先、几何均值 0.55×。`perfpipe` 的单次比值不用于性能判定——同代码同尺寸的
+`point-3` 对手读数在两份报告间差 7×，排序污染见 `Cores.cs` 类注释。
+
+### 冷启动：AOT 2.2×
+
+`benchmarks/SimdImaging.ColdStart` 建 64×64、跑一次高斯、打印一个字节，量整个进程的墙钟。
+publish 带 `IlcInstructionSet=avx2`（AGENTS.md 要求），墙钟在进程外打点、每档三次取中位；
+`op=93` 两档一致。
+
+| 构建 | 墙钟三次 / 中位 | in-process `elapsed=` |
+|---|---|---|
+| JIT（`dotnet x.dll`） | 154 / 153 / 141 ms → **153 ms** | ~42 ms |
+| NativeAOT（`PublishAot` + avx2） | 94 / 68 / 70 ms → **70 ms** | ~0.3 ms |
+
+墙钟差 83 ms 含宿主启动、程序集加载与 JIT；程序内 `elapsed` 拆出其中一段：算子 JIT ~42 ms、
+AOT ~0.3 ms，其余约 41 ms 是两档共有的进程开销。
+

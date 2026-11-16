@@ -43,6 +43,8 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks -- [轮次]
 | `fusion` | 融合是否发生（按池租用次数判定） |
 | `batch` | 批量场景（多张图连续处理） |
 | `icc` | ICC 变换的自洽验证（恒等 / 往返 / 中性轴） |
+| `chainab <宽x高>` | 同一条点链的三条路径（融合 / 不融合 / 直调） |
+| `cores <宽x高>` | 各算子的有效核数（`gates.sh --cores` 用） |
 | `realworld` | 真实照片跑全部算子（`SIMDIMAGING_DUMP_DIR` 可导出对比图） |
 | `disposecheck` | 忘记 `using` 的代价 |
 | `nlm-ablate` | NLM 内层消融 |
@@ -52,10 +54,32 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks -- [轮次]
 
 | 脚本 | 内容 |
 |---|---|
-| `bash benchmarks/gates.sh [--aot] [--perf]` | 构建零告警 → 全量测试 → 公开 API 快照 →（可选）AOT 与性能基线 |
+| `bash benchmarks/gates.sh [--aot] [--perf] [--realworld]` | 构建零告警 → 全量测试 → 公开 API 快照 →（可选）AOT、性能基线、真图跑通 |
 | `bash benchmarks/simd-tiers.sh [--aot]` | 在 AVX2 / Vector128 / 标量三档下跑全量并用 body SHA 比对 |
 | `bash benchmarks/repeat.sh <模式> <宽x高> <轮次>` | 多轮取中位，标出真落后与噪声 |
 | `bash benchmarks/check-baseline.sh` | 与 `baselines/*.json` 的记录值比，越阈值即失败 |
+
+## 冷启动
+
+`benchmarks/SimdImaging.ColdStart` 只做一件事（64×64 + 一次高斯），用来量**整个进程**的墙钟。
+程序自己打印的 `elapsed=` 只是 in-process 算子时间，不进墙钟账——墙钟必须在外面打点，三次取中位：
+
+```bash
+dotnet build benchmarks/SimdImaging.ColdStart -c Release
+dotnet publish benchmarks/SimdImaging.ColdStart -c Release -r win-x64 \
+    -p:PublishAot=true -p:IlcInstructionSet=avx2 -o /tmp/cs   # avx2 与 AOT 门禁同款，否则 ILC 裁掉 AVX2 内核
+
+# 每项各跑三次，取中位；把下面的命令换成 AOT 产物即为第二组
+for i in 1 2 3; do
+    start=$(date +%s%3N)
+    dotnet benchmarks/SimdImaging.ColdStart/bin/Release/net10.0/SimdImaging.ColdStart.dll >/dev/null
+    echo "JIT $(( $(date +%s%3N) - start )) ms"
+done
+# AOT: /tmp/cs/SimdImaging.ColdStart.exe
+```
+
+当前读数与其口径限定见 `docs/measurements.md`「冷启动」节。注意墙钟差包含宿主启动、程序集加载、
+类型初始化与 JIT，不能整体记成 JIT 成本；要单独量 JIT，需同一进程连跑两次、用首次减第二次。
 
 ## ICC 素材
 

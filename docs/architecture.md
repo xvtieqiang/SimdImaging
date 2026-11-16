@@ -755,7 +755,7 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 | 浮点跨档位逐字节很难 | 可能导致大量算子被迫走整数 | 已定：点/几何/卷积全走整数；float 只用于 HDR/ICC，且用固定序 + 单次舍入 FMA |
 | ICC LUT（mAB/mBA）实现量大 | M4 可能延期 | 先做 matrix/TRC（覆盖 95% 的 sRGB/Display P3/AdobeRGB），LUT 单列 P2 |
 | 文字渲染缺失 | 与 ImageSharp 功能对比时是明显空白 | 明确写进非目标；需要时单列 `SimdImaging.Fonts` 卫星包 |
-| AVX-512 降频 | 某些 SKU 反而更慢 | 档位可配置（`SIMDIMAGING_DISABLE_AVX512=1`）；以实测决定默认 |
+| AVX-512 降频 | 某些 SKU 反而更慢 | 档位可配置（`SIMDIMAGING_DISABLE_AVX512=1`，2026-11-16 实现，读一次进程级）；以实测决定默认 |
 | 分块后输出不一致 | 隐性正确性 bug | 分块验收 = 与整图执行逐字节相同，不一致就判定该算子不可分块 |
 | 4.x 功能清单凭公开文档整理 | 对标表可能不准（4.0 新增的 ICC / 色彩配置文件 / Convolution API 面很大） | 锁 4.1.3；`Oracle/README.md` 记录版本与文档快照日期，M5 前逐项复核 |
 | 框架基线 net10.0（与 SimdCodecs 一致） | 无法被 net8.0 应用引用，而 ImageSharp 4.x 是 net8.0 | 接受：本项目的定位是 net10 + AOT；若必须支持 net8，需要多目标并放弃部分 `Vector512` 优化 |

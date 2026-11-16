@@ -28,9 +28,9 @@ public static class PlanOps
         new(name, OpCategory.Point, 0, 0, PlanSteps.Point(op), (_, _, _, _) => 0L);
 
     /// <summary>
-    /// A neighbourhood step that keeps <c>rows</c> rows of float planes: the separable blurs and the 3x3 family
-    /// both do, at sixteen bytes per pixel per row. <paramref name="rows"/> already includes the halo, because
-    /// that is what the estimator passes in.
+    /// A neighbourhood step that keeps a number of float planes proportional to its halo: the separable blurs
+    /// and the 3x3 family both do, at sixteen bytes per pixel per row. The estimator's <c>rows</c> argument
+    /// already includes the halo.
     /// </summary>
     private static ImageOp Neighborhood(string name, int halo, Func<PixelView, WorkingBuffer> op) =>
         Neighborhood(name, halo, op, (width, _, rows, _) => (long)rows * width * 16);

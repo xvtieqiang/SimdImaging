@@ -142,10 +142,10 @@
 
 | 编号     | 算子                    | 语义要点                                                                       | 实现策略（算法 + SIMD）                                                                | 确定性               | 阶段 |
 | ------ | --------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------- | -- |
-| FLT-1  | Convolve              | 任意 2D 核；自动检测可分离                                                            | 可分离则横+纵两遍；3×3 特化为 `MultiplyAddAdjacent`。边界：Clamp（默认）/ Mirror / Wrap / Constant | D0/D1             | P1 |
+| FLT-1  | Convolve              | 任意奇数核 `Convolve(kernel, radius, border)` + 3×3 快路径；**未做可分离自动检测**                       通用路径为逐像素累加（`2r+1` 行环，每行只解码一次）；3×3 走 `MultiplyAddAdjacent` 特化。边界 **Clamp / Mirror / Wrap / Constant 全部实现**（`BorderMode`），与 3×3 快路径逐字节对拍。**通用路径不做可分离分解** | D0/D1             | P1 |
 | FLT-2  | GaussianBlur          | σ，半径 `ceil(3σ)`；Exact / Fast 两模式                                           | Exact：可分离定点核（u8/u16 Q14，f32 FMA）；Fast：三次 box 近似，复杂度与 σ 无关。4–8 px/iter          | D0/D1             | P1 |
 | FLT-3  | BoxBlur               | 方框/矩形核                                                                     | 积分图 u32/u64 前缀和，O(1)/px；或水平滑动窗口                                                | D0                | P1 |
-| FLT-4  | Median                | 3/5/7/9 方形核                                                                | 排序网络（min/max 交换），`Vector128<byte>` 16 lane 并行；大核改直方图 O(r)                      | D0                | P1 |
+| FLT-4  | Median                | **仅 3×3**（5/7/9 未实现，2026-11-16 核实）                                                                | 排序网络（min/max 交换），`Vector128<byte>` 16 lane 并行；大核改直方图 O(r)                      | D0                | P1 |
 | FLT-5  | Bilateral             | 空间核 × 值域核                                                                  | 值域核预计算 256 项 LUT；空间核可分离近似（快速模式）；精确模式为 2D，成本 O(r²)                              | D0/D1             | P2 |
 | FLT-6  | BokehBlur             | 圆盘/多边形光圈核                                                                  | 直接 2D 卷积成本高，用可分离六边形近似 + 能量归一化                                                  | D1                | P2 |
 | FLT-7  | MotionBlur            | 线段核，角度 + 长度                                                                | 按角度生成采样点表，双线性采样后累加                                                             | D1                | P2 |
@@ -158,7 +158,7 @@
 | FLT-14 | Vignette              | 径向衰减                                                                       | 距离 → 1D LUT（按行预计算），乘 alpha/亮度；SIMD 广播                                          | D0                | P1 |
 | FLT-15 | Glow                  | 高光提取 → 模糊 → 加法合成                                                           | 阈值 LUT + FLT-2 + CMP-2(Add)                                                    | D0/D1             | P2 |
 | FLT-16 | Dither                | Floyd–Steinberg / Atkinson / Burkes / Sierra / Stucki / Bayer 2·4·8 / None | 误差扩散串行（固定扫描序，sbyte 误差累加）；Bayer 为阈值矩阵，可 SIMD                                    | D2（扩散）/ D0（Bayer） | P1 |
-| FLT-17 | Morphology            | Erode / Dilate / Open / Close                                              | 3×3：滚动三行 + 标量 min/max，内存 O(行)；更大半径再上 van Herk–Gil-Werman（O(1)/px）              | D0                | P1 |
+| FLT-17 | Morphology            | Erode / Dilate / Open / Close                                              | 仅 3×3：滚动三行 + 标量 min/max，内存 O(行)；**大半径的 van Herk–Gil-Werman 未实现**              | D0                | P1 |
 | FLT-18 | HistogramEqualization | 全局直方图 → CDF                                                                | 两遍：直方图 → 256 项 LUT → 应用                                                        | D0                | P1 |
 | FLT-19 | Clahe                 | 分块自适应均衡，clip limit                                                         | 分块直方图 → 裁剪重分布 → CDF LUT → tile 间双线性插值                                          | D0                | P2 |
 | FLT-20 | Noise                 | 高斯/均匀噪声                                                                    | xorshift128+ 定种子；高斯用 Box–Muller 或 12 次均匀和近似                                    | D2（固定种子）          | P2 |
@@ -211,7 +211,7 @@
 | ANL-3 | DominantColors | 前 N 主色                      | 量化后取 top-N + 原图均值回代                 | D2  | P2 |
 | ANL-4 | AlphaBounds    | 非透明内容包围盒                    | 逐行比较 + `MoveMask` 找首末非零字节           | D0  | P1 |
 | ANL-5 | Psnr           | MSE → PSNR                  | u32/u64 差平方累加；SIMD 乘加               | D0  | P1 |
-| ANL-6 | Ssim / MsSsim  | 11×11 高斯窗                   | 可分离高斯 + 局部均值/方差/协方差；f32             | D1  | P2 |
+| ANL-6 | Ssim           | **仅单尺度 SSIM**（MS-SSIM 未实现，2026-11-16 核实）                   | 可分离高斯 + 局部均值/方差/协方差；f32             | D1  | P2 |
 | ANL-7 | Diff           | 逐像素绝对差、最大差、超阈值计数            | 无符号差 + `SAD` 思路；一次遍历三个指标            | D0  | P1 |
 | ANL-8 | ColorDifference | CIEDE2000（单色对 + 整图 Mean/Max） | Sharma 式；度数/弧度与 180° 色相不连续分支逐条固定；double 累加 | D1 | P2 |
 | ANL-9 | DistanceTransform | 平方欧氏距离场（蒙版 → 到最近前景的距离²） | Felzenszwalb 抛物线包络，两遍可分扫描 O(N)；alpha 为掩膜通道，阈值 0.5；输出平方值以保住整数精确（2²⁴ 内） | D0 | P1 |
