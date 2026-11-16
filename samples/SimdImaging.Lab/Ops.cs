@@ -275,6 +275,74 @@ internal static class Ops
         new("dilate", "滤波", "膨胀 3×3", "邻域取最大", [],
             (i, _) => i.Dilate3x3(), null, "对手无同名算子"),
 
+        // Radii above 3 go through van Herk rather than the 3x3 specialisation, so the bench can see the difference
+        // between the two code paths that now exist.
+        new("erode-n", "滤波", "腐蚀 N×N", "任意半径（>3 走 van Herk）",
+            [new("radius", "半径", 2, 16, 1, 5)],
+            (i, p) => i.Morph((int)Math.Round(p["radius"]), Morphology.Erode), null, "对手无同名算子"),
+
+        new("dilate-n", "滤波", "膨胀 N×N", "任意半径（>3 走 van Herk）",
+            [new("radius", "半径", 2, 16, 1, 5)],
+            (i, p) => i.Morph((int)Math.Round(p["radius"]), Morphology.Dilate), null, "对手无同名算子"),
+
+        new("open", "滤波", "开运算", "先腐蚀后膨胀：去亮斑",
+            [new("radius", "半径", 2, 16, 1, 5)],
+            (i, p) => i.Morph((int)Math.Round(p["radius"]), Morphology.Open), null, "对手无同名算子"),
+
+        new("close", "滤波", "闭运算", "先膨胀后腐蚀：填暗斑",
+            [new("radius", "半径", 2, 16, 1, 5)],
+            (i, p) => i.Morph((int)Math.Round(p["radius"]), Morphology.Close), null, "对手无同名算子"),
+
+        new("tophat", "滤波", "顶帽", "原图减开运算：亮细节",
+            [new("radius", "半径", 2, 16, 1, 5)],
+            (i, p) => i.Morph((int)Math.Round(p["radius"]), Morphology.TopHat), null, "对手无同名算子"),
+
+        new("blackhat", "滤波", "黑帽", "闭运算减原图：暗细节",
+            [new("radius", "半径", 2, 16, 1, 5)],
+            (i, p) => i.Morph((int)Math.Round(p["radius"]), Morphology.BlackHat), null, "对手无同名算子"),
+
+        new("laplacian", "滤波", "拉普拉斯", "luma 二阶导，取绝对值",
+            [],
+            (i, _) => i.Laplacian(), null, "对手无同名算子"),
+
+        new("prewitt", "滤波", "Prewitt 梯度", "等权重梯度幅值",
+            [],
+            (i, _) => i.Prewitt(), null, "对手无同名算子"),
+
+        new("scharr", "滤波", "Scharr 梯度", "3/10/3 权重，旋转对称性更好",
+            [],
+            (i, _) => i.Scharr(), null, "对手无同名算子"),
+
+        new("convolve-box", "滤波", "任意核卷积", "盒核，走通用 2D 路径",
+            [new("radius", "半径", 1, 8, 1, 3)],
+            (i, p) =>
+            {
+                var radius = (int)Math.Round(p["radius"]);
+                var side = (radius * 2) + 1;
+                var kernel = new float[side * side];
+                Array.Fill(kernel, 1f / (side * side));
+                return i.Convolve(kernel, radius);
+            },
+            null, "对手无同名算子"),
+
+        new("median-n", "滤波", "中值 N×N", "滑动直方图，任意半径",
+            [new("radius", "半径", 2, 8, 1, 4)],
+            (i, p) => i.Median((int)Math.Round(p["radius"])), null, "对手无同名算子"),
+
+        new("dehaze", "色调", "去雾", "暗通道先验",
+            [new("radius", "窗口", 3, 15, 1, 7), new("strength", "强度", 0.1, 2, 0.1, 0.95)],
+            (i, p) => i.Dehaze((int)Math.Round(p["radius"]), (float)p["strength"]), null, "对手无同名算子"),
+
+        new("pointchain", "色调", "点算子链 · 单遍", "五个 per-channel 变换塌缩成一张表",
+            [],
+            (i, _) => i.PointChain(
+                PointOps.ContrastRow(1.1f),
+                PointOps.InvertRow(),
+                PointOps.ContrastRow(0.9f),
+                PointOps.BrightnessRow(0.02f),
+                PointOps.InvertRow()),
+            null, "对手无同名算子"),
+
         new("noise", "色调", "加噪", "高斯噪声，固定种子",
             [new("amount", "强度", 0.01, 0.3, 0.01, 0.05)],
             (i, p) => i.Noise((float)p["amount"]), null, "对手无同名算子"),

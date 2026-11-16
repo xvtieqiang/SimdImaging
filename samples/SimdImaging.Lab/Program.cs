@@ -417,13 +417,12 @@ app.MapPost("/api/run", (RunRequest request) =>
 });
 
 // ---------- 配方（多步骤链） ----------
-// Same primitives as /api/run, several of them in one ProcessingPlan. The bench view exists because a
-// single-operator number cannot show what a seven-step chain does to the picture or to the peak footprint.
+// Same primitives as /api/run, several in a row. The bench view exists because a single-operator number cannot
+// show what a seven-step chain does to the picture, to the footprint, or to a look that only appears in sequence.
 
 app.MapGet("/api/chains", () => Results.Json(Chains.Catalog.Select(c => new
 {
     c.Id, c.Group, c.Title, c.Note, c.Params, c.Caveat,
-    steps = c.Steps.Select(s => new { s.Name, category = s.Category.ToString(), s.HaloX, s.HaloY }),
 })));
 
 app.MapPost("/api/chain", (ChainRequest request) =>
@@ -437,61 +436,25 @@ app.MapPost("/api/chain", (ChainRequest request) =>
 
     var parameters = Chains.Resolve(spec, request.Params);
 
-    // Recipes that composite a second image generate their demo layer at the backdrop's own size, so the
-    // blend is a straight full-frame composite with no resampling in the middle. Disposed at the end of the
-    // request — the plan closes over the view, so it has to outlive every Execute inside MeasureChain.
+    // Recipes that composite generate their layer at the backdrop's own size, so the blend is a straight
+    // full-frame composite with no resampling in the middle.
     using var overlay = spec.OverlayDemo is null ? null : RenderOverlay(entry, spec.OverlayDemo);
-    var plan = spec.Build(parameters, overlay);
-
-    var measured = MeasureChain(entry.Bytes, plan);
+    var measured = MeasureChain(entry.Bytes, image => spec.Apply(image, parameters, overlay));
     if (measured.Error is not null)
         return Results.Json(new { error = measured.Error });
 
-    // Second pass, observer on: every intermediate is encoded so the page can show where the picture went
-    // wrong. The per-step milliseconds here are single-shot and sit next to an encoder, so they are a rough
-    // "where did the time go" hint — `totalMs` from the seven-sample pass above is the number to quote.
-    var snapshots = new List<object>(plan.Steps.Count);
+    // One more run for the picture itself. The measured pass above is best-of-seven and does not keep its output.
+    string outputId;
     try
     {
         using var decoded = OurImage.Load(entry.Bytes);
-        var watch = Stopwatch.StartNew();
-        var previous = 0.0;
-
-        using var final = decoded.Apply(plan, null, (index, name, result) =>
-        {
-            var stepMs = watch.Elapsed.TotalMilliseconds - previous;
-            var outputId = Guid.NewGuid().ToString("N");
-            StoreOutput(outputId, EncodeView(result, snapshot: true));
-
-            // After the encode, not before: encoding one 1080p PNG costs 100 ms or more, which would be
-            // charged to the *next* step if `previous` moved first. That mistake made every step look
-            // 130–200 ms while the whole six-step chain reported 67 ms.
-            previous = watch.Elapsed.TotalMilliseconds;
-
-            snapshots.Add(new
-            {
-                index,
-                name,
-                category = plan.Steps[index].Category.ToString(),
-                ms = Math.Round(stepMs, 3),
-                outputId,
-            });
-        });
-
-        var finalId = Guid.NewGuid().ToString("N");
-        StoreOutput(finalId, EncodeView(final[0].Pixels.View));
-        snapshots.Add(new
-        {
-            index = plan.Steps.Count,
-            name = "结果",
-            category = "Output",
-            ms = 0.0,
-            outputId = finalId,
-        });
+        using var final = spec.Apply(decoded, parameters, overlay);
+        outputId = Guid.NewGuid().ToString("N");
+        StoreOutput(outputId, EncodeView(final[0].Pixels.View));
     }
     catch (Exception e)
     {
-        return Results.Json(new { error = $"快照生成失败：{e.Message}" });
+        return Results.Json(new { error = $"渲染失败：{e.Message}" });
     }
 
     ScheduleIdleCompaction();
@@ -505,7 +468,7 @@ app.MapPost("/api/chain", (ChainRequest request) =>
         totalMs = Math.Round(measured.Ms, 3),
         allocKiB = Math.Round(measured.AllocBytes / 1024.0, 1),
         workingSetMiB = Math.Round(Environment.WorkingSet / 1048576.0, 1),
-        steps = snapshots,
+        outputId,
         parameters,
         caveat = spec.Caveat,
     });
@@ -526,10 +489,10 @@ app.MapPost("/api/compare", (CompareRequest request) =>
         try
         {
             using var overlay = spec.OverlayDemo is null ? null : RenderOverlay(entry, spec.OverlayDemo);
-            var plan = spec.Build(Chains.Resolve(spec, null), overlay);
+            var parameters = Chains.Resolve(spec, null);
             using var decoded = OurImage.Load(entry.Bytes);
             var watch = Stopwatch.StartNew();
-            using var result = decoded.Apply(plan);
+            using var result = spec.Apply(decoded, parameters, overlay);
             watch.Stop();
 
             var outputId = Guid.NewGuid().ToString("N");
@@ -539,7 +502,6 @@ app.MapPost("/api/compare", (CompareRequest request) =>
             {
                 id = spec.Id, spec.Group, spec.Title,
                 ms = Math.Round(watch.Elapsed.TotalMilliseconds, 1),
-                steps = plan.Steps.Count,
                 outputId,
             });
         }
@@ -615,8 +577,7 @@ app.MapPost("/api/batch", (BatchRequest request) =>
             }
             else
             {
-                var plan = chainSpec!.Build(parameters);
-                using var result = image.Apply(plan);
+                using var result = chainSpec!.Apply(image, parameters);
                 watch.Stop();
                 if (encode)
                 {
@@ -720,7 +681,7 @@ static OurImage ToImage(PixelView view)
 // the interesting number — the plan keeps two full images alive whatever the step count, and the chain's
 // allocations show whether that held.
 static (double Ms, long AllocBytes, int Width, int Height, string? Error) MeasureChain(
-    byte[] source, ProcessingPlan plan)
+    byte[] source, Func<OurImage, OurImage> run)
 {
     try
     {
@@ -729,7 +690,7 @@ static (double Ms, long AllocBytes, int Width, int Height, string? Error) Measur
         for (var w = 0; w < 2; w++)
         {
             using var warm = OurImage.Load(source);
-            using var warmResult = warm.Apply(plan);
+            using var warmResult = run(warm);
             width = warmResult.Width;
             height = warmResult.Height;
         }
@@ -740,7 +701,7 @@ static (double Ms, long AllocBytes, int Width, int Height, string? Error) Measur
             using var decoded = OurImage.Load(source);
             var before = GC.GetTotalAllocatedBytes(precise: false);
             var watch = Stopwatch.StartNew();
-            using var result = decoded.Apply(plan);
+            using var result = run(decoded);
             watch.Stop();
             samples.Add((watch.Elapsed.TotalMilliseconds, GC.GetTotalAllocatedBytes(precise: false) - before));
         }

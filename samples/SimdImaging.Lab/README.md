@@ -83,6 +83,30 @@ curl -sL -o photo-mist.jpg     "https://picsum.photos/seed/simd3-contrast/1280/7
 <SixLaborsLicenseFile>$(MSBuildThisFileDirectory)..\..\docs\sixlabors.lic</SixLaborsLicenseFile>
 ```
 
+## 参数怎么填
+
+每个算子的参数都有固定量纲，写代码时不用翻实现：
+
+| 算子 | 签名 | 恒等值 | 范围 | 常用值 |
+|---|---|---|---|---|
+| 对比度 | `Contrast(gain = 1f)` | 1 | 0–2 | 0.85 / 1.15 |
+| 饱和度 | `Saturation(gain = 1f)` | 1 | 0–2 | 1.2 / 0.7 |
+| 自然饱和 | `Vibrance(lift = 0f)` | 0 | 0–1 | 0.4 |
+| 色温 | `Temperature(shift = 0f)` | 0 | ±1 | ±0.25 |
+| 亮度 | `Brightness(shift = 0f)` | 0 | ±1 | ±0.05 |
+| 伽马 | `Gamma(gamma)` | 1 | >0 | 0.9 / 1.1 |
+| 色阶 | `Levels(inputBlack, inputWhite, gamma, outputBlack, outputWhite)` | (0,1,1,0,1) | 0–1 | 见配方 |
+| 暗角 | `Vignette(radius = 0.75f, darkening = 1f)` | darkening 0 | radius 0–1 | (0.75, 0.55) |
+| 高斯模糊 | `GaussianBlur(sigma)` | 0 | >0 | 0.6 / 1.5 |
+| 锐化 | `GaussianSharpen(gain = 0.5f, sigma = 1f)` | 0 | >0 | (0.5, 1.0) |
+| 颗粒 | `Noise(amplitude = 0.05f, kind, seed)` | 0 | 0–1 | 0.05 |
+| 局部均衡 | `Clahe(tilesX, tilesY, clipLimit)` | — | >0 | (8, 8, 3) |
+
+**怎么读这张表**：签名里的默认值**就是恒等值**——`Contrast()` 不改图，`Contrast(gain: 1.2f)` 加两成对比度。
+参数名带方向：`gain` 是倍数（1 为基准），`shift` 是加减（0 为基准），`amplitude`/`darkening`/`lift` 是 0 起步的量。
+
+颜色类参数一律 0..1 归一化，等价于 0..255 的八位值（`Levels(inputBlack: 0.05f)` 就是色阶里填 13）。
+
 ## 接口
 
 | 方法 | 路径 | 说明 |

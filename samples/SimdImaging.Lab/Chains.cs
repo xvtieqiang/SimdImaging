@@ -5,27 +5,10 @@ using OurImage = SimdImaging.Image;
 namespace SimdImaging.Lab;
 
 /// <summary>
-/// One step of a recipe: a name, how it reads its source, and the operator itself.
-/// <para>The operator takes the resolved parameters so a whole chain is rebuilt per request. Rebuilding is
-/// cheap — <see cref="ProcessingPlan"/> is a list of delegates, not compiled code.</para>
-/// </summary>
-internal sealed record ChainStep(
-    string Name,
-    OpCategory Category,
-    int HaloX,
-    int HaloY,
-    // Single-input body. Null when the step composites, in which case OverlayOp is the body instead.
-    Func<PixelView, IReadOnlyDictionary<string, double>, WorkingBuffer>? Op,
-    // Composite body: backdrop view, a demo layer sized to match it, parameters. Full-frame, no resampling.
-    // Views, not Images: the plan hands kernels a view, and Blend.Apply takes views directly.
-    Func<PixelView, PixelView, IReadOnlyDictionary<string, double>, WorkingBuffer>? OverlayOp = null,
-    // Which synthetic layer to generate when the recipe is composited ("mark" / "glow" / "alpha").
-    string? OverlayDemo = null);
-
-/// <summary>
-/// A recipe: several operators that together produce one recognisable look, plus the one or two knobs that
-/// matter. The point of the bench view is that these are the same primitives as the single-operator tab —
-/// nothing here is a special case, and the output must be identical to calling the operators by hand.
+/// A recipe: a name, a note, one knob, and a method that extends a pipeline.
+/// <para>Every recipe is written the way a caller writes one — a straight chain, no per-step decoration, no
+/// categories or halos. Composition, banding and halo sizing are the pipeline's business; a sample that restated
+/// them would be teaching a second, wrong API on top of the real one.</para>
 /// </summary>
 internal sealed record ChainSpec(
     string Id,
@@ -33,210 +16,175 @@ internal sealed record ChainSpec(
     string Title,
     string Note,
     ParamSpec[] Params,
-    ChainStep[] Steps,
+    Func<ImagePipeline, float, ImagePipeline> Run,
     string? Caveat = null,
+    // Set when the recipe starts by compositing a second image: the pipeline has no blend step, and inventing one
+    // here would hide the fact that a composite is a whole-image operation.
+    Func<OurImage, OurImage, OurImage>? Compose = null,
     // Set when the recipe composites: the layer kind to generate, sized to the backdrop by the caller.
     string? OverlayDemo = null)
 {
-    /// <summary>Turns the recipe into a runnable plan for the given parameters.</summary>
+    /// <summary>
+    /// Runs the recipe and returns the finished image, which the caller owns.
+    /// </summary>
+    /// <param name="source">The first image; not disposed.</param>
     /// <param name="parameters">Resolved parameter values.</param>
-    /// <param name="overlay">The demo layer, required when <see cref="OverlayDemo"/> is set. Must outlive
-    /// every execution of the returned plan: composite steps close over its pixels.</param>
+    /// <param name="overlay">The layer, for a recipe that composites.</param>
     /// <exception cref="InvalidOperationException">The recipe composites but no overlay was supplied.</exception>
-    public ProcessingPlan Build(IReadOnlyDictionary<string, double> parameters, OurImage? overlay = null)
+    public OurImage Apply(OurImage source, IReadOnlyDictionary<string, double> parameters, OurImage? overlay = null)
     {
-        var plan = new ProcessingPlan();
+        var first = Compose is null
+            ? source
+            : Compose(source, overlay ?? throw new InvalidOperationException(
+                $"Recipe '{Id}' composites and needs an overlay image; none was supplied."));
 
-        foreach (var step in Steps)
-        {
-            OpKernel kernel;
-
-            if (step.OverlayOp is not null)
-            {
-                if (overlay is null)
-                    throw new InvalidOperationException(
-                        $"Recipe '{Id}' composites and needs an overlay image; none was supplied.");
-
-                var overlayOp = step.OverlayOp;
-                var overlayView = overlay[0].Pixels.View;
-                kernel = PlanSteps.Global(view => overlayOp(view, overlayView, parameters));
-            }
-            else
-            {
-                var op = step.Op!;
-                kernel = step.Category switch
-                {
-                    OpCategory.Point => PlanSteps.Point(view => op(view, parameters)),
-                    OpCategory.Neighborhood => PlanSteps.Neighborhood(
-                        view => op(view, parameters), step.HaloX, step.HaloY),
-                    _ => PlanSteps.Global(view => op(view, parameters)),
-                };
-            }
-
-            plan.Add(step.Name, step.Category, kernel, step.HaloX, step.HaloY);
-        }
-
-        return plan;
+        return Run(first.Pipe(), (float)parameters["strength"]).ToImage();
     }
 }
 
 internal static class Chains
 {
-    /// <summary>Gaussian halo for a sigma, matching the kernel builder's <c>ceil(3σ)</c>.</summary>
-    private static int HaloFor(float sigma) => (int)Math.Ceiling(3 * sigma);
-
+    /// <summary>Every recipe is one pipeline chain, written the way a caller would write it.</summary>
     public static readonly ChainSpec[] Catalog =
     [
         new("vintage-film", "配方 · 风格", "复古胶片",
             "降对比 → 降饱和 → 暖色偏移 → 抬黑压白（褪色）→ 暗角 → 颗粒",
             [new("strength", "整体强度", 0, 1, 0.05, 0.8)],
-            [
-                new("contrast", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Contrast(v, (float)(1 - 0.15 * p["strength"]))),
-
-                new("desaturate", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Saturation(v, (float)(1 - 0.28 * p["strength"]))),
-
-                new("warm", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Temperature(v, (float)(0.26 * p["strength"]))),
-
-                // Faded film: the black point never reaches 0 and the white point never reaches 1, which is
-                // the single most recognisable part of the look. Everything above it is only seasoning.
-                new("fade", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Levels(v,
-                        inputBlack: (float)(0.05 * p["strength"]),
-                        inputWhite: (float)(1 - 0.07 * p["strength"]),
-                        gamma: 1f)),
-
-                // Global, not Point or Neighborhood: Vignette derives its falloff from the centre of the view
-                // it is handed, so a band would get its own centre and the picture would end up with one
-                // ellipse per band instead of one overall. Caught by looking at the output, not by a test.
-                new("vignette", OpCategory.Global, 0, 0,
-                    (v, p) => FilterOps.Vignette(v, 0.75f, (float)(0.55 * p["strength"]))),
-
-                // Global, not Point: the seeded RNG advances per row, so slicing it into bands would repeat
-                // the same sequence in every band and the grain would turn into horizontal stripes.
-                new("grain", OpCategory.Global, 0, 0,
-                    (v, p) => NoiseOps.Noise(v, (float)(0.05 * p["strength"]), NoiseKind.Gaussian, seed: 20261107u)),
-            ],
-            "颗粒走 Global（整图），因为它按行推进固定种子，切带会让每带重播同一段序列、变成横条纹。"
-            + "它也是这条链的时间大头：1080p 约 40 ms，其余五步合计约 12 ms。"),
+            VintageFilm,
+            "颗粒走整图：随机数按行推进，切带会让每带重播同一段序列、变成横条纹。它也是这条链的时间大头。"),
 
         new("pencil-sketch", "配方 · 风格", "线稿化",
-            "灰度 → 轻微去噪 → Sobel 边缘 → 反相 → 提对比，得到白底黑线的铅笔稿",
-            [new("detail", "细节强度", 0.2, 1, 0.05, 0.7)],
-            [
-                new("gray", OpCategory.Point, 0, 0,
-                    (v, _) => PointOps.Grayscale(v)),
-
-                // Before the edge pass, not after: Sobel amplifies whatever noise it finds, and a photograph
-                // carries plenty. σ is fixed low so the line stays thin.
-                new("denoise", OpCategory.Neighborhood, HaloFor(0.6f), HaloFor(0.6f),
-                    (v, _) => FilterOps.GaussianBlur(v, 0.6f)),
-
-                new("edges", OpCategory.Neighborhood, 1, 1,
-                    (v, _) => FilterOps.Sobel(v)),
-
-                new("invert", OpCategory.Point, 0, 0,
-                    (v, _) => PointOps.Invert(v)),
-
-                // Levels, not Contrast. After the invert the page is almost entirely white and the lines sit
-                // in the upper half of the range; Contrast stretches around the midpoint, so it pushed the
-                // lines *towards* white and the first attempt came out barely visible. Pulling the black
-                // point up is what actually inks them.
-                new("ink", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Levels(v,
-                        inputBlack: (float)(0.55 - 0.30 * p["detail"]),
-                        inputWhite: 1f,
-                        gamma: 1f)),
-            ],
-            "Sobel 的 halo 是 1（3×3 邻域），去噪那步的 halo 按 ceil(3σ) 给 2。两处都必须给足，否则带边界会出现接缝。"),
+            "灰度 → 轻微去噪 → Sobel 边缘 → 反相 → 提黑点，得到白底黑线的铅笔稿",
+            [new("strength", "整体强度", 0.2, 1, 0.05, 0.7)],
+            PencilSketch,
+            "去噪放在边缘之前：Sobel 会放大它找到的任何噪点，而照片本身就有不少。"),
 
         new("mono-film", "配方 · 风格", "黑白胶片",
-            "灰度 → S 曲线提对比 → 颗粒 → 暗角；黑白比彩色更挑对比，S 曲线在这里就是主角",
+            "灰度 → S 曲线提对比 → 颗粒 → 暗角；黑白比彩色更挑对比",
             [new("strength", "整体强度", 0, 1, 0.05, 0.8)],
-            [
-                new("gray", OpCategory.Point, 0, 0,
-                    (v, _) => PointOps.Grayscale(v)),
-
-                // An S curve, not Contrast: Contrast pivots every value around the midpoint equally, while
-                // the curve keeps the extremes pinned and bends only the middle — that is what "punchy but
-                // not clipped" means for monochrome.
-                new("curve", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Curves(v, Ops.SCurve(0.6 + 0.8 * p["strength"]))),
-
-                new("grain", OpCategory.Global, 0, 0,
-                    (v, p) => NoiseOps.Noise(v, (float)(0.04 * p["strength"]), NoiseKind.Gaussian, seed: 1935u)),
-
-                new("vignette", OpCategory.Global, 0, 0,
-                    (v, p) => FilterOps.Vignette(v, 0.8f, (float)(0.45 * p["strength"]))),
-            ],
-            "颗粒与暗角都走 Global：前者按行推进固定种子，后者从视图中心算衰减。"),
+            MonoFilm,
+            "用 S 曲线而不是 Contrast：Contrast 把所有值绕中点等比拉开，曲线只弯中间、两端不动——"
+            + "「提气但不切白」就是这个意思。"),
 
         new("landscape-pop", "配方 · 风格", "风光增强",
-            "CLAHE 拉开局部层次 → 自然饱和度 → 轻微 USM 锐化；每个算子各管一件事",
+            "局部直方图均衡 → 自然饱和度 → 锐化",
             [new("strength", "整体强度", 0.2, 1, 0.05, 0.7)],
-            [
-                // CLAHE first: it works on the luminance distribution, so boosting colour before it would
-                // just be amplified twice. Equalising the local contrast is the step that actually makes a
-                // hazy landscape read.
-                new("clahe", OpCategory.Global, 0, 0,
-                    (v, p) => ClaheOps.Clahe(v, 8, 8, (float)(1.5 + 3 * p["strength"]))),
-
-                new("vibrance", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Vibrance(v, (float)(0.25 + 0.45 * p["strength"]))),
-
-                // σ 1 halo 3; sharpening after the contrast work so the edge gain is applied to the final
-                // tonality, not to something CLAHE is about to redistribute.
-                new("sharpen", OpCategory.Neighborhood, 3, 3,
-                    (v, p) => FilterOps.GaussianSharpen(v, (float)(0.3 + 0.5 * p["strength"]), 1f)),
-            ],
-            "CLAHE 是 Global（tile 直方图依赖全图分布），不能切带；锐化走 Neighborhood，halo 按 ceil(3σ) 给 3。"),
+            LandscapePop,
+            "CLAHE 按块均衡，块边界会被放大；所以先均衡再锐化，顺序反了会把块边也锐出来。"),
 
         new("mist-cool", "配方 · 风格", "雾蓝冷调",
             "降对比 → 冷色偏移 → 抬黑发灰 → 降饱和 → 暗角；和复古胶片同一套积木，方向相反",
             [new("strength", "整体强度", 0, 1, 0.05, 0.7)],
-            [
-                new("contrast", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Contrast(v, (float)(1 - 0.2 * p["strength"]))),
-
-                new("cool", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Temperature(v, (float)(-0.35 * p["strength"]))),
-
-                new("fade", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Levels(v,
-                        inputBlack: (float)(0.08 * p["strength"]),
-                        inputWhite: (float)(1 - 0.04 * p["strength"]),
-                        gamma: 1f)),
-
-                new("desaturate", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Saturation(v, (float)(1 - 0.3 * p["strength"]))),
-
-                new("vignette", OpCategory.Global, 0, 0,
-                    (v, p) => FilterOps.Vignette(v, 0.85f, (float)(0.4 * p["strength"]))),
-            ],
-            "证明配方的价值不在算子新，在顺序与方向：同样五类积木，暖变冷、颗粒去掉、灰度不去，出来的就是另一种天气。"),
+            MistCool,
+            "证明配方的价值不在算子新，在顺序与方向：暖变冷、加颗粒变不加，出来的就是另一种天气。"),
 
         new("brand-mark", "配方 · 合成", "品牌水印",
-            "水印层正片叠底压印 → 提对比 → 轻微锐化；验证「合成之后继续处理」这条路能不能走通",
+            "水印层正片叠底压印 → 提对比 → 轻微锐化；验证「合成之后继续处理」这条路",
             [new("strength", "整体强度", 0.2, 1, 0.05, 0.7)],
-            [
-                // The white card drops out under Multiply and only the strokes print — the same thing a logo
-                // layer does in any editor. Full-frame by construction: the caller generates the layer at the
-                // backdrop's size, so there is no resampling step hiding inside the blend.
-                new("mark", OpCategory.Global, 0, 0, null,
-                    (bg, ov, _) => Blend.Apply(bg, ov, 0, 0, BlendMode.Multiply)),
-
-                new("contrast", OpCategory.Point, 0, 0,
-                    (v, p) => PointOps.Contrast(v, (float)(1 + 0.15 * p["strength"]))),
-
-                new("sharpen", OpCategory.Neighborhood, 3, 3,
-                    (v, p) => FilterOps.GaussianSharpen(v, (float)(0.25 + 0.35 * p["strength"]), 1f)),
-            ],
-            "唯一需要第二张图的配方：水印层按底图尺寸生成，同尺寸全幅混合。它也标出了 ProcessingPlan 的一条边界"
-            + "——合成步骤只能以 Global 整图执行，因为 Blend 要读整幅叠加层，切带没有意义。",
+            BrandMark,
+            "唯一需要第二张图的配方：水印层按底图尺寸生成，同尺寸全幅混合，之后继续走流水线。",
+            Compose: (backdrop, layer) => backdrop.Blend(layer, 0, 0, BlendMode.Multiply),
             OverlayDemo: "mark"),
     ];
+
+    // Fixed seeds: the bench has to show the same grain twice, so reproducibility is worth more than randomness.
+    private const uint FilmGrainSeed = 20261107u;
+    private const uint MonoGrainSeed = 1935u;
+
+    /// <summary>The faded film look: flat blacks, muted colour, warm, then grain on top.</summary>
+    private static ImagePipeline VintageFilm(ImagePipeline pipe, float strength)
+    {
+        // At full strength the picture is 15% flatter and 28% duller; 1 means "unchanged" to both operators.
+        var contrast = 1f - (0.15f * strength);
+        var saturation = 1f - (0.28f * strength);
+        var warmth = 0.26f * strength;
+        var vignette = 0.55f * strength;
+        var grain = 0.05f * strength;
+
+        // The black point never reaches 0 and the white point never reaches 1 — the single most recognisable part
+        // of the look; everything above it is seasoning.
+        var fadedBlack = 0.05f * strength;
+        var fadedWhite = 1f - (0.07f * strength);
+
+        return pipe.Contrast(contrast)
+            .Saturation(saturation)
+            .Temperature(warmth)
+            .Levels(inputBlack: fadedBlack, inputWhite: fadedWhite)
+            .Vignette(radius: 0.75f, darkening: vignette)
+            .Noise(amplitude: grain, kind: NoiseKind.Gaussian, seed: FilmGrainSeed);
+    }
+
+    /// <summary>White paper, black lines: flatten to luma, denoise, take edges, invert, ink the blacks.</summary>
+    private static ImagePipeline PencilSketch(ImagePipeline pipe, float strength)
+    {
+        // At full strength the lines start at mid-grey (0.55) rather than black; more detail pulls it down.
+        var inkBlack = 0.55f - (0.30f * strength);
+
+        return pipe.Grayscale()
+            .GaussianBlur(sigma: 0.6f)
+            .Sobel()
+            .Invert()
+            // Levels, not Contrast: after the invert the page is almost entirely white and the lines sit in the
+            // upper half of the range. Contrast stretches around the midpoint and pushed the lines towards white,
+            // which is why the first attempt came out barely visible. Pulling the black point up is what inks them.
+            .Levels(inputBlack: inkBlack, inputWhite: 1f);
+    }
+
+    /// <summary>Monochrome with the middle bent and the ends pinned, then grain and a vignette.</summary>
+    private static ImagePipeline MonoFilm(ImagePipeline pipe, float strength)
+    {
+        // The curve bends between 0.6 and 1.4; 1.0 would be the identity.
+        var curveAmount = 0.6 + (0.8 * strength);
+        var grain = 0.04f * strength;
+        var vignette = 0.45f * strength;
+
+        return pipe.Grayscale()
+            .Curves(Ops.SCurve(curveAmount))
+            .Noise(amplitude: grain, kind: NoiseKind.Gaussian, seed: MonoGrainSeed)
+            .Vignette(radius: 0.8f, darkening: vignette);
+    }
+
+    /// <summary>Local contrast, then saturation weighted towards what is already saturated, then sharpening.</summary>
+    private static ImagePipeline LandscapePop(ImagePipeline pipe, float strength)
+    {
+        // CLAHE: 8x8 tiles, clipping twice as hard at full strength as at the bottom of the range.
+        const int Tiles = 8;
+        var clipLimit = 1.5f + (3 * strength);
+
+        // 0.25 is a gentle lift, up to 0.70 at full strength.
+        var vibrance = 0.25f + (0.45f * strength);
+        var sharpen = 0.3f + (0.5f * strength);
+
+        return pipe.Clahe(tilesX: Tiles, tilesY: Tiles, clipLimit: clipLimit)
+            .Vibrance(vibrance)
+            .GaussianSharpen(gain: sharpen);
+    }
+
+    /// <summary>The same blocks as the vintage film, pointing the other way: cold, grey, flat.</summary>
+    private static ImagePipeline MistCool(ImagePipeline pipe, float strength)
+    {
+        var contrast = 1f - (0.2f * strength);
+        var chill = -0.35f * strength;      // negative: cools instead of warms
+        var fadedBlack = 0.08f * strength;
+        var fadedWhite = 1f - (0.04f * strength);
+        var saturation = 1f - (0.3f * strength);
+        var vignette = 0.4f * strength;
+
+        return pipe.Contrast(contrast)
+            .Temperature(chill)
+            .Levels(inputBlack: fadedBlack, inputWhite: fadedWhite)
+            .Saturation(saturation)
+            .Vignette(radius: 0.85f, darkening: vignette);
+    }
+
+    /// <summary>What runs after the blend: a little more contrast and a little more edge.</summary>
+    private static ImagePipeline BrandMark(ImagePipeline pipe, float strength)
+    {
+        var contrast = 1f + (0.15f * strength);   // above 1: more contrast, unlike the film looks
+        var sharpen = 0.25f + (0.35f * strength);
+
+        return pipe.Contrast(contrast).GaussianSharpen(gain: sharpen);
+    }
 
     public static Dictionary<string, double> Resolve(ChainSpec spec, Dictionary<string, double>? given)
     {

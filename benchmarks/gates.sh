@@ -48,6 +48,16 @@ err=${err:-0}
 printf 'observed: warnings=%s errors=%s exit=%s\n' "$warn" "$err" "$build_status"
 if [ "$err" = "0" ] && [ "$warn" = "0" ]; then
     pass "build clean"
+
+    # The sample bench is outside the solution, so nothing compiled it and it rotted: it still called an internal
+    # PlanSteps and an Add overload that had become internal, and had been unbuildable for long enough that the
+    # operator catalogue it served was missing every operator added since. Building it here costs a second.
+    if lab_log="$(dotnet build samples/SimdImaging.Lab -c Release --nologo 2>&1)"; then
+        lab_warn=$(printf '%s' "$lab_log" | grep -c "warning" || true)
+        pass "sample bench builds (${lab_warn} warnings)"
+    else
+        nope "the sample bench does not build"
+    fi
 else
     printf '%s\n' "$build_log" | grep -E 'warning |error ' | head -20
     nope "build has warnings or errors"
