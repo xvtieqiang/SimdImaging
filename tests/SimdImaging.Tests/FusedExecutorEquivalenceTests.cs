@@ -237,10 +237,30 @@ public class FusedExecutorEquivalenceTests
         Should.Throw<InvalidOperationException>(() => plan.ExecuteWithOptions(View(image),
             new ExecuteOptions { MaxWorkingBytes = 1024 }));
 
-        // A ceiling above the estimate must not throw.
+        // A ceiling above the estimate must not throw. These steps declare no scratch, so the estimate is a lower
+        // bound and the executor refuses to pretend otherwise unless the caller says a lower bound is enough.
+        Should.Throw<InvalidOperationException>(() => plan.ExecuteWithOptions(View(image),
+            new ExecuteOptions { MaxWorkingBytes = 1L << 30 }));
+
         using var result = plan.ExecuteWithOptions(View(image),
-            new ExecuteOptions { MaxWorkingBytes = 1L << 30 });
+            new ExecuteOptions { MaxWorkingBytes = 1L << 30, AllowUnestimatedScratch = true });
         result.Height.ShouldBe(64);
+    }
+
+    /// <summary>
+    /// An undeclared operator is not a free one. The ceiling cannot be enforced, so the default is to say so
+    /// rather than to report a working set the plan may well exceed.
+    /// </summary>
+    [Fact]
+    public void MaxWorkingBytes_WithUndeclaredScratch_RefusesInsteadOfGuessing()
+    {
+        using var image = Ramp(64, 64, WorkingFormat.Rgba8);
+        var plan = Plan(16, ("a", OpCategory.Neighborhood, Blur(3), 3, 3));
+
+        var error = Should.Throw<InvalidOperationException>(() => plan.ExecuteWithOptions(View(image),
+            new ExecuteOptions { MaxWorkingBytes = 1L << 30 }));
+
+        error.Message.ShouldContain("declare no scratch");
     }
 
     [Fact]

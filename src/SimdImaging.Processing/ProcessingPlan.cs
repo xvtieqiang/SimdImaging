@@ -43,7 +43,7 @@ public readonly record struct PlanStep(string Name, OpCategory Category, int Hal
     /// <para>The height passed in is the band the step will actually see, which is why this is a function
     /// and not a number. <c>MemoryEstimator</c> reads it and reports the largest declaration.</para>
     /// </summary>
-    public Func<int, int, WorkingFormat, long>? Scratch { get; init; }
+    public Func<int, int, int, WorkingFormat, long>? Scratch { get; init; }
 }
 
 /// <summary>
@@ -124,14 +124,14 @@ public sealed class ProcessingPlan
     public ProcessingPlan Add(ImageOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
-        return Add(op.Name, op.Category, op.Kernel, op.HaloX, op.HaloY);
+        return Add(op.Name, op.Category, op.Kernel, op.HaloX, op.HaloY, op.Scratch);
     }
 
     /// <summary>Appends a step that also declares its own scratch.</summary>
     /// <param name="scratch">What the step allocates per worker for a band of the given height; null when it
     /// allocates nothing worth reporting. <see cref="MemoryEstimator"/> turns these into the per-worker term.</param>
     internal ProcessingPlan Add(string name, OpCategory category, OpKernel kernel, int haloX, int haloY,
-        Func<int, int, WorkingFormat, long>? scratch)
+        Func<int, int, int, WorkingFormat, long>? scratch)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(kernel);
@@ -256,11 +256,22 @@ public sealed class ProcessingPlan
 
         if (options.MaxWorkingBytes > 0)
         {
-            var estimate = EstimateWorkingBytes(source, execution, segments, fused,
-                options.MaxDegreeOfParallelism);
-            if (estimate > options.MaxWorkingBytes)
+            // One formula, shared with the public estimator: the previous private version counted only the buffers
+            // the executor rents and never looked at PlanStep.Scratch, so a ceiling could pass a plan whose
+            // operators were about to allocate several more full-size planes.
+            var estimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, execution,
+                BandRows, fused, options.MaxDegreeOfParallelism);
+
+            if (estimate.UndeclaredSteps > 0 && !options.AllowUnestimatedScratch)
                 throw new InvalidOperationException(
-                    $"The plan would need an estimated {estimate} bytes of working set, above the " +
+                    $"The plan sets a {options.MaxWorkingBytes}-byte ceiling but {estimate.UndeclaredSteps} of its "
+                    + $"{execution.Count} steps declare no scratch, so the estimate ({estimate.PeakBytes} bytes) is "
+                    + "a lower bound and cannot enforce that ceiling. Declare the operator's scratch, raise the "
+                    + "ceiling, drop it, or set ExecuteOptions.AllowUnestimatedScratch to accept the lower bound.");
+
+            if (estimate.PeakBytes > options.MaxWorkingBytes)
+                throw new InvalidOperationException(
+                    $"The plan would need an estimated {estimate.PeakBytes} bytes of working set, above the " +
                     $"{options.MaxWorkingBytes}-byte ceiling in ExecuteOptions.MaxWorkingBytes.");
         }
 
@@ -540,26 +551,6 @@ public sealed class ProcessingPlan
 
     /// <summary>Documented estimate (not a measurement): the live set is the previous result plus the
     /// destination, plus two band windows per worker for every fused segment.</summary>
-    private long EstimateWorkingBytes(PixelView source, IReadOnlyList<PlanStep> steps,
-        List<(int First, int Count)> segments, bool fused, int degree)
-    {
-        var full = (long)source.Width * source.Height * source.Format.BytesPerPixel();
-        var peak = 2 * full;
-        if (!fused)
-            return peak;
-
-        foreach (var (first, count) in segments)
-        {
-            if (count <= 1)
-                continue;
-
-            peak = Math.Max(peak, full + FusedExecutor.EstimateSegmentBytes(
-                source, steps, first, count, BandRows, degree));
-        }
-
-        return peak;
-    }
-
     /// <summary>The destination band widened by the halo and clamped to the image.</summary>
     private static PixelRect MapSource(PixelRect band, int haloX, int haloY, int width, int height)
     {

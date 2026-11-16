@@ -119,6 +119,7 @@ public class HaloDeclarationTests
             ("normalize", PlanOps.Normalize(), v => PointOps.Normalize(v)),
             ("adaptive-threshold", PlanOps.AdaptiveThreshold(4, 0.05f), v => ThresholdOps.AdaptiveThreshold(v, 4, 0.05f)),
             ("clahe", PlanOps.Clahe(4, 4, 3f), v => ClaheOps.Clahe(v, 4, 4, 3f)),
+            ("dehaze", PlanOps.Dehaze(3, 0.95f, 0.1f, 4), v => DehazeOps.Dehaze(v, 3, 0.95f, 0.1f, 4)),
         };
 
         var failures = new List<string>();
@@ -133,7 +134,7 @@ public class HaloDeclarationTests
             }
             catch (Exception e)
             {
-                failures.Add($"{name}: threw {e.GetType().Name}");
+                failures.Add($"{name}: threw {e.GetType().Name}: {e.Message} @ {e.StackTrace?.Split('\n').FirstOrDefault()}");
                 continue;
             }
 

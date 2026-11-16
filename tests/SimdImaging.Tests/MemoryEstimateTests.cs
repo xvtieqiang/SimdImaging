@@ -45,18 +45,66 @@ public class MemoryEstimateTests : IDisposable
         var plan = new ProcessingPlan()
             .Add("rl", OpCategory.Neighborhood,
                 PlanSteps.Neighborhood(v => RichardsonLucyOps.RichardsonLucy(v, 1.2f, 2), 4, 4), 4, 4,
-                RichardsonLucyOps.ScratchBytes);
+                (w, _, rows, f) => RichardsonLucyOps.ScratchBytes(w, rows, f));
 
         var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps, degree: 4);
 
         estimate.HasEstimatedTerms.ShouldBeTrue();
         estimate.Workers.ShouldBe(4);
 
-        // A single-step plan hands the operator the whole image, so that is the height it must declare.
-        estimate.PerWorkerBytes.ShouldBe(RichardsonLucyOps.ScratchBytes(1920, 1080, WorkingFormat.Rgba8));
-        estimate.PerWorkerBytes.ShouldBe(12L * 1920 * 1080 * 4 + 4L * 1920 * 4);
+        // A single neighbourhood step is still banded: ProcessingPlan.ExecuteWithOptions only checks the category,
+        // never the step count. The estimator used to assume otherwise and charge the operator for the whole
+        // image, which over-reports by the band ratio.
+        var bandRows = ProcessingPlan.DefaultBandRows;
+        var rows = Math.Min(1080, bandRows + (2 * 4));
+        estimate.PerWorkerBytes.ShouldBe(RichardsonLucyOps.ScratchBytes(1920, rows, WorkingFormat.Rgba8));
 
-        estimate.PeakBytes.ShouldBe(estimate.OutputBytes * 2 + estimate.PerWorkerBytes * 4);
+        estimate.PeakBytes.ShouldBe(estimate.OutputBytes * 2 + (estimate.PerWorkerBytes * 4));
+        estimate.UndeclaredSteps.ShouldBe(0);
+        estimate.HasEstimatedTerms.ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// Every factory <see cref="PlanOps"/> exposes declares its scratch, with one named exception. Without this,
+    /// a factory added without a declaration silently reads as "free" to the budget, which is how the whole
+    /// scratch term went missing in the first place.
+    /// </summary>
+    [Fact]
+    public void EveryPlanOpsFactory_DeclaresScratch_ExceptLocalLaplacianByName()
+    {
+        var ops = new (string Name, ImageOp Op)[]
+        {
+            ("brightness", PlanOps.Brightness(0.1f)),
+            ("contrast", PlanOps.Contrast(0.1f)),
+            ("gaussian", PlanOps.GaussianBlur(1f)),
+            ("box", PlanOps.BoxBlur(2)),
+            ("sharpen", PlanOps.Sharpen()),
+            ("median", PlanOps.Median3x3()),
+            ("sobel", PlanOps.Sobel()),
+            ("emboss", PlanOps.Emboss()),
+            ("open", PlanOps.Open3x3()),
+            ("bilateral", PlanOps.Bilateral(2)),
+            ("motion", PlanOps.MotionBlur(5)),
+            ("bokeh", PlanOps.BokehBlur(3)),
+            ("oilpaint", PlanOps.OilPaint(2)),
+            ("guided", PlanOps.GuidedFilter(3)),
+            ("nlm", PlanOps.NonLocalMeans(2)),
+            ("dehaze", PlanOps.Dehaze()),
+            ("clahe", PlanOps.Clahe()),
+            ("equalize", PlanOps.Equalize()),
+            ("normalize", PlanOps.Normalize()),
+            ("adaptive", PlanOps.AdaptiveThreshold()),
+            ("pixelate", PlanOps.Pixelate(5)),
+            ("vignette", PlanOps.Vignette()),
+            ("local-laplacian", PlanOps.LocalLaplacian()),
+        };
+
+        var undeclared = ops.Where(x => x.Op.Scratch is null).Select(x => x.Name).ToArray();
+
+        // No exceptions. LocalLaplacian used to be the one factory without a declaration - its pyramid footprint
+        // depends on level count and sample grid - which meant a plan containing it could never be given a
+        // MaxWorkingBytes ceiling. It now derives the number from the same level clamp the operator uses.
+        undeclared.ShouldBeEmpty("every factory must declare its scratch");
     }
 
     [Fact]

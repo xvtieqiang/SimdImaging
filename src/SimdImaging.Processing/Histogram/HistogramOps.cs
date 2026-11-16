@@ -30,9 +30,15 @@ public static class HistogramOps
             for (var x = 0; x < source.Width; x++)
             {
                 var value = (int)(row[x * 4 + channel] * 255f + 0.5f);
+                // Clamp both ends. Integer formats cannot leave [0,1], so only the upper guard was needed there;
+                // Rgba32F can, and an operator earlier in a chain (contrast, levels) routinely does — a negative
+                // code value then indexed the histogram out of bounds instead of being counted in the first bin.
                 var bucket = (int)(value * scale);
                 if (bucket >= bins)
                     bucket = bins - 1;
+                else if (bucket < 0)
+                    bucket = 0;
+
                 histogram[bucket]++;
             }
         }

@@ -79,9 +79,14 @@ public class FusedChainPropertyTests
         var random = new Random(20261116);
         var failures = new List<string>();
 
-        foreach (var (bandRows, degree) in new[] { (1, 1), (4, 4), (64, 4) })
+        // Band heights either side of the halo (1, 3), a height that divides the image badly (7), and one wide
+        // enough to make the halo irrelevant (64); worker counts 1 and 4 on each. Formats included because the
+        // integer fast paths and the float path read and round differently - a chain that agrees in Rgba8 says
+        // nothing about Rgba32F.
+        foreach (var format in new[] { WorkingFormat.Rgba8, WorkingFormat.Rgba16, WorkingFormat.Rgba32F })
+        foreach (var (bandRows, degree) in new[] { (1, 1), (3, 4), (7, 4), (64, 1) })
         {
-            for (var trial = 0; trial < 40; trial++)
+            for (var trial = 0; trial < 25; trial++)
             {
                 var length = random.Next(1, 8);
                 var steps = new List<int>();
@@ -93,7 +98,7 @@ public class FusedChainPropertyTests
                     funcs.Add(Ops[index].Build(random));
                 }
 
-                using var source = Pattern(Width, Height, trial);
+                using var source = Pattern(Width, Height, trial, format);
                 var fused = RunFused(source, steps, bandRows, degree, funcs);
                 var stepped = RunStepped(source, funcs);
 
@@ -103,7 +108,7 @@ public class FusedChainPropertyTests
                     while (first < fused.Length && fused[first] == stepped[first])
                         first++;
 
-                    failures.Add($"bandRows={bandRows} degree={degree} trial {trial} [{Describe(steps)}]: "
+                    failures.Add($"{format} bandRows={bandRows} degree={degree} trial {trial} [{Describe(steps)}]: "
                                   + $"differs at byte {first} ({fused[first]} vs {stepped[first]})");
                 }
             }
@@ -112,12 +117,45 @@ public class FusedChainPropertyTests
         failures.ShouldBeEmpty(string.Join("\n", failures.Take(12)));
     }
 
+    /// <summary>
+    /// Whole-image and neighbourhood steps in one chain, crossing a band seam: the whole-image step runs once and
+    /// the neighbourhood steps fetch their own halo on either side of it. Random chains reach this shape
+    /// sometimes; this one always does.
+    /// </summary>
+    [Theory]
+    [InlineData(WorkingFormat.Rgba8)]
+    [InlineData(WorkingFormat.Rgba16)]
+    [InlineData(WorkingFormat.Rgba32F)]
+    public void GlobalAndNeighbourhoodSteps_Mix(WorkingFormat format)
+    {
+        using var source = Pattern(Width, Height, 3, format);
+
+        var funcs = new List<Func<PixelView, WorkingBuffer>>
+        {
+            v => HistogramOps.Equalize(v),
+            v => FilterOps.BoxBlur(v, 2),
+            v => FilterOps.Pixelate(v, 5),
+            v => FilterOps.Sharpen(v),
+        };
+
+        var steps = new List<int> { 16, 11, 15, 12 };   // equalize -> box -> pixelate -> sharpen
+        var fused = RunFused(source, steps, 4, 4, funcs);
+        var stepped = RunStepped(source, funcs);
+
+        var first = 0;
+        while (first < fused.Length && fused[first] == stepped[first])
+            first++;
+
+        fused.AsSpan().SequenceEqual(stepped).ShouldBeTrue(
+            $"{format}: first difference at byte {first}");
+    }
+
     /// <summary>The smallest case that reproduces it: one neighbourhood step, one band boundary.</summary>
     [Fact]
     public void ASingleSharpenStep_MatchesTheWholeImage()
     {
         var funcs = new List<Func<PixelView, WorkingBuffer>> { v => FilterOps.Sharpen(v) };
-        using var source = Pattern(Width, Height, 16);
+        using var source = Pattern(Width, Height, 16, WorkingFormat.Rgba8);
 
         RunFused(source, [12], 4, 1, funcs).ShouldBe(RunStepped(source, funcs));
     }
@@ -174,17 +212,37 @@ public class FusedChainPropertyTests
 
     private static string Describe(List<int> steps) => string.Join(" → ", steps.Select(i => Ops[i].Name));
 
-    private static Image Pattern(int width, int height, int seed)
+    private static Image Pattern(int width, int height, int seed, WorkingFormat format)
     {
-        var image = Image.Create(width, height, WorkingFormat.Rgba8);
+        var image = Image.Create(width, height, format);
         var span = image.WritablePixels;
         var random = new Random((seed * 31) + 7);
-        for (var i = 0; i < span.Length; i += 4)
+        var bytes = format.BytesPerPixel();
+        for (var i = 0; i < span.Length; i += bytes)
         {
-            span[i] = (byte)random.Next(256);
-            span[i + 1] = (byte)random.Next(256);
-            span[i + 2] = (byte)random.Next(256);
-            span[i + 3] = 255;
+            switch (format)
+            {
+                case WorkingFormat.Rgba8:
+                    span[i] = (byte)random.Next(256);
+                    span[i + 1] = (byte)random.Next(256);
+                    span[i + 2] = (byte)random.Next(256);
+                    span[i + 3] = 255;
+                    break;
+
+                case WorkingFormat.Rgba16:
+                    for (var c = 0; c < 3; c++)
+                        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(
+                            span.Slice(i + (c * 2), 2), (ushort)random.Next(65536));
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(
+                        span.Slice(i + 6, 2), ushort.MaxValue);
+                    break;
+
+                default:
+                    for (var c = 0; c < 4; c++)
+                        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(
+                            span.Slice(i + (c * 4), 4), (float)random.NextDouble());
+                    break;
+            }
         }
 
         return image;

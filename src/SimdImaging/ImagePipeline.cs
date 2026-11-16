@@ -176,6 +176,10 @@ public sealed class ImagePipeline
     /// <summary>Block mosaic.</summary>
     public ImagePipeline Pixelate(int blockSize) => Step(PlanOps.Pixelate(blockSize));
 
+    /// <summary>Removes haze. Runs whole-image; costs two single-channel planes.</summary>
+    public ImagePipeline Dehaze(int patchRadius = 7, float omega = 0.95f, float tMin = 0.1f, int refineRadius = 20) =>
+        Step(PlanOps.Dehaze(patchRadius, omega, tMin, refineRadius));
+
     /// <summary>Histogram equalisation.</summary>
     public ImagePipeline Equalize() => Step(PlanOps.Equalize());
 

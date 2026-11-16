@@ -158,23 +158,44 @@ public static class MemoryEstimator
             }
         }
 
+        // Scratch is counted by execution shape, not by a blanket multiplier:
+        //   banded       one copy per worker, over band + halo rows
+        //   whole-image  one copy, on the calling thread (ProcessingPlan runs Global steps exactly once)
+        // A single non-Global step is banded too - the executor does not care how long the plan is, it only
+        // looks at the category - so this no longer keys off steps.Count.
         long perWorker = 0;
+        long wholeImage = 0;
+        var undeclared = 0;
         foreach (var step in steps)
         {
             if (step.Scratch is not { } scratch)
+            {
+                undeclared++;
                 continue;
+            }
 
-            // A banded step sees its band plus the halo on both sides; anything else sees the whole image.
-            var banded = allowFusion && steps.Count > 1 && FusionPlanner.IsBandable(step);
-            var rows = banded ? Math.Min(height, bandRows + 2 * step.HaloY) : height;
-            perWorker = Math.Max(perWorker, scratch(width, rows, format));
+            var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite;
+            if (isWholeImage)
+            {
+                wholeImage = Math.Max(wholeImage, scratch(width, height, height, format));
+                continue;
+            }
+
+            var rows = steps.Count > 1 && !(allowFusion && FusionPlanner.IsBandable(step))
+                ? height
+                : Math.Min(height, bandRows + (2 * step.HaloY));
+            perWorker = Math.Max(perWorker, scratch(width, height, rows, format));
         }
 
         // The caller holds the source; the executor holds `rented`. Everything beyond the destination is
-        // scratch, and the per-worker term sits on top of both.
+        // scratch, and the operator terms sit on top of both.
         var planScratch = Math.Max(0, rented - full);
-        var peak = checked(full + rented + checked(perWorker * workers));
-        return new MemoryEstimate(full, full, planScratch, perWorker, workers, peak);
+        var peak = checked(full + rented + (perWorker * workers) + wholeImage);
+        return new MemoryEstimate(full, full, planScratch, perWorker, workers, peak)
+        {
+            WholeImageScratchBytes = wholeImage,
+            UndeclaredSteps = undeclared,
+        };
     }
 
     /// <summary>Mirrors <see cref="RowParallel"/>'s rule: one worker per band, capped by the degree.</summary>

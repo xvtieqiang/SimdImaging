@@ -95,7 +95,6 @@ public static class FilterOps
         return Separable(source, kernel, pool);
     }
 
-    /// <summary>
     /// <summary>Scratch a band may hold per worker: one band of float planes, capped at eight mebibytes.</summary>
     private const int ScratchBudgetBytes = 8 * 1024 * 1024;
 
@@ -108,6 +107,7 @@ public static class FilterOps
     private static int MaxBandRowsForScratch(int width) =>
         Math.Max(32, ScratchBudgetBytes / Math.Max(1, width * 16));
 
+    /// <summary>
     /// Runs a separable kernel as a horizontal pass followed by a vertical one. Work is done in row bands: a
     /// band keeps only <c>bandRows + 2·radius</c> horizontally filtered rows, so 4K needs about 9 MB of scratch
     /// instead of a full float plane (162 MB at σ 3). The recomputed rows are the band's context, and the

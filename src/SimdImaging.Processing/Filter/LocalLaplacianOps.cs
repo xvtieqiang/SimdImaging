@@ -213,6 +213,41 @@ public static class LocalLaplacianOps
             buffer = new float[length];
     }
 
+    /// <summary>
+    /// Working set of one call on a <c>width × height</c> image, in bytes: the pyramid levels plus the three
+    /// full-resolution planes the analysis keeps. This is what <c>PlanOps</c> hands the plan so that
+    /// <c>ExecuteOptions.MaxWorkingBytes</c> can see it at all.
+    /// </summary>
+    /// <param name="width">Source width.</param>
+    /// <param name="height">Source height.</param>
+    /// <param name="levels">Levels requested; the operator clamps this, and so does the estimate.</param>
+    /// <param name="samples">Sample count, which decides whether a per-pixel assignment is built.</param>
+    public static long ScratchBytes(int width, int height, int levels = 5, int samples = 32)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(levels);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(samples);
+
+        // Same clamp the operator applies: a small image must not fail on the default level count.
+        var effectiveLevels = levels;
+        while (effectiveLevels > 1 && (Math.Min(width, height) >> effectiveLevels) < 4)
+            effectiveLevels--;
+
+        var levelCount = effectiveLevels + 1;
+        var widths = new int[levelCount];
+        var heights = new int[levelCount];
+        widths[0] = width;
+        heights[0] = height;
+        for (var l = 1; l < levelCount; l++)
+        {
+            widths[l] = Pyramid.DownsampledLength(widths[l - 1]);
+            heights[l] = Pyramid.DownsampledLength(heights[l - 1]);
+        }
+
+        return EstimateBytes(widths, heights, levelCount, samples);
+    }
+
     private static long EstimateBytes(int[] widths, int[] heights, int levelCount, int samples)
     {
         long bytes = 0;

@@ -20,14 +20,32 @@ namespace SimdImaging.Processing;
 /// </remarks>
 public static class PlanOps
 {
+    /// <summary>
+    /// Point steps need no per-pixel scratch beyond a row buffer that already exists in the executor, so they
+    /// declare zero rather than nothing: zero is a claim, null is an admission.
+    /// </summary>
     private static ImageOp Point(string name, Func<PixelView, WorkingBuffer> op) =>
-        new(name, OpCategory.Point, 0, 0, PlanSteps.Point(op));
+        new(name, OpCategory.Point, 0, 0, PlanSteps.Point(op), (_, _, _, _) => 0L);
 
+    /// <summary>
+    /// A neighbourhood step that keeps <c>rows</c> rows of float planes: the separable blurs and the 3x3 family
+    /// both do, at sixteen bytes per pixel per row. <paramref name="rows"/> already includes the halo, because
+    /// that is what the estimator passes in.
+    /// </summary>
     private static ImageOp Neighborhood(string name, int halo, Func<PixelView, WorkingBuffer> op) =>
-        new(name, OpCategory.Neighborhood, halo, halo, PlanSteps.Neighborhood(op, halo, halo));
+        Neighborhood(name, halo, op, (width, _, rows, _) => (long)rows * width * 16);
 
-    private static ImageOp Global(string name, Func<PixelView, WorkingBuffer> op) =>
-        new(name, OpCategory.Global, 0, 0, PlanSteps.Global(op));
+    private static ImageOp Neighborhood(string name, int halo, Func<PixelView, WorkingBuffer> op,
+        Func<int, int, int, WorkingFormat, long> scratch) =>
+        new(name, OpCategory.Neighborhood, halo, halo, PlanSteps.Neighborhood(op, halo, halo), scratch);
+
+    /// <summary>
+    /// Whole-image steps run once on the calling thread. Most of them have no declaration yet, which is reported
+    /// as undeclared rather than as zero — the budget refuses to pretend it can enforce a ceiling it cannot see.
+    /// </summary>
+    private static ImageOp Global(string name, Func<PixelView, WorkingBuffer> op,
+        Func<int, int, int, WorkingFormat, long>? scratch = null) =>
+        new(name, OpCategory.Global, 0, 0, PlanSteps.Global(op), scratch);
 
     /// <summary>Brightness by <paramref name="amount"/>.</summary>
     public static ImageOp Brightness(float amount) => Point("brightness", v => PointOps.Brightness(v, amount));
@@ -107,7 +125,13 @@ public static class PlanOps
 
     /// <summary>Guided filter; its window is the radius.</summary>
     public static ImageOp GuidedFilter(int radius, float epsilon = 1e-4f) =>
-        Neighborhood("guided", radius, v => GuidedFilterOps.GuidedFilter(v, radius, epsilon));
+        new("guided", OpCategory.Neighborhood, radius, radius,
+            PlanSteps.Neighborhood(v => GuidedFilterOps.GuidedFilter(v, radius, epsilon), radius, radius),
+            // Five float planes over bandRows + 4·radius rows (the operator widens the band by 2·radius on each
+            // side, so its row count is the estimator's `rows` plus another 2·radius), plus the full-image copy
+            // it makes up front. Both terms are read off GuidedFilterOps, not assumed.
+            (width, height, rows, format) =>
+                ((long)(rows + (2 * radius)) * width * 20) + ((long)width * height * format.BytesPerPixel()));
 
     /// <summary>
     /// Non-local means. Each output compares patches of radius <paramref name="patchRadius"/> inside a search
@@ -115,7 +139,12 @@ public static class PlanOps
     /// </summary>
     public static ImageOp NonLocalMeans(int searchRadius, int patchRadius = 1, float h = 0.1f) =>
         Neighborhood("nlm", searchRadius + patchRadius,
-            v => NonLocalMeansOps.NonLocalMeans(v, searchRadius, patchRadius, h));
+            v => NonLocalMeansOps.NonLocalMeans(v, searchRadius, patchRadius, h),
+            // Per worker: the decoded ring (rows × one pixel per row) plus six scratch arrays of width entries —
+            // one long[] and five double[] — plus the output row of four floats. `rows` already carries the
+            // search + patch halo. ArrayPool may hand back a longer array, which this does not model.
+            (width, _, rows, format) =>
+                ((long)rows * width * format.BytesPerPixel()) + ((long)width * (8 + 40 + 16)));
 
     /// <summary>Oil paint; its histogram window is the radius.</summary>
     public static ImageOp OilPaint(int radius, int levels = 20) =>
@@ -126,29 +155,46 @@ public static class PlanOps
     /// whole picture is the only correct context. It costs one intermediate image, like calling it directly.
     /// </summary>
     public static ImageOp Vignette(float radius = 0.75f, float strength = 1f) =>
-        Global("vignette", v => FilterOps.Vignette(v, radius, strength));
+        Global("vignette", v => FilterOps.Vignette(v, radius, strength), (_, _, _, _) => 0L);
 
     /// <summary>CLAHE: it builds per-tile histograms, so it reads the whole picture.</summary>
     public static ImageOp Clahe(int tilesX = 8, int tilesY = 8, float clipLimit = 3f) =>
-        Global("clahe", v => ClaheOps.Clahe(v, tilesX, tilesY, clipLimit));
+        // One int histogram per tile per channel, plus the destination row.
+        Global("clahe", v => ClaheOps.Clahe(v, tilesX, tilesY, clipLimit),
+            (width, _, _, _) => ((long)tilesX * tilesY * 3 * 256 * 4) + ((long)width * 16));
 
     /// <summary>Local Laplacian: a pyramid, so every band would need the whole image anyway.</summary>
     public static ImageOp LocalLaplacian(int levels = 5, int samples = 32) =>
-        Global("local-laplacian", v => LocalLaplacianOps.LocalLaplacian(v, levels, samples));
+        Global("local-laplacian", v => LocalLaplacianOps.LocalLaplacian(v, levels, samples),
+            (width, height, _, _) => LocalLaplacianOps.ScratchBytes(width, height, levels, samples));
 
     /// <summary>Per-channel histogram stretch; whole-image statistics.</summary>
-    public static ImageOp Normalize() => Global("normalize", v => PointOps.Normalize(v));
+    public static ImageOp Normalize() =>
+        // One 256-bin histogram plus the destination row the executor already provides.
+        Global("normalize", v => PointOps.Normalize(v), (width, _, _, _) => 1024L + ((long)width * 16));
 
     /// <summary>Adaptive threshold: a local mean, but its window is wider than any band worth carrying.</summary>
     public static ImageOp AdaptiveThreshold(int radius = 8, float offset = 0.05f) =>
-        Global("adaptive-threshold", v => ThresholdOps.AdaptiveThreshold(v, radius, offset));
+        // A (2r+1)-row float window of the full width, plus the working row.
+        Global("adaptive-threshold", v => ThresholdOps.AdaptiveThreshold(v, radius, offset),
+            (width, _, _, _) => ((long)((radius * 2) + 1) * width * 4) + ((long)width * 16));
 
     /// <summary>
     /// Block-aligned mosaic. A block spans rows that a band boundary can cut anywhere, so no halo is correct —
     /// whole-image is the only category that reproduces the single-image result.
     /// </summary>
-    public static ImageOp Pixelate(int blockSize) => Global("pixelate", v => FilterOps.Pixelate(v, blockSize));
+    public static ImageOp Pixelate(int blockSize) =>
+        // Writes blocks straight into the destination; no plane of its own.
+        Global("pixelate", v => FilterOps.Pixelate(v, blockSize), (_, _, _, _) => 0L);
+
+    /// <summary>Dehaze: the dark channel and the atmospheric light both need the whole picture.</summary>
+    public static ImageOp Dehaze(int patchRadius = 7, float omega = 0.95f, float tMin = 0.1f, int refineRadius = 20) =>
+        Global("dehaze", v => DehazeOps.Dehaze(v, patchRadius, omega, tMin, refineRadius),
+            // Two single-channel float planes (dark channel, transmission) plus one more for the box refinement.
+            (width, _, rows, _) => 3L * width * rows * 4);
 
     /// <summary>Histogram equalisation needs the whole image to build its transfer curve.</summary>
-    public static ImageOp Equalize() => Global("equalize", v => HistogramOps.Equalize(v));
+    public static ImageOp Equalize() =>
+        // Three 256-bin histograms turned into three LUTs, plus the destination row.
+        Global("equalize", v => HistogramOps.Equalize(v), (width, _, _, _) => (3L * 256 * 4) + ((long)width * 16));
 }

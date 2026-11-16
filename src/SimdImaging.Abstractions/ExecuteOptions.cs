@@ -25,6 +25,18 @@ public sealed record ExecuteOptions
     public long MaxWorkingBytes { get; init; }
 
     /// <summary>
+    /// Accept a <see cref="MaxWorkingBytes"/> ceiling even when some steps declared no scratch, which makes the
+    /// estimate a lower bound rather than a ceiling.
+    /// </summary>
+    /// <remarks>
+    /// The default is <c>false</c>, and the executor throws instead of guessing. A budget that silently treats an
+    /// undeclared operator as free is worse than no budget: it reports success while the working set runs past the
+    /// number the caller asked for. Operators that know their footprint declare it through <c>PlanStep.Scratch</c>
+    /// (see <c>ImageOp</c>); set this only when a lower bound is genuinely what you want.
+    /// </remarks>
+    public bool AllowUnestimatedScratch { get; init; }
+
+    /// <summary>
     /// Allow same-size steps to run fused in band windows (fewer full-size intermediates).
     /// <c>false</c> forces the historical step-by-step ping-pong; the reason is recorded in the
     /// <c>PlanReport</c> when diagnostics are on.

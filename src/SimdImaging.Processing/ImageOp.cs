@@ -21,14 +21,34 @@ namespace SimdImaging.Processing;
 /// </remarks>
 public sealed class ImageOp
 {
-    internal ImageOp(string name, OpCategory category, int haloX, int haloY, OpKernel kernel)
+    internal ImageOp(string name, OpCategory category, int haloX, int haloY, OpKernel kernel,
+        Func<int, int, int, WorkingFormat, long>? scratch = null)
     {
         Name = name;
         Category = category;
         HaloX = haloX;
         HaloY = haloY;
         Kernel = kernel;
+        Scratch = scratch;
     }
+
+    /// <summary>
+    /// The operator's own working set for a view of <c>width × rows</c>, or <c>null</c> when it has not declared
+    /// one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>null</c> is not zero. A budget that treats an undeclared operator as free reports success while the
+    /// process runs past it, so <c>ExecuteOptions.MaxWorkingBytes</c> refuses a plan that contains one unless the
+    /// caller sets <c>AllowUnestimatedScratch</c>.
+    /// </para>
+    /// <para>
+    /// Only operators whose footprint is arithmetic have one: a per-worker band of float planes, a fixed ring of
+    /// rows, a pair of single-channel planes. Where the number depends on internals that would have to be
+    /// re-derived by hand every time the operator changes, there is deliberately no declaration.
+    /// </para>
+    /// </remarks>
+    internal Func<int, int, int, WorkingFormat, long>? Scratch { get; }
 
     /// <summary>Diagnostic name, used in plan reports.</summary>
     public string Name { get; }
