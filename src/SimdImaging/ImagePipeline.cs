@@ -250,15 +250,27 @@ public sealed class ImagePipeline
     /// instead is still collected by the GC, but the pool never sees it again: the next call rents a fresh
     /// buffer, and at 8K that is 132 MiB a time.
     /// </para>
+    /// <para>
+    /// The result is always an image of its own, including when no steps were added — an identity pipeline copies.
+    /// Returning the source would make the documented dispose destroy the image the caller started from.
+    /// </para>
     /// </remarks>
     public Image ToImage()
     {
         ObjectDisposedException.ThrowIf(_finished, this);
         _finished = true;
-        var result = Current();
+
+        // A pipeline with nothing to do still owes the caller a picture of their own. Returning the source made
+        // `using var copy = image.Pipe().ToImage()` hand back the very image it was copying — and the dispose at
+        // the end of that using then returned the source's buffer to the pool while the caller kept using it.
+        // A copy costs one frame; an aliased one costs the caller their image.
+        var result = HasWork ? Current() : _source.Clone();
         _current = null;
         return result;
     }
+
+    /// <summary>Whether any step has been recorded or run; false means the pipeline is the source.</summary>
+    internal bool HasWork => _current is not null || _pending.Count > 0;
 
     private ImagePipeline Step(ImageOp op)
     {
@@ -272,7 +284,14 @@ public sealed class ImagePipeline
     {
         ObjectDisposedException.ThrowIf(_finished, this);
         var input = Current();
-        _current = reshape(input);
+        var reshaped = reshape(input);
+
+        // The pass just ended: its output is no longer reachable and is not the caller's source, so it goes back
+        // to the pool now rather than at the next collection. Reshape returns a new image, never its input.
+        if (!ReferenceEquals(input, _source))
+            input.Dispose();
+
+        _current = reshaped;
         return this;
     }
 
@@ -288,7 +307,7 @@ public sealed class ImagePipeline
         _pending.Clear();
 
         var input = _current ?? _source;
-        var next = input.Apply(plan);
+        var next = input.Apply(plan, _pool);
         if (!ReferenceEquals(input, _source))
             input.Dispose();
 
@@ -300,10 +319,15 @@ public sealed class ImagePipeline
 /// <summary>Starts a pipeline.</summary>
 public static class ImagePipelineExtensions
 {
-    /// <summary>Chains operations into passes, splitting automatically where the size changes.</summary>
-    public static ImagePipeline Pipe(this Image image)
+    /// <summary>
+    /// Starts a pipeline over <paramref name="image"/>. Operations chain into passes, splitting automatically where
+    /// the size changes.
+    /// </summary>
+    /// <param name="image">The first image; the pipeline reads it lazily.</param>
+    /// <param name="pool">Where the pipeline's buffers are rented from; null uses the shared pool.</param>
+    public static ImagePipeline Pipe(this Image image, IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(image);
-        return new ImagePipeline(image);
+        return new ImagePipeline(image, pool);
     }
 }

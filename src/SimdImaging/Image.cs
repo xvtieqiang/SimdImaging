@@ -135,9 +135,12 @@ public sealed partial class Image : IDisposable
         var pipeline = new ImagePipeline(this, pool);
         steps(pipeline);
 
-        var replacement = pipeline.ToImage();
-        if (ReferenceEquals(replacement, this))
+        // A chain that recorded nothing is a no-op, not a copy. Checking before ToImage rather than by identity
+        // after it: ToImage now always returns an independent image, so identity no longer says anything.
+        if (!pipeline.HasWork)
             return this;
+
+        var replacement = pipeline.ToImage();
 
         try
         {

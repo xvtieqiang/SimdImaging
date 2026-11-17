@@ -25,7 +25,17 @@ public static class PlanOps
     /// declare zero rather than nothing: zero is a claim, null is an admission.
     /// </summary>
     private static ImageOp Point(string name, Func<PixelView, WorkingBuffer> op) =>
-        new(name, OpCategory.Point, 0, 0, PlanSteps.Point(op), (_, _, _, _) => 0L);
+        new(name, OpCategory.Point, 0, 0, PlanSteps.Point(op), PointScratch);
+
+    /// <summary>
+    /// What a point step actually allocates, which is not always nothing: a 16-bit image above
+    /// <see cref="PointOps.Lut16PixelFloor"/> builds a 4 × 65536-entry table (512 KiB) because building it beats the
+    /// float path. Declaring zero there made the estimator promise memory the step would then take.
+    /// </summary>
+    private static long PointScratch(int width, int height, int rows, WorkingFormat format) =>
+        format == WorkingFormat.Rgba16 && (long)width * height >= PointOps.Lut16PixelFloor
+            ? 4L * 65536 * sizeof(ushort)
+            : 0L;
 
     /// <summary>
     /// A neighbourhood step that keeps a number of float planes proportional to its halo: the separable blurs

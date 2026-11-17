@@ -457,7 +457,7 @@
   SimdImaging.ImagePipeline.ToImage() -> SimdImaging.Image
   SimdImaging.ImagePipeline.Vibrance(System.Single lift, System.Boolean bt709) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Vignette(System.Single radius, System.Single darkening) -> SimdImaging.ImagePipeline
-  SimdImaging.ImagePipelineExtensions.Pipe(SimdImaging.Image image) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipelineExtensions.Pipe(SimdImaging.Image image, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.ImagePipeline
   SimdImaging.NormalizedWarp.#ctor(System.Object object, System.IntPtr method)
   SimdImaging.NormalizedWarp.BeginInvoke(System.Single u, System.Single v, System.Single& sourceU, System.Single& sourceV, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
   SimdImaging.NormalizedWarp.EndInvoke(System.Single& sourceU, System.Single& sourceV, System.IAsyncResult result) -> System.Void

@@ -43,9 +43,11 @@ public sealed partial class Image
     /// <param name="pool">Where the intermediate and output buffers are rented.</param>
     /// <param name="observe">Optional per-step hook, called while the step's output is still alive.</param>
     /// <exception cref="ArgumentNullException"><paramref name="plan"/> is null.</exception>
+    /// <exception cref="NotSupportedException">The image has more than one frame.</exception>
     public Image Apply(ProcessingPlan plan, IPixelPool? pool = null, PlanObserver? observe = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ThrowIfMultiFrame();
         return ReplaceBuffer(plan.Execute(this[0].Pixels.View, pool, observe));
     }
 
@@ -59,11 +61,26 @@ public sealed partial class Image
     /// <param name="pool">Where the intermediate and output buffers are rented.</param>
     /// <param name="observe">Optional per-step hook; present forces the step-by-step path.</param>
     /// <exception cref="ArgumentNullException"><paramref name="plan"/> or <paramref name="options"/> is null.</exception>
+    /// <exception cref="NotSupportedException">The image has more than one frame.</exception>
     public Image ApplyWithOptions(ProcessingPlan plan, ExecuteOptions options, IPixelPool? pool = null,
         PlanObserver? observe = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(options);
+        ThrowIfMultiFrame();
         return ReplaceBuffer(plan.ExecuteWithOptions(this[0].Pixels.View, options, pool, observe));
+    }
+
+    /// <summary>
+    /// A plan runs one frame; an image with several would lose the rest without saying so. Encoding already refuses
+    /// for the same reason, and so does <see cref="Image.Mutate"/>, so this refuses rather than being the one entry
+    /// point that quietly returns a single frame.
+    /// </summary>
+    /// <exception cref="NotSupportedException">The image has more than one frame.</exception>
+    private void ThrowIfMultiFrame()
+    {
+        if (FrameCount > 1)
+            throw new NotSupportedException(
+                $"The image has {FrameCount} frames and a plan runs one; select a frame with KeepFrames first.");
     }
 }

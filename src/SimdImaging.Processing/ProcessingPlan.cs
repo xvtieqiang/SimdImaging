@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
@@ -80,6 +81,7 @@ public sealed class ProcessingPlan
     public const int DefaultBandRows = 128;
 
     private readonly List<PlanStep> _steps = [];
+    private ReadOnlyCollection<PlanStep>? _readOnlySteps;
 
     /// <summary>Bumped on every <c>Add</c>; the execution cache below is keyed on it.</summary>
     private int _version;
@@ -98,7 +100,11 @@ public sealed class ProcessingPlan
     private static readonly ExecuteOptions DefaultOptions = new();
 
     /// <summary>The steps, in execution order.</summary>
-    public IReadOnlyList<PlanStep> Steps => _steps;
+    /// <remarks>
+    /// Wrapped, not cast: returning the backing <see cref="List{T}"/> as <see cref="IReadOnlyList{T}"/> still hands
+    /// out an object a caller can cast back and mutate, which would change a plan between its estimate and its run.
+    /// </remarks>
+    public IReadOnlyList<PlanStep> Steps => _readOnlySteps ??= _steps.AsReadOnly();
 
     /// <summary>Rows per band for this plan.</summary>
     public int BandRows { get; init; } = DefaultBandRows;
