@@ -200,6 +200,12 @@ try
         SeamProfile.Write(report);
     }
 
+    if (mode is "pointdirect")
+    {
+        Console.WriteLine($"[pointdirect] direct write versus copy at {width}x{height}...");
+        PointDirect.Write(report, width, height);
+    }
+
     if (mode is "memestimate")
     {
         Console.WriteLine($"[memestimate] estimate versus measured peak at {width}x{height}...");

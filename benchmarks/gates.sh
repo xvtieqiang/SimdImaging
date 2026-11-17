@@ -39,7 +39,11 @@ report "1/6 build (Release, zero warnings required)"
 # An up-to-date build prints no "N Warning(s)" line at all, so a missing count means "nothing was rebuilt", not
 # "the count is unknown". The exit status is the authority on whether the build worked; the counts only refine it.
 build_status=0
-build_log="$(dotnet build SimdImaging.slnx -c Release --nologo 2>&1)" || build_status=$?
+# -t:Rebuild, not an incremental build. AGENTS.md warns that an incremental build does not re-emit warnings for
+    # projects it did not recompile, so "0 Warning(s)" means "nothing was compiled". It happened again on 2026-11-18:
+    # a full rebuild surfaced three warnings (an unresolvable cref, a duplicate using, a captured primary-ctor
+    # parameter) that this step had been reporting as clean. Fifteen seconds is the price of the check being real.
+    build_log="$(dotnet build SimdImaging.slnx -c Release --nologo -t:Rebuild 2>&1)" || build_status=$?
 warn=$(printf '%s' "$build_log" | grep -oE '[0-9]+ Warning\(s\)' | grep -oE '[0-9]+' | tail -1)
 err=$(printf '%s' "$build_log"  | grep -oE '[0-9]+ Error\(s\)'   | grep -oE '[0-9]+' | tail -1)
 warn=${warn:-0}
@@ -52,7 +56,7 @@ if [ "$err" = "0" ] && [ "$warn" = "0" ]; then
     # The sample bench is outside the solution, so nothing compiled it and it rotted: it still called an internal
     # PlanSteps and an Add overload that had become internal, and had been unbuildable for long enough that the
     # operator catalogue it served was missing every operator added since. Building it here costs a second.
-    if lab_log="$(dotnet build samples/SimdImaging.Lab -c Release --nologo 2>&1)"; then
+    if lab_log="$(dotnet build samples/SimdImaging.Lab -c Release --nologo -t:Rebuild 2>&1)"; then
         lab_warn=$(printf '%s' "$lab_log" | grep -c "warning" || true)
         pass "sample bench builds (${lab_warn} warnings)"
     else

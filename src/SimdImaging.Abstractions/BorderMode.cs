@@ -12,6 +12,8 @@ public enum BorderMode
     /// <summary>Wrap around to the opposite edge.</summary>
     Wrap = 2,
 
-    /// <summary>Read as zero (or as <see cref="ConvolveOptions.ConstantValue"/>).</summary>
+    /// <summary>Read as zero, or as the filter's own constant when it takes one.</summary>
+    /// <remarks>The constant lives on the operator's options, which is one layer up: naming the type here would make
+    /// Abstractions depend on Processing, which the dependency direction forbids.</remarks>
     Constant = 3,
 }

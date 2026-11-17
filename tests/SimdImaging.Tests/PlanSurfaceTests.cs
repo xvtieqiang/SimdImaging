@@ -3,7 +3,6 @@ using System.Collections.ObjectModel;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Geometry;
-using SimdImaging.Processing;
 
 namespace SimdImaging.Tests;
 
@@ -59,19 +58,26 @@ public class PlanSurfaceTests
             return new Owner(this, ArrayPool<byte>.Shared.Rent(length));
         }
 
-        private sealed class Owner(CountingPool pool, byte[] array) : IMemoryOwner<byte>
+        private sealed class Owner : IMemoryOwner<byte>
         {
-            private byte[]? _array = array;
+            private readonly CountingPool _pool;
+            private byte[]? _array;
+
+            public Owner(CountingPool pool, byte[] array)
+            {
+                _pool = pool;
+                _array = array;
+            }
 
             public Memory<byte> Memory => Volatile.Read(ref _array) is { } a ? a : throw new ObjectDisposedException(nameof(Owner));
 
             public void Dispose()
             {
-                if (Interlocked.Exchange(ref _array, null) is null)
+                if (Interlocked.Exchange(ref _array, null) is not { } array)
                     return;
 
                 ArrayPool<byte>.Shared.Return(array);
-                Interlocked.Decrement(ref pool._live);
+                Interlocked.Decrement(ref _pool._live);
             }
         }
     }
