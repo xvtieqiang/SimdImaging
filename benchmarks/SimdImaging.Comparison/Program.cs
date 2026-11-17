@@ -31,6 +31,13 @@ if (args.Length > 0 && args[0] == "memsteady-child")
     return;
 }
 
+if (args.Length > 0 && args[0] == "memestimate-child")
+{
+    MemEstimate.Child(args[1], int.Parse(args[2], CultureInfo.InvariantCulture),
+        int.Parse(args[3], CultureInfo.InvariantCulture));
+    return;
+}
+
 // M2 steady-state allocation probe. Measures our side only (no oracle, no licence, no report,
 // no golden), so it runs as a child-style early exit before the comparison harness is set up.
 if (args.Length > 0 && args[0] == "allocplan")
@@ -191,6 +198,12 @@ try
     if (mode is "seamprofile")
     {
         SeamProfile.Write(report);
+    }
+
+    if (mode is "memestimate")
+    {
+        Console.WriteLine($"[memestimate] estimate versus measured peak at {width}x{height}...");
+        MemEstimate.Write(report, width, height);
     }
 
     if (mode is "mem")
