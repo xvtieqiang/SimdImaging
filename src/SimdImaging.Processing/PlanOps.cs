@@ -28,6 +28,63 @@ public static class PlanOps
         new(name, OpCategory.Point, 0, 0, PlanSteps.Point(op), PointScratch);
 
     /// <summary>
+    /// A point step that writes its destination directly on Rgba8: the operator is run once over a 256-pixel probe to
+    /// build its byte table, and the table is what the kernel applies. The probe is the operator itself, so the table
+    /// cannot drift from the arithmetic it replaces — there is no second definition of the transform to keep in step.
+    /// </summary>
+    private static ImageOp PointTable(string name, Func<PixelView, WorkingBuffer> op) =>
+        ForceAdapterPoint
+            ? Point(name, op)
+            : new(name, OpCategory.Point, 0, 0,
+                PlanSteps.PointTable(
+                    new Lazy<byte[]>(() => BuildByteTable(op), LazyThreadSafetyMode.ExecutionAndPublication),
+                    op,
+                    TablePixelFloor),
+                PointScratch);
+
+    /// <summary>
+    /// Pixels below which the table is not worth building. Measured at 27 us per table against a 4K step's 5 ms and a
+    /// 320x240 step's 40 us: at 4K the table pays for itself forty-five times over, at 320x240 it barely does. The
+    /// floor sits between the two, and it is the same device as <see cref="PointOps.Lut16PixelFloor"/> for the same
+    /// reason - a table whose build costs more than the work it replaces is not an optimisation.
+    /// </summary>
+    private const long TablePixelFloor = 128 * 1024;
+
+    /// <summary>
+    /// Routes table-backed point steps through the general adapter instead. A measurement switch with the same job as
+    /// <c>PointOps.ForceScalarPoint</c>: without it the old path disappears with the change that removed it, and the
+    /// only number anyone can quote afterwards is the one from before the change.
+    /// </summary>
+    internal static bool ForceAdapterPoint;
+
+    /// <summary>Runs the operator over one row of every possible byte value and packs the answer as 4 x 256.</summary>
+    private static byte[] BuildByteTable(Func<PixelView, WorkingBuffer> op)
+    {
+        var table = new byte[4 * 256];
+        using var probe = WorkingBuffer.Rent(256, 1, WorkingFormat.Rgba8, pool: null);
+        var row = probe.View.Row(0);
+        for (var value = 0; value < 256; value++)
+        {
+            row[value * 4] = (byte)value;
+            row[(value * 4) + 1] = (byte)value;
+            row[(value * 4) + 2] = (byte)value;
+            row[(value * 4) + 3] = (byte)value;
+        }
+
+        using var result = op(probe.View);
+        var output = result.View.Row(0);
+        for (var value = 0; value < 256; value++)
+        {
+            table[value] = output[value * 4];
+            table[256 + value] = output[(value * 4) + 1];
+            table[512 + value] = output[(value * 4) + 2];
+            table[768 + value] = output[(value * 4) + 3];
+        }
+
+        return table;
+    }
+
+    /// <summary>
     /// What a point step actually allocates, which is not always nothing: a 16-bit image above
     /// <see cref="PointOps.Lut16PixelFloor"/> builds a 4 × 65536-entry table (512 KiB) because building it beats the
     /// float path. Declaring zero there made the estimator promise memory the step would then take.
@@ -58,16 +115,16 @@ public static class PlanOps
         new(name, OpCategory.Global, 0, 0, PlanSteps.Global(op), scratch);
 
     /// <summary>Brightness by <paramref name="amount"/>.</summary>
-    public static ImageOp Brightness(float amount) => Point("brightness", v => PointOps.Brightness(v, amount));
+    public static ImageOp Brightness(float amount) => PointTable("brightness", v => PointOps.Brightness(v, amount));
 
     /// <summary>Contrast about the mid-point.</summary>
-    public static ImageOp Contrast(float amount) => Point("contrast", v => PointOps.Contrast(v, amount));
+    public static ImageOp Contrast(float amount) => PointTable("contrast", v => PointOps.Contrast(v, amount));
 
     /// <summary>Gamma correction; above one darkens.</summary>
-    public static ImageOp Gamma(float gamma) => Point("gamma", v => PointOps.Gamma(v, gamma));
+    public static ImageOp Gamma(float gamma) => PointTable("gamma", v => PointOps.Gamma(v, gamma));
 
     /// <summary>Inverts the colour channels, leaving alpha.</summary>
-    public static ImageOp Invert() => Point("invert", v => PointOps.Invert(v));
+    public static ImageOp Invert() => PointTable("invert", v => PointOps.Invert(v));
 
     /// <summary>BT.601 luma, alpha untouched.</summary>
     public static ImageOp Grayscale(bool bt709 = false) => Point("grayscale", v => PointOps.Grayscale(v, bt709));
@@ -80,7 +137,7 @@ public static class PlanOps
         Point("saturation", v => PointOps.Saturation(v, amount, bt709));
 
     /// <summary>Quantizes each channel to <paramref name="levels"/> steps.</summary>
-    public static ImageOp Posterize(int levels) => Point("posterize", v => PointOps.Posterize(v, levels));
+    public static ImageOp Posterize(int levels) => PointTable("posterize", v => PointOps.Posterize(v, levels));
 
     /// <summary>Remaps the tone curve between a black and a white point.</summary>
     public static ImageOp Levels(float inputBlack, float inputWhite, float gamma = 1f,

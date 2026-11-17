@@ -26,17 +26,14 @@ internal static class PointDirect
         var data = Fixture.Make(width, height);
         using var source = Fixture.Ours(data, width, height);
 
-        var table = new byte[4 * 256];
-        for (var i = 0; i < 256; i++)
-        {
-            for (var c = 0; c < 4; c++)
-                table[(c * 256) + i] = (byte)(255 - i);
-        }
+        // The old path is kept reachable through PlanOps.ForceAdapterPoint, so the two sides of this table are the same
+        // operator on the same plan — one copied its band, the other writes it.
+        PlanOps.ForceAdapterPoint = true;
+        var adapter = new ProcessingPlan().Add(PlanOps.Invert());
+        var genericMs = Best(() => source.Apply(adapter));
 
-        var generic = new ProcessingPlan().Add(PlanOps.Invert());
-        var direct = new ProcessingPlan().AddPointLut("invert-lut", table);
-
-        var genericMs = Best(() => source.Apply(generic));
+        PlanOps.ForceAdapterPoint = false;
+        var direct = new ProcessingPlan().Add(PlanOps.Invert());
         var directMs = Best(() => source.Apply(direct));
         var saved = genericMs - directMs;
 
@@ -44,7 +41,7 @@ internal static class PointDirect
             ["路径", "耗时 ms", "相对直写"],
             [
                 ["通用适配器（含拷贝）", F(genericMs), F(genericMs / directMs) + "×"],
-                ["表核直写", F(directMs), "1.00×"],
+                ["直写目标", F(directMs), "1.00×"],
                 ["差值", F(saved), (100 * saved / genericMs).ToString("F0", CultureInfo.InvariantCulture) + "%"],
             ]);
 

@@ -41,6 +41,57 @@ internal static class PlanSteps
         };
     }
 
+    /// <summary>
+    /// Adapts a point operator that has a byte-domain table. On Rgba8 the table is applied straight into the
+    /// destination, which removes the band buffer and the copy <see cref="Point"/> needs. Every other format takes
+    /// the general path unchanged.
+    /// </summary>
+    /// <param name="table">The 4 x 256 table, built on first use from the same operator by <c>PlanOps</c>.</param>
+    /// <param name="fallback">The general operator, used whatever the table does not cover.</param>
+    /// <param name="pixelFloor">Pixels below which building the table costs more than the copy it saves.</param>
+    public static OpKernel PointTable(Lazy<byte[]> table, Func<PixelView, WorkingBuffer> fallback, long pixelFloor)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(fallback);
+        ArgumentOutOfRangeException.ThrowIfNegative(pixelFloor);
+
+        return (source, destination, rect, _) =>
+        {
+            if (source.Format != WorkingFormat.Rgba8 || (long)source.Width * source.Height < pixelFloor)
+            {
+                RowParallel.EnterNested();
+                try
+                {
+                    using var result = fallback(source.Slice(rect));
+                    CopyRows(result.View, 0, destination, rect.Y, rect.Height);
+                }
+                finally
+                {
+                    RowParallel.ExitNested();
+                }
+
+                return;
+            }
+
+            var lut = table.Value;
+            for (var y = rect.Y; y < rect.Y + rect.Height; y++)
+            {
+                var from = source.Row(y);
+                var to = destination.Row(y);
+                var start = rect.X * 4;
+                var end = start + (rect.Width * 4);
+
+                for (var i = start; i < end; i += 4)
+                {
+                    to[i] = lut[from[i]];
+                    to[i + 1] = lut[256 + from[i + 1]];
+                    to[i + 2] = lut[512 + from[i + 2]];
+                    to[i + 3] = lut[768 + from[i + 3]];
+                }
+            }
+        };
+    }
+
     /// <summary>Adapts a neighbourhood operator, keeping only the inner rectangle of its answer.</summary>
     /// <param name="operator">Runs the operator over a view and returns a new buffer the adapter disposes.</param>
     /// <param name="haloX">Columns of context the operator reads.</param>
