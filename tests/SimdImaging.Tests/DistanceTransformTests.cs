@@ -151,7 +151,7 @@ public class DistanceTransformTests
         // to take the format from the returned buffer. Relabelled as 8-bit, the float bytes would read as noise.
         using var mask = Mask([false, true, false], 3, 1);
 
-        using var result = mask.DistanceTransform();
+        using var result = mask.Pipe().DistanceTransform().ToImage();
 
         result.Format.ShouldBe(WorkingFormat.Rgba32F);
         Field(result[0].Pixels).ShouldBe([1f, 0f, 1f], tolerance: 1e-4f);

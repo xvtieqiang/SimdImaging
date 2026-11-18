@@ -315,9 +315,9 @@ public class ImageIoTests
     {
         using var source = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
 
-        using var stepwise1 = source.Saturation(1.2f);
-        using var stepwise2 = stepwise1.Contrast(1.1f);
-        using var stepwise = stepwise2.GaussianBlur(1.5f);
+        using var stepwise1 = source.Pipe().Saturation(1.2f).ToImage();
+        using var stepwise2 = stepwise1.Pipe().Contrast(1.1f).ToImage();
+        using var stepwise = stepwise2.Pipe().GaussianBlur(1.5f).ToImage();
 
         using var chained = source.Pipe().Saturation(1.2f).Contrast(1.1f).GaussianBlur(1.5f).ToImage();
 

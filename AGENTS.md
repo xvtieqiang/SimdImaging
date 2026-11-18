@@ -116,6 +116,22 @@ bash tests/SimdImaging.AotSmoke/run.sh            # needs the C++ workload (see 
   once a naive sort was the specification; the three attempts that were written implementation-first all had to be
   withdrawn.
 
+## Superseding a path
+
+- **A change that replaces a path deletes the old one in the same commit.** The failure mode is not forgetting to
+  delete; it is telling yourself the old path is still useful "just in case". This library has ninety-nine operator
+  methods on `Image` and sixty-seven on `ImagePipeline` that do the same thing with the same names: `image.Contrast(x)`
+  allocates once and runs one plan, `image.Pipe().Contrast(x).ToImage()` fuses, and nothing at a call site says which
+  is seven times faster. A generator was then written to keep three copies of every declaration in step — machinery
+  invented to manage a duplication that should not have existed.
+- **A `Force*` switch is legitimate only when both sides must keep existing** — the scalar twins, which CI runs with
+  HW intrinsics disabled. A switch that exists so a benchmark can compare an old implementation against the one that
+  replaced it is debt: the number it produces belongs in `docs/measurements.md` as one paragraph, and the branch
+  belongs in the bin.
+- **Before adding a surface, name the one it replaces.** If nothing is replaced, it is a second way to do something,
+  and the second way will drift from the first within a month — every one of this session's defects was a drift, not
+  a bug.
+
 ## Output contracts
 
 - Integer pipelines are byte-exact across SIMD tiers and platforms. Float pipelines freeze the operation

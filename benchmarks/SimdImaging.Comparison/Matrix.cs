@@ -76,14 +76,14 @@ internal static class Matrix
 
         var sweeps = new (string Id, Func<OurImage, OurImage> Ours, Func<TheirImage, TheirImage> Theirs)[]
         {
-            ("blur sigma=1", i => i.GaussianBlur(1f), i => i.Clone(x => x.GaussianBlur(1f))),
-            ("blur sigma=3", i => i.GaussianBlur(3f), i => i.Clone(x => x.GaussianBlur(3f))),
-            ("blur sigma=8", i => i.GaussianBlur(8f), i => i.Clone(x => x.GaussianBlur(8f))),
-            ("quantize 16", i => i.Quantize(16, SimdImaging.Processing.Quantizer.Wu),
+            ("blur sigma=1", i => i.Pipe().GaussianBlur(1f).ToImage(), i => i.Clone(x => x.GaussianBlur(1f))),
+            ("blur sigma=3", i => i.Pipe().GaussianBlur(3f).ToImage(), i => i.Clone(x => x.GaussianBlur(3f))),
+            ("blur sigma=8", i => i.Pipe().GaussianBlur(8f).ToImage(), i => i.Clone(x => x.GaussianBlur(8f))),
+            ("quantize 16", i => i.Pipe().Quantize(16, SimdImaging.Processing.Quantizer.Wu).ToImage(),
                 i => i.Clone(x => x.Quantize(new SixLabors.ImageSharp.Processing.Processors.Quantization.WuQuantizer(new QuantizerOptions { MaxColors = 16 })))),
-            ("quantize 64", i => i.Quantize(64, SimdImaging.Processing.Quantizer.Wu),
+            ("quantize 64", i => i.Pipe().Quantize(64, SimdImaging.Processing.Quantizer.Wu).ToImage(),
                 i => i.Clone(x => x.Quantize(new SixLabors.ImageSharp.Processing.Processors.Quantization.WuQuantizer(new QuantizerOptions { MaxColors = 64 })))),
-            ("quantize 256", i => i.Quantize(256, SimdImaging.Processing.Quantizer.Wu),
+            ("quantize 256", i => i.Pipe().Quantize(256, SimdImaging.Processing.Quantizer.Wu).ToImage(),
                 i => i.Clone(x => x.Quantize(new SixLabors.ImageSharp.Processing.Processors.Quantization.WuQuantizer(new QuantizerOptions { MaxColors = 256 })))),
         };
 

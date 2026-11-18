@@ -78,7 +78,7 @@ public class GradientTests
     public void Sobel_MatchesTheNaiveReference()
     {
         using var image = Pattern();
-        using var actual = image.Sobel();
+        using var actual = image.Pipe().Sobel().ToImage();
         Check(image, actual, Reference(image, 1f, 2f, 1f, 0.25f), "sobel");
     }
 
@@ -86,7 +86,7 @@ public class GradientTests
     public void Prewitt_MatchesTheNaiveReference()
     {
         using var image = Pattern();
-        using var actual = image.Prewitt();
+        using var actual = image.Pipe().Prewitt().ToImage();
         Check(image, actual, Reference(image, 1f, 1f, 1f, 1f / 3f), "prewitt");
     }
 
@@ -94,7 +94,7 @@ public class GradientTests
     public void Scharr_MatchesTheNaiveReference()
     {
         using var image = Pattern();
-        using var actual = image.Scharr();
+        using var actual = image.Pipe().Scharr().ToImage();
         Check(image, actual, Reference(image, 3f, 10f, 3f, 1f / 16f), "scharr");
     }
 }

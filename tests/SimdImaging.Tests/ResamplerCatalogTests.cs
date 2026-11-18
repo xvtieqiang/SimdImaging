@@ -40,7 +40,7 @@ public class ResamplerCatalogTests
         // Downscale, upscale and the degenerate 1×1 case: the last one exercises the clamped tap budget.
         foreach (var (width, height) in new[] { (23, 17), (128, 96), (1, 1) })
         {
-            using var resized = source.Resize(width, height, resampler);
+            using var resized = source.Pipe().Resize(width, height, resampler).ToImage();
             var span = resized.WritablePixels;
             for (var i = 0; i < span.Length; i++)
                 span[i].ShouldBe((byte)200, $"{resampler} {width}x{height} at byte {i}");

@@ -22,6 +22,14 @@ namespace SimdImaging.Processing;
 public delegate void OpKernel(PixelView source, PixelView destination, PixelRect destinationRect,
     PixelRect sourceRect);
 
+/// <summary>
+/// Writes <paramref name="rows"/> rows into <paramref name="destination"/> starting at
+/// <paramref name="destinationY"/>, reading from a window whose first produced row is
+/// <paramref name="sourceRowOffset"/> rows into it.
+/// </summary>
+public delegate void IntoKernel(PixelView sourceWindow, PixelView destination, int destinationY, int rows,
+    int sourceRowOffset);
+
 /// <summary>One named operator in a <see cref="ProcessingPlan"/>.</summary>
 /// <param name="Name">Stable name, used in diagnostics.</param>
 /// <param name="Category">How the step reads its source; <see cref="OpCategory.Global"/>,
@@ -80,6 +88,16 @@ public sealed class ProcessingPlan
     /// <summary>Rows per band when a step does not pick its own.</summary>
     public const int DefaultBandRows = 128;
 
+    /// <summary>
+    /// Pixels one band should hold, which is what the default band height is really expressing.
+    /// </summary>
+    /// <remarks>
+    /// A band is a cache-sized unit, so its size belongs in pixels: 128 rows is 245 K pixels at 1920 wide and 983 K
+    /// at 7680, and a separable filter keeps eight float planes of the band per worker. The number is anchored so that
+    /// 1920-wide images keep the 128 rows they were tuned at, and only wider images get a shorter band.
+    /// </remarks>
+    public const int DefaultBandPixels = 128 * 1920;
+
     private readonly List<PlanStep> _steps = [];
     private ReadOnlyCollection<PlanStep>? _readOnlySteps;
 
@@ -109,15 +127,6 @@ public sealed class ProcessingPlan
     /// <summary>Rows per band for this plan.</summary>
     public int BandRows { get; init; } = DefaultBandRows;
 
-    /// <summary>Appends a step.</summary>
-    /// <param name="name">Stable name.</param>
-    /// <param name="category">How the step reads its source.</param>
-    /// <param name="kernel">The code that fills a rectangle.</param>
-    /// <param name="haloX">Columns of context, for neighbourhood kernels.</param>
-    /// <param name="haloY">Rows of context, for neighbourhood kernels.</param>
-    /// <exception cref="ArgumentException"><paramref name="name"/> is empty or <paramref name="kernel"/> is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">A halo is negative.</exception>
-    /// <exception cref="NotSupportedException">The category changes the image size.</exception>
     // Internal on purpose: a caller who can pass a halo can pass the wrong one, and the wrong one does not
     // throw - it returns a wrong pixel at a band boundary. Plans are built from ImageOps, which owns the number.
     internal ProcessingPlan Add(string name, OpCategory category, OpKernel kernel, int haloX = 0, int haloY = 0) =>
@@ -251,7 +260,12 @@ public sealed class ProcessingPlan
 
         var width = source.Width;
         var height = source.Height;
-        var fused = options.AllowFusion && observe is null;
+        var bandRows = BandRowsFor(width, height);
+        var fusionAllowed = options.AllowFusion && observe is null;
+
+        // Decided before the shape is built, not per segment: the segments are cut for one execution mode, and a
+        // segment of several steps has no step-by-step form — the else branch runs its first step only.
+        var fused = fusionAllowed && (options.ForceFusion || ShouldFuse(_steps, width, height));
         var shape = ExecutionShapeFor(fused);
         var execution = shape.Steps;
         var segments = shape.Segments;
@@ -266,7 +280,7 @@ public sealed class ProcessingPlan
             // the executor rents and never looked at PlanStep.Scratch, so a ceiling could pass a plan whose
             // operators were about to allocate several more full-size planes.
             var estimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, execution,
-                BandRows, fused, options.MaxDegreeOfParallelism);
+                bandRows, fused, options.MaxDegreeOfParallelism);
 
             if (estimate.UndeclaredSteps > 0 && !options.AllowUnestimatedScratch)
                 throw new InvalidOperationException(
@@ -302,7 +316,7 @@ public sealed class ProcessingPlan
                 WorkingBuffer destination;
                 if (fused && count > 1)
                 {
-                    destination = FusedExecutor.ExecuteSegment(current, execution, first, count, BandRows,
+                    destination = FusedExecutor.ExecuteSegment(current, execution, first, count, bandRows,
                         options.MaxDegreeOfParallelism, cancellation, execPool);
                 }
                 else
@@ -328,23 +342,30 @@ public sealed class ProcessingPlan
                         {
                             // One worker is a plain loop: RowParallel would wrap it in a delegate, and that
                             // closure is a per-call allocation for a path that is meant to be allocation-free.
-                            var bands = BandCountFor(height);
+                            var bands = BandCountFor(height, bandRows);
                             for (var b = 0; b < bands; b++)
                             {
-                                var top = b * BandRows;
-                                var band = new PixelRect(0, top, width, Math.Min(BandRows, height - top));
+                                var top = b * bandRows;
+                                var band = new PixelRect(0, top, width, Math.Min(bandRows, height - top));
                                 step.Kernel(current, destination.View, band,
                                     MapSource(band, step.HaloX, step.HaloY, width, height));
                             }
                         }
                         else
                         {
-                            RowParallel.ForBands(BandCountFor(height), (start, end) =>
+                            // Without fusion a band is just a unit of work for one worker, so it is sized for the
+                            // thread count rather than for the fusion window: at 360 rows and 128-row bands the old
+                            // split gave three workers on a sixteen-core machine and lost 40-80% to the stepwise
+                            // chain it was supposed to match (`fusion` mode, "点算子 ×3" at 640×360).
+                            var stepwiseBands = StepwiseBandCount(height, bandRows);
+                            var stepwiseRows = (height + stepwiseBands - 1) / stepwiseBands;
+
+                            RowParallel.ForBands(stepwiseBands, (start, end) =>
                             {
                                 for (var b = start; b < end; b++)
                                 {
-                                    var top = b * BandRows;
-                                    var band = new PixelRect(0, top, width, Math.Min(BandRows, height - top));
+                                    var top = b * stepwiseRows;
+                                    var band = new PixelRect(0, top, width, Math.Min(stepwiseRows, height - top));
                                     step.Kernel(current, destination.View, band,
                                         MapSource(band, step.HaloX, step.HaloY, width, height));
                                 }
@@ -384,7 +405,7 @@ public sealed class ProcessingPlan
                 Segments = DescribeSegments(execution, segments, fused, shape.FirstOriginal, shape.OriginalCount),
                 FallbackReason = reason,
                 WorkerCount = RowParallel.LastWorkerCount,
-                BandCount = CountBands(execution, segments, fused, height),
+                BandCount = CountBands(execution, segments, fused, width, height),
                 PoolRentCount = counting!.Rents,
                 PoolReturnCount = counting.Returns,
                 ElapsedTicks = Stopwatch.GetTimestamp() - startTicks,
@@ -394,7 +415,81 @@ public sealed class ProcessingPlan
         return owned!;
     }
 
-    private int BandCountFor(int height) => (height + BandRows - 1) / BandRows;
+    /// <summary>The band height for this image: the caller's, or the pixel budget expressed in rows.</summary>
+    private int BandRowsFor(int width, int height)
+    {
+        if (BandRows != DefaultBandRows)
+            return BandRows;
+
+        // Two bounds, and the tighter one wins: the pixel budget keeps a band cache-sized on wide images, and
+        // height/degree keeps it small enough to keep every worker busy on short ones. Without the second bound a
+        // 1920-wide budget gives 640×360 a single band of 384 rows — one worker for the whole image.
+        var byPixels = DefaultBandPixels / Math.Max(1, width);
+        var byThreads = Math.Max(8, height / Math.Max(1, RowParallel.Degree));
+        return Math.Clamp(Math.Min(byPixels, byThreads), 8, 1024);
+    }
+
+    private int BandCountFor(int height, int rows) => (height + rows - 1) / rows;
+
+    /// <summary>
+    /// Bands for an unfused segment: enough to keep every worker busy, no finer than a few rows each.
+    /// </summary>
+    private int StepwiseBandCount(int height, int bandRows)
+    {
+        // An explicit BandRows is a request about the band geometry and is honoured as given; only the default is
+        // reinterpreted, because it was chosen as a fusion window and is too coarse to fill the threads.
+        if (BandRows != DefaultBandRows)
+            return BandCountFor(height, bandRows);
+
+        var byRows = Math.Max(1, height / 32);
+        return Math.Max(1, Math.Min(RowParallel.Degree, byRows));
+    }
+
+    /// <summary>
+    /// Whether this segment is worth fusing, decided from what the segment contains and how big the image is.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Measured at 640×360 / 1920×1080 / 3840×2160 / 7680×4320, plan ÷ step-by-step, lower is better:
+    /// </para>
+    /// <para>
+    /// A small kernel wins at every size — 3×3 ×2 read 0.63 / 0.35 / — / 0.36 and 3×3 ×3 read 0.63 / 0.40 / — /
+    /// 0.45 — because the fused band keeps the halo rows in cache instead of writing and re-reading a whole image
+    /// between two cheap passes. A convolution loses or ties (blur σ=3 + 2 points: 1.55 / 1.02 / — / 1.19): its
+    /// own arithmetic dominates, so the intermediate it saves was not the cost. A chain of points also loses at
+    /// small sizes (1.64 / 1.15) and only wins once the intermediate images are large enough to matter
+    /// (point ×5: 1.41 / 0.91 / — / 0.54).
+    /// </para>
+    /// <para>
+    /// So: fuse a segment that contains a small kernel, and otherwise fuse only when the intermediate images it
+    /// would avoid are big enough that memory is the reason to fuse. The second half is what keeps fusion's actual
+    /// purpose — not materialising N full frames — intact at 8K even where it costs a little time.
+    /// </para>
+    /// </remarks>
+    private static bool ShouldFuse(List<PlanStep> steps, int width, int height)
+    {
+        var count = steps.Count;
+        var maxHalo = 0;
+        foreach (var step in steps)
+            maxHalo = Math.Max(maxHalo, Math.Max(step.HaloX, step.HaloY));
+
+        // A small kernel: cheap per pixel, so the round trip through a full-size intermediate is the larger cost.
+        if (maxHalo is > 0 and <= SmallKernelHalo)
+            return true;
+
+        // Otherwise only when the intermediates would exceed what we are willing to materialise.
+        var intermediateBytes = (long)width * height * 4 * (count - 1);
+        return intermediateBytes > FuseIntermediateBytes;
+    }
+
+    /// <summary>Halo at or below which a step is treated as a small kernel: 3×3 is 1, 5×5 is 2.</summary>
+    private const int SmallKernelHalo = 2;
+
+    /// <summary>
+    /// The worth of a full-size intermediate above which fusing is justified even when the steps are expensive:
+    /// below this the pass is cheap enough that its arithmetic, not its memory traffic, sets the time.
+    /// </summary>
+    private const long FuseIntermediateBytes = 64L * 1024 * 1024;
 
     /// <summary>Everything about one folding mode that does not change between executions.</summary>
     private sealed class ExecutionShape
@@ -526,11 +621,12 @@ public sealed class ProcessingPlan
     }
 
     private int CountBands(IReadOnlyList<PlanStep> steps, List<(int First, int Count)> segments, bool fused,
-        int height)
+        int width, int height)
     {
+        var rows = BandRowsFor(width, height);
         var bands = 0;
         foreach (var (first, count) in segments)
-            bands += (fused && count > 1) || FusionPlanner.IsBandable(steps[first]) ? BandCountFor(height) : 1;
+            bands += (fused && count > 1) || FusionPlanner.IsBandable(steps[first]) ? BandCountFor(height, rows) : 1;
         return bands;
     }
 

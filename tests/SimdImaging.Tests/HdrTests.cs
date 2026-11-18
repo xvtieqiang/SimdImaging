@@ -26,7 +26,7 @@ public class HdrTests
     public void ToneMap_AcesCompressesOneToPointEight()
     {
         using var source = Float(2, 2, 1f, 1f, 1f);
-        using var mapped = source.ToneMap(ToneMapCurve.Aces);
+        using var mapped = source.Pipe().ToneMap(ToneMapCurve.Aces).ToImage();
 
         First(mapped).ShouldBe(0.8038f, 0.002f);
     }
@@ -35,7 +35,7 @@ public class HdrTests
     public void ToneMap_ReinhardHalvesOne()
     {
         using var source = Float(2, 2, 1f, 1f, 1f);
-        using var mapped = source.ToneMap(ToneMapCurve.Reinhard);
+        using var mapped = source.Pipe().ToneMap(ToneMapCurve.Reinhard).ToImage();
 
         First(mapped).ShouldBe(0.5f, 0.001f);
     }
@@ -44,7 +44,7 @@ public class HdrTests
     public void ToneMap_NoneClampsAboveOne()
     {
         using var source = Float(2, 2, 4f, 0.25f, 0f);
-        using var mapped = source.ToneMap(ToneMapCurve.None);
+        using var mapped = source.Pipe().ToneMap(ToneMapCurve.None).ToImage();
 
         var samples = MemoryMarshal.Cast<byte, float>(mapped.WritablePixels);
         samples[0].ShouldBe(1f);
@@ -56,7 +56,7 @@ public class HdrTests
     public void ToneMap_ExposureIsInStops()
     {
         using var source = Float(2, 2, 0.25f, 0.25f, 0.25f);
-        using var mapped = source.ToneMap(ToneMapCurve.None, exposure: 1f);
+        using var mapped = source.Pipe().ToneMap(ToneMapCurve.None, exposure: 1f).ToImage();
 
         First(mapped).ShouldBe(0.5f, 1e-5f);
     }
@@ -65,7 +65,7 @@ public class HdrTests
     public void ToneMap_AutoExposureLiftsADarkImage()
     {
         using var source = Float(4, 4, 0.01f, 0.01f, 0.01f);
-        using var mapped = source.ToneMap(ToneMapCurve.None, autoExposure: true, targetLuminance: 0.18f);
+        using var mapped = source.Pipe().ToneMap(ToneMapCurve.None, autoExposure: true, targetLuminance: 0.18f).ToImage();
 
         First(mapped).ShouldBe(0.18f, 0.01f);
     }
@@ -75,7 +75,7 @@ public class HdrTests
     {
         // Linear 1.0 is 10 000 cd/m² in PQ units; a 100 cd/m² display is linear 0.01.
         using var source = Float(2, 2, 1f, 1f, 1f);
-        using var mapped = source.ToneMap(ToneMapCurve.Bt2390, whitePoint: 0.01f);
+        using var mapped = source.Pipe().ToneMap(ToneMapCurve.Bt2390, whitePoint: 0.01f).ToImage();
 
         var value = First(mapped);
         value.ShouldBe(0.01f, 0.002f);
@@ -85,7 +85,7 @@ public class HdrTests
     public void ToneMap_Bt2390WithThePqCeilingDoesNotDivideByZero()
     {
         using var source = Float(2, 2, 10f, 10f, 10f);
-        using var mapped = source.ToneMap(ToneMapCurve.Bt2390, whitePoint: 1f);
+        using var mapped = source.Pipe().ToneMap(ToneMapCurve.Bt2390, whitePoint: 1f).ToImage();
 
         First(mapped).ShouldBe(1f);
     }
@@ -94,9 +94,9 @@ public class HdrTests
     public void ToneMap_RejectsIllegalParameters()
     {
         using var source = Float(2, 2, 1f, 1f, 1f);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.ToneMap(whitePoint: 0f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.ToneMap(targetLuminance: 0f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.ToneMap(exposure: float.PositiveInfinity));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().ToneMap(whitePoint: 0f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().ToneMap(targetLuminance: 0f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().ToneMap(exposure: float.PositiveInfinity).ToImage());
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class HdrTests
         using var white = Image.Create(2, 2, WorkingFormat.Rgba8);
         white.Fill(RgbaColor.White);
 
-        using var result = baseImage.ApplyGainMap(white, headroom: 4f);
+        using var result = baseImage.Pipe().ApplyGainMap(white, headroom: 4f).ToImage();
 
         result.Format.ShouldBe(WorkingFormat.Rgba32F);
         // sRGB 128 is 0.2159 linear; a full gain doubles the brightness twice.
@@ -124,7 +124,7 @@ public class HdrTests
         using var black = Image.Create(2, 2, WorkingFormat.Rgba8);
         black.Fill(RgbaColor.Black);
 
-        using var result = baseImage.ApplyGainMap(black);
+        using var result = baseImage.Pipe().ApplyGainMap(black).ToImage();
 
         First(result).ShouldBe(0.2159f, 0.01f);
     }
@@ -135,9 +135,9 @@ public class HdrTests
         using var baseImage = Float(4, 4, 0.5f, 0.5f, 0.5f);
         using var map = Float(2, 2, 1f, 1f, 1f);
 
-        Should.Throw<ArgumentException>(() => baseImage.ApplyGainMap(map));
-        Should.Throw<ArgumentOutOfRangeException>(() => baseImage.ApplyGainMap(baseImage, headroom: 1f));
-        Should.Throw<ArgumentOutOfRangeException>(() => baseImage.ApplyGainMap(baseImage, weight: 1.5f));
+        Should.Throw<ArgumentException>(() => baseImage.Pipe().ApplyGainMap(map).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => baseImage.Pipe().ApplyGainMap(baseImage, headroom: 1f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => baseImage.Pipe().ApplyGainMap(baseImage, weight: 1.5f).ToImage());
     }
 
     [Fact]
@@ -273,7 +273,7 @@ public class HdrTests
         using var baseImage = Float(2, 2, 0.5f, 0.5f, 0.5f);
         using var gain = Float(2, 2, 1f, 1f, 1f);
 
-        using var result = baseImage.ApplyGainMap(gain, headroom: 4f);
+        using var result = baseImage.Pipe().ApplyGainMap(gain, headroom: 4f).ToImage();
 
         First(result).ShouldBe(ColorMath.SrgbToLinear(0.5f) * 4f, 1e-6f);
     }

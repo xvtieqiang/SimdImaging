@@ -109,10 +109,10 @@ public sealed class GainMappedImage : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var baseResult = Base.Crop(region, pool);
+        var baseResult = Base.Pipe(pool).Crop(region).ToImage();
         try
         {
-            var gainResult = GainMap.Crop(DeriveCrop(region), pool);
+            var gainResult = GainMap.Pipe(pool).Crop(DeriveCrop(region)).ToImage();
             return new GainMappedImage(baseResult, gainResult, Parameters);
         }
         catch
@@ -123,16 +123,16 @@ public sealed class GainMappedImage : IDisposable
     }
 
     public GainMappedImage FlipHorizontal(IPixelPool? pool = null) =>
-        Transform(baseImage => baseImage.FlipHorizontal(pool), gainImage => gainImage.FlipHorizontal(pool));
+        Transform(baseImage => baseImage.Pipe(pool).FlipHorizontal().ToImage(), gainImage => gainImage.Pipe(pool).FlipHorizontal().ToImage());
 
     public GainMappedImage FlipVertical(IPixelPool? pool = null) =>
-        Transform(baseImage => baseImage.FlipVertical(pool), gainImage => gainImage.FlipVertical(pool));
+        Transform(baseImage => baseImage.Pipe(pool).FlipVertical().ToImage(), gainImage => gainImage.Pipe(pool).FlipVertical().ToImage());
 
     public GainMappedImage Rotate90(bool clockwise = true, IPixelPool? pool = null) =>
-        Transform(baseImage => baseImage.Rotate90(clockwise, pool), gainImage => gainImage.Rotate90(clockwise, pool));
+        Transform(baseImage => baseImage.Pipe(pool).Rotate90(clockwise).ToImage(), gainImage => gainImage.Pipe(pool).Rotate90(clockwise).ToImage());
 
     public GainMappedImage Rotate180(IPixelPool? pool = null) =>
-        Transform(baseImage => baseImage.Rotate180(pool), gainImage => gainImage.Rotate180(pool));
+        Transform(baseImage => baseImage.Pipe(pool).Rotate180().ToImage(), gainImage => gainImage.Pipe(pool).Rotate180().ToImage());
 
     /// <summary>Rotates by any angle; the gain map gets the same transform in its own pixel grid.</summary>
     public GainMappedImage Rotate(float degrees, RgbaColor baseBackground = default,
@@ -157,10 +157,10 @@ public sealed class GainMappedImage : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         RequirePositive(width, height);
 
-        var baseResult = Base.Resize(width, height, resampler, pool);
+        var baseResult = Base.Pipe(pool).Resize(width, height, resampler).ToImage();
         try
         {
-            var gainResult = GainMap.Resize(Scaled(width, ScaleX), Scaled(height, ScaleY), resampler, pool);
+            var gainResult = GainMap.Pipe(pool).Resize(Scaled(width, ScaleX), Scaled(height, ScaleY), resampler).ToImage();
             return new GainMappedImage(baseResult, gainResult, Parameters);
         }
         catch
@@ -177,11 +177,11 @@ public sealed class GainMappedImage : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         RequirePositive(width, height);
 
-        var baseResult = Base.ResizeWithOptions(width, height, resampler, options, baseBackground, pool);
+        var baseResult = Base.Pipe(pool).ResizeWithOptions(width, height, resampler, options, baseBackground).ToImage();
         try
         {
-            var gainResult = GainMap.ResizeWithOptions(Scaled(width, ScaleX), Scaled(height, ScaleY),
-                resampler, options, gainBackground, pool);
+            var gainResult = GainMap.Pipe(pool).ResizeWithOptions(Scaled(width, ScaleX), Scaled(height, ScaleY),
+                resampler, options, gainBackground).ToImage();
             return new GainMappedImage(baseResult, gainResult, Parameters);
         }
         catch
@@ -208,11 +208,11 @@ public sealed class GainMappedImage : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         RequirePositive(width, height);
 
-        var baseResult = Base.Affine(forward, width, height, baseBackground, pool);
+        var baseResult = Base.Pipe(pool).Affine(forward, width, height, baseBackground).ToImage();
         try
         {
-            var gainResult = GainMap.Affine(Conjugate(forward, width, height), Scaled(width, ScaleX),
-                Scaled(height, ScaleY), gainBackground, pool);
+            var gainResult = GainMap.Pipe(pool).Affine(Conjugate(forward, width, height), Scaled(width, ScaleX),
+                Scaled(height, ScaleY), gainBackground).ToImage();
             return new GainMappedImage(baseResult, gainResult, Parameters);
         }
         catch
@@ -230,11 +230,11 @@ public sealed class GainMappedImage : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         RequirePositive(width, height);
 
-        var baseResult = Base.AffineWithOptions(forward, width, height, resampler, options, baseBackground, pool);
+        var baseResult = Base.Pipe(pool).AffineWithOptions(forward, width, height, resampler, options, baseBackground).ToImage();
         try
         {
-            var gainResult = GainMap.AffineWithOptions(Conjugate(forward, width, height), Scaled(width, ScaleX),
-                Scaled(height, ScaleY), resampler, options, gainBackground, pool);
+            var gainResult = GainMap.Pipe(pool).AffineWithOptions(Conjugate(forward, width, height), Scaled(width, ScaleX),
+                Scaled(height, ScaleY), resampler, options, gainBackground).ToImage();
             return new GainMappedImage(baseResult, gainResult, Parameters);
         }
         catch
@@ -257,11 +257,11 @@ public sealed class GainMappedImage : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         RequirePositive(width, height);
 
-        var baseResult = Base.Perspective(homography, width, height, baseBackground, pool);
+        var baseResult = Base.Pipe(pool).Perspective(homography, width, height, baseBackground).ToImage();
         try
         {
-            var gainResult = GainMap.Perspective(Conjugate(homography, width, height), Scaled(width, ScaleX),
-                Scaled(height, ScaleY), gainBackground, pool);
+            var gainResult = GainMap.Pipe(pool).Perspective(Conjugate(homography, width, height), Scaled(width, ScaleX),
+                Scaled(height, ScaleY), gainBackground).ToImage();
             return new GainMappedImage(baseResult, gainResult, Parameters);
         }
         catch
@@ -279,12 +279,12 @@ public sealed class GainMappedImage : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         RequirePositive(width, height);
 
-        var baseResult = Base.PerspectiveWithOptions(homography, width, height, resampler, options,
-            baseBackground, pool);
+        var baseResult = Base.Pipe(pool).PerspectiveWithOptions(homography, width, height, resampler, options,
+            baseBackground).ToImage();
         try
         {
-            var gainResult = GainMap.PerspectiveWithOptions(Conjugate(homography, width, height),
-                Scaled(width, ScaleX), Scaled(height, ScaleY), resampler, options, gainBackground, pool);
+            var gainResult = GainMap.Pipe(pool).PerspectiveWithOptions(Conjugate(homography, width, height),
+                Scaled(width, ScaleX), Scaled(height, ScaleY), resampler, options, gainBackground).ToImage();
             return new GainMappedImage(baseResult, gainResult, Parameters);
         }
         catch
@@ -313,11 +313,11 @@ public sealed class GainMappedImage : IDisposable
         ArgumentNullException.ThrowIfNull(map);
         RequirePositive(width, height);
 
-        var baseResult = Base.Warp(width, height, Wrap(Base.Width, Base.Height, map), resampler, baseBackground, pool);
+        var baseResult = Base.Pipe(pool).Warp(width, height, Wrap(Base.Width, Base.Height, map), resampler, baseBackground).ToImage();
         try
         {
-            var gainResult = GainMap.Warp(Scaled(width, ScaleX), Scaled(height, ScaleY),
-                Wrap(GainMap.Width, GainMap.Height, map), resampler, gainBackground, pool);
+            var gainResult = GainMap.Pipe(pool).Warp(Scaled(width, ScaleX), Scaled(height, ScaleY),
+                Wrap(GainMap.Width, GainMap.Height, map), resampler, gainBackground).ToImage();
             return new GainMappedImage(baseResult, gainResult, Parameters);
         }
         catch
@@ -575,8 +575,8 @@ public sealed class GainMappedImage : IDisposable
 
     private static Image DeriveSdrBase(Image hdr)
     {
-        using var mapped = hdr.ToneMap(ToneMapCurve.Aces);
-        using var encoded = mapped.Delinearize();
+        using var mapped = hdr.Pipe().ToneMap(ToneMapCurve.Aces).ToImage();
+        using var encoded = mapped.Pipe().Delinearize().ToImage();
 
         var sdr = Image.Create(encoded.Width, encoded.Height, WorkingFormat.Rgba8);
         var source = encoded[0].Pixels.View;

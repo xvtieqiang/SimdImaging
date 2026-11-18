@@ -22,7 +22,9 @@ namespace SimdImaging.Processing;
 public sealed class ImageOp
 {
     internal ImageOp(string name, OpCategory category, int haloX, int haloY, OpKernel kernel,
-        Func<int, int, int, WorkingFormat, long>? scratch = null)
+        Func<int, int, int, WorkingFormat, long>? scratch = null,
+        Func<PixelView, WorkingBuffer>? direct = null,
+        IntoKernel? into = null)
     {
         Name = name;
         Category = category;
@@ -30,7 +32,30 @@ public sealed class ImageOp
         HaloY = haloY;
         Kernel = kernel;
         Scratch = scratch;
+        Direct = direct;
+        Into = into;
     }
+
+    /// <summary>
+    /// The operator as "write these rows into that destination", when it has that form.
+    /// </summary>
+    /// <remarks>
+    /// Without it the band adapter has to let the operator rent a window-sized buffer and then copy the rows it owns
+    /// out of it — one mid-sized allocation and one full-image copy per band per step.
+    /// </remarks>
+    internal IntoKernel? Into { get; }
+
+    /// <summary>
+    /// The operator as one whole-image call, when it has one.
+    /// </summary>
+    /// <remarks>
+    /// A plan of one step has nothing to fuse and nothing to band: the operator already parallelises internally,
+    /// and building a plan around it costs a rent, a band split and a kernel dispatch per band for no gain.
+    /// Measured at 1920×1080 that was 10.7% on a single invert — the difference between `image.Invert()` and
+    /// `image.Pipe().Invert().ToImage()` when both were still on the surface. This delegate is what lets the one
+    /// path left behave like the direct call it replaced.
+    /// </remarks>
+    internal Func<PixelView, WorkingBuffer>? Direct { get; }
 
     /// <summary>
     /// The operator's own working set for a view of <c>width × rows</c>, or <c>null</c> when it has not declared

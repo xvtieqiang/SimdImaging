@@ -50,67 +50,67 @@ using (var decoded = Image.Load(png16))
 
 // Processing operators are in the smoke on purpose: float resampling must produce the same bytes
 // under ILC as under the JIT, or "AOT output == JIT output" only covers the codec boundary.
-using (var cropped = image.Crop(new PixelRect(8, 6, 32, 24)))
+using (var cropped = image.Pipe().Crop(new PixelRect(8, 6, 32, 24)).ToImage())
     Console.WriteLine($"crop sha={Hash(cropped.WritablePixels)}");
 
-using (var resized = image.Resize(31, 19, Resampler.Bicubic))
+using (var resized = image.Pipe().Resize(31, 19, Resampler.Bicubic).ToImage())
     Console.WriteLine($"resize.bicubic sha={Hash(resized.WritablePixels)}");
 
 // Nearest's Rgba8 fast path is a 32-bit bit-copy; hash its output directly so the JIT/AOT/tier
 // comparison actually covers the operator whose inner loop was optimised (AGENTS.md: keep the
 // changed operator in the hash list, or a green smoke verifies nothing about it).
-using (var resized = image.Resize(23, 17, Resampler.Nearest))
+using (var resized = image.Pipe().Resize(23, 17, Resampler.Nearest).ToImage())
     Console.WriteLine($"resize.nearest sha={Hash(resized.WritablePixels)}");
 
-using (var resized = image.Resize(97, 71, Resampler.Lanczos3))
+using (var resized = image.Pipe().Resize(97, 71, Resampler.Lanczos3).ToImage())
     Console.WriteLine($"resize.lanczos3 sha={Hash(resized.WritablePixels)}");
 
-using (var resized = wide.Resize(13, 9, Resampler.Bilinear))
+using (var resized = wide.Pipe().Resize(13, 9, Resampler.Bilinear).ToImage())
     Console.WriteLine($"resize16 sha={Hash(resized.WritablePixels)}");
 
-using (var rotated = image.Rotate90())
+using (var rotated = image.Pipe().Rotate90().ToImage())
     Console.WriteLine($"rotate90 sha={Hash(rotated.WritablePixels)}");
 
-using (var flipped = image.FlipHorizontal())
+using (var flipped = image.Pipe().FlipHorizontal().ToImage())
     Console.WriteLine($"flip sha={Hash(flipped.WritablePixels)}");
 
 // 2026-11-12: Pixelate moved to an integer path and Rotate180 gained an AVX2 body. Both are hashed here or
 // "AOT output == JIT output" would stop covering the two operators that changed most.
-using (var pixelated = image.Pixelate(5))
+using (var pixelated = image.Pipe().Pixelate(5).ToImage())
     Console.WriteLine($"pixelate sha={Hash(pixelated.WritablePixels)}");
 
-using (var flipped180 = image.Rotate180())
+using (var flipped180 = image.Pipe().Rotate180().ToImage())
     Console.WriteLine($"rotate180 sha={Hash(flipped180.WritablePixels)}");
 
-using (var padded = image.Pad(3, new RgbaColor(1, 2, 3, 255)))
+using (var padded = image.Pipe().Pad(3, new RgbaColor(1, 2, 3, 255)).ToImage())
     Console.WriteLine($"pad sha={Hash(padded.WritablePixels)}");
 
-using (var filtered = image.Grayscale().GaussianBlur(1.5f).Invert())
+using (var filtered = image.Pipe().Grayscale().GaussianBlur(1.5f).Invert().ToImage())
     Console.WriteLine($"filter sha={Hash(filtered.WritablePixels)}");
 
-using (var styled = image.HueRotate(35f).Levels(0.1f, 0.9f, 1.2f).Sepia(0.6f).Emboss(0.8f).Normalize())
+using (var styled = image.Pipe().HueRotate(35f).Levels(0.1f, 0.9f, 1.2f).Sepia(0.6f).Emboss(0.8f).Normalize().ToImage())
     Console.WriteLine($"style sha={Hash(styled.WritablePixels)}");
 
-using (var tone = image.Vibrance(0.4f).Temperature(0.3f).Tint(new RgbaColor(255, 200, 150, 255), 0.2f).Sharpen(0.8f, 1f))
+using (var tone = image.Pipe().Vibrance(0.4f).Temperature(0.3f).Tint(new RgbaColor(255, 200, 150, 255), 0.2f).Sharpen(0.8f, 1f).ToImage())
     Console.WriteLine($"tone sha={Hash(tone.WritablePixels)}");
 
-using (var variant = image.ChannelSwap(2, 1, 0).MotionBlur(5, 30f).BokehBlur(2))
+using (var variant = image.Pipe().ChannelSwap(2, 1, 0).MotionBlur(5, 30f).BokehBlur(2).ToImage())
     Console.WriteLine($"variant sha={Hash(variant.WritablePixels)}");
 
-using (var graded = image.Curves(new[] { new CurvePoint(0f, 0f), new CurvePoint(0.5f, 0.6f), new CurvePoint(1f, 1f) }).Opacity(0.8f))
+using (var graded = image.Pipe().Curves(new[] { new CurvePoint(0f, 0f), new CurvePoint(0.5f, 0.6f), new CurvePoint(1f, 1f) }).Opacity(0.8f).ToImage())
     Console.WriteLine($"curves sha={Hash(graded.WritablePixels)}");
 
-using (var rotated = image.Rotate(17f, new RgbaColor(0, 0, 0, 255)))
+using (var rotated = image.Pipe().Rotate(17f, new RgbaColor(0, 0, 0, 255)).ToImage())
     Console.WriteLine($"rotate17 sha={Hash(rotated.WritablePixels)}");
 
-using (var skewed = image.Perspective(new[] { 1f, 0.2f, 0f, 0f, 1f, 0f, 0.002f, 0f }, 64, 48, new RgbaColor(0, 0, 0, 255)))
+using (var skewed = image.Pipe().Perspective(new[] { 1f, 0.2f, 0f, 0f, 1f, 0f, 0.002f, 0f }, 64, 48, new RgbaColor(0, 0, 0, 255)).ToImage())
     Console.WriteLine($"perspective sha={Hash(skewed.WritablePixels)}");
 
 // The delegate warp and the point-sample chain were absent from this list. Sampling.cs is the
 // precision-critical path, so a green smoke that never hashed it proved nothing about it.
-using (var warped = image.Warp(64, 48,
+using (var warped = image.Pipe().Warp(64, 48,
     (float x, float y, out float sx, out float sy) => { sx = x; sy = y; },
-    Resampler.Bilinear, new RgbaColor(0, 0, 0, 255)))
+    Resampler.Bilinear, new RgbaColor(0, 0, 0, 255)).ToImage())
     Console.WriteLine($"warp sha={Hash(warped.WritablePixels)}");
 
 var sampled = image.SamplePixel(3.25f, 5.5f, Resampler.Bilinear);
@@ -123,53 +123,53 @@ Console.WriteLine($"samplepixel sha={Hash(sampleBytes)}");
 
 // M8 explicit-contract path: linear-light domain, premultiplied alpha and a 5-kernel warp all
 // have to produce the same bytes under ILC as under the JIT.
-using (var linearWarp = image.WarpWithOptions(64, 48,
+using (var linearWarp = image.Pipe().WarpWithOptions(64, 48,
     (float x, float y, out float sx, out float sy) => { sx = x; sy = y; },
     Resampler.Bicubic, new SimdImaging.Abstractions.SampleOptions
     {
         Domain = SimdImaging.Abstractions.SampleDomain.LinearLight,
-    }))
+    }).ToImage())
     Console.WriteLine($"warp.linear sha={Hash(linearWarp.WritablePixels)}");
 
-using (var premulWarp = image.WarpWithOptions(64, 48,
+using (var premulWarp = image.Pipe().WarpWithOptions(64, 48,
     (float x, float y, out float sx, out float sy) => { sx = x - 0.25f; sy = y; },
     Resampler.Lanczos3, new SimdImaging.Abstractions.SampleOptions
     {
         Alpha = SimdImaging.Abstractions.AlphaMode.Premultiplied,
         Edge = SimdImaging.Abstractions.EdgeMode.Background,
-    }))
+    }).ToImage())
     Console.WriteLine($"warp.premul sha={Hash(premulWarp.WritablePixels)}");
 
 // M8 second wave: the Mapping/Resize WithOptions entry points (explicit contracts across the
 // remaining geometry chains) must match the JIT byte for byte under ILC too.
-using (var resizeOptions = image.ResizeWithOptions(32, 24, Resampler.Bicubic,
+using (var resizeOptions = image.Pipe().ResizeWithOptions(32, 24, Resampler.Bicubic,
     new SimdImaging.Abstractions.SampleOptions
     {
         Domain = SimdImaging.Abstractions.SampleDomain.LinearLight,
-    }))
+    }).ToImage())
     Console.WriteLine($"resize.options sha={Hash(resizeOptions.WritablePixels)}");
 
-using (var rotateOptions = image.RotateWithOptions(17f, Resampler.Bicubic,
+using (var rotateOptions = image.Pipe().RotateWithOptions(17f, Resampler.Bicubic,
     new SimdImaging.Abstractions.SampleOptions
     {
         Alpha = SimdImaging.Abstractions.AlphaMode.Premultiplied,
-    }, new RgbaColor(0, 0, 0, 255)))
+    }, new RgbaColor(0, 0, 0, 255)).ToImage())
     Console.WriteLine($"rotate.options sha={Hash(rotateOptions.WritablePixels)}");
 
-using (var perspectiveOptions = image.PerspectiveWithOptions(
+using (var perspectiveOptions = image.Pipe().PerspectiveWithOptions(
     new[] { 1f, 0.2f, 0f, 0f, 1f, 0f, 0.002f, 0f }, 64, 48, Resampler.Lanczos3,
     new SimdImaging.Abstractions.SampleOptions
     {
         Edge = SimdImaging.Abstractions.EdgeMode.Background,
-    }, new RgbaColor(0, 0, 0, 255)))
+    }, new RgbaColor(0, 0, 0, 255)).ToImage())
     Console.WriteLine($"perspective.options sha={Hash(perspectiveOptions.WritablePixels)}");
 
 // M9 EWA: the elliptical footprint path must produce the same bytes under ILC as under the JIT.
-using (var ewaRotate = image.RotateWithOptions(17f, Resampler.Bicubic,
+using (var ewaRotate = image.Pipe().RotateWithOptions(17f, Resampler.Bicubic,
     new SimdImaging.Abstractions.SampleOptions
     {
         AaMode = SimdImaging.Abstractions.SampleAaMode.Elliptical,
-    }, new RgbaColor(0, 0, 0, 255)))
+    }, new RgbaColor(0, 0, 0, 255)).ToImage())
     Console.WriteLine($"ewa.rotate sha={Hash(ewaRotate.WritablePixels)}");
 
 // M10 fusion: a banded chain through ProcessingPlan must produce the same bytes under ILC as under
@@ -181,46 +181,46 @@ using (var planned = image.Pipe().BandRows(8).Brightness(0.05f).GaussianBlur(1f)
 
 // M11 photo algorithms: non-local means (integer distances plus Math.Exp weights) and the local
 // Laplacian pyramid (Math.Pow remap table plus the Burt-Adcock kernels) must both match under ILC.
-using (var nlm = image.NonLocalMeans(2, 1, 0.15f))
+using (var nlm = image.Pipe().NonLocalMeans(2, 1, 0.15f).ToImage())
     Console.WriteLine($"nlm sha={Hash(nlm.WritablePixels)}");
 
-using (var llf = image.LocalLaplacian(levels: 3, samples: 8, alpha: 0.3f))
+using (var llf = image.Pipe().LocalLaplacian(levels: 3, samples: 8, alpha: 0.3f).ToImage())
     Console.WriteLine($"ll sha={Hash(llf.WritablePixels)}");
 
 // Morphology with a large window (van Herk, not the 3x3 specialisation) and the Laplacian's signed kernel.
-using (var morph = image.Morph(3, Morphology.Erode))
+using (var morph = image.Pipe().Morph(3, Morphology.Erode).ToImage())
     Console.WriteLine($"morph sha={Hash(morph.WritablePixels)}");
 
 // The combinations exist only by composition, so a trimming change that drops the second primitive would show up
 // here and nowhere else.
-using (var open = image.Morph(2, Morphology.Open))
+using (var open = image.Pipe().Morph(2, Morphology.Open).ToImage())
     Console.WriteLine($"morph.open sha={Hash(open.WritablePixels)}");
 
-using (var topHat = image.Morph(2, Morphology.TopHat))
+using (var topHat = image.Pipe().Morph(2, Morphology.TopHat).ToImage())
     Console.WriteLine($"morph.tophat sha={Hash(topHat.WritablePixels)}");
 
-using (var lap = image.Laplacian())
+using (var lap = image.Pipe().Laplacian().ToImage())
     Console.WriteLine($"laplacian sha={Hash(lap.WritablePixels)}");
 
 var Box5 = new float[25];
 for (var i = 0; i < Box5.Length; i++)
     Box5[i] = 1f / 25f;
 
-using (var chain = image.PointChain(PointOps.ContrastRow(1.2f), PointOps.InvertRow()))
+using (var chain = image.Pipe().PointChain(PointOps.ContrastRow(1.2f), PointOps.InvertRow()).ToImage())
     Console.WriteLine($"pointchain sha={Hash(chain.WritablePixels)}");
 
 // The general convolution and the wide median: both are new code paths (a border-mapped kernel and a sliding
 // histogram) and neither is exercised by the 3x3 specialisations above.
-using (var conv = image.Convolve(Box5, 2, BorderMode.Mirror))
+using (var conv = image.Pipe().Convolve(Box5, 2, BorderMode.Mirror).ToImage())
     Console.WriteLine($"convolve sha={Hash(conv.WritablePixels)}");
 
-using (var med = image.Median(2))
+using (var med = image.Pipe().Median(2).ToImage())
     Console.WriteLine($"median5 sha={Hash(med.WritablePixels)}");
 
 // Dehazing and exposure fusion: both go through code paths the other operators do not - a guided filter driven by
 // a luma guide, and a Laplacian pyramid whose levels are rebuilt per channel - so neither is covered by the
 // operators above. Without a hash here, "AOT is a first-class citizen" would not be true of them.
-using (var dh = image.Dehaze(patchRadius: 4, omega: 0.95f, tMin: 0.1f, refineRadius: 6))
+using (var dh = image.Pipe().Dehaze(patchRadius: 4, omega: 0.95f, tMin: 0.1f, refineRadius: 6).ToImage())
     Console.WriteLine($"dehaze sha={Hash(dh.WritablePixels)}");
 
 using (var fuse = Image.FuseExposures([image, image]))
@@ -228,13 +228,13 @@ using (var fuse = Image.FuseExposures([image, image]))
 
 // M12: deconvolution (separable and sparse kernels through PlanarConvolve) and seam carving (integer DP
 // path selection, then pixel moves through the lossless transpose for the horizontal axis).
-using (var rl = image.RichardsonLucy(1.2f, 3))
+using (var rl = image.Pipe().RichardsonLucy(1.2f, 3).ToImage())
     Console.WriteLine($"rl sha={Hash(rl.WritablePixels)}");
 
-using (var rlm = image.RichardsonLucyMotion(7, 30f, 2))
+using (var rlm = image.Pipe().RichardsonLucyMotion(7, 30f, 2).ToImage())
     Console.WriteLine($"rl.motion sha={Hash(rlm.WritablePixels)}");
 
-using (var seam = image.RemoveSeams(SeamAxis.Vertical, 2))
+using (var seam = image.Pipe().RemoveSeams(SeamAxis.Vertical, 2).ToImage())
     Console.WriteLine($"seam sha={Hash(seam.WritablePixels)}");
 
 // Insertion shares FindSeam with removal but is the only user of the blocked mask, and it had no hash entry
@@ -246,11 +246,11 @@ using (var floatImage = Image.Create(37, 23, WorkingFormat.Rgba32F))
     for (var i = 0; i < samples.Length; i++)
         samples[i] = (i * 7919 % 1000) / 1000f;
 
-    using var turned = floatImage.Rotate90();
+    using var turned = floatImage.Pipe().Rotate90().ToImage();
     Console.WriteLine($"rotate90.f32 sha={Hash(turned.WritablePixels)}");
 }
 
-using (var inserted = image.InsertSeams(SeamAxis.Vertical, 3))
+using (var inserted = image.Pipe().InsertSeams(SeamAxis.Vertical, 3).ToImage())
     Console.WriteLine($"seam.insert sha={Hash(inserted.WritablePixels)}");
 
 // ANL-9: the exact squared EDT (float parabolas on a serial envelope sweep) goes through the facade here,
@@ -265,7 +265,7 @@ using (var mask = Image.Create(Width, Height, WorkingFormat.Rgba8))
             maskPixels[offset + 3] = ((x / 7) + (y / 5)) % 3 == 0 ? (byte)255 : (byte)0;
         }
 
-    using var distance = mask.DistanceTransform();
+    using var distance = mask.Pipe().DistanceTransform().ToImage();
     Console.WriteLine($"dt sha={Hash(distance.WritablePixels)}");
 }
 
@@ -273,7 +273,7 @@ using (var mask = Image.Create(Width, Height, WorkingFormat.Rgba8))
 // reconstruction (gamma and exp2 over a bilinearly upsampled map). Both produce pixels, so both are
 // hashed — otherwise "AOT output == JIT output" would stop covering the newest arithmetic.
 var lutProfile = BuildLut16Profile(3);
-using (var iccLut = image.IccTransform(lutProfile))
+using (var iccLut = image.Pipe().IccTransform(lutProfile).ToImage())
     Console.WriteLine($"icc.lut sha={Hash(iccLut.WritablePixels)}");
 
 using (var gainMapImage = Image.Create(16, 12, WorkingFormat.Rgba8))
@@ -288,7 +288,7 @@ using (var gainMapImage = Image.Create(16, 12, WorkingFormat.Rgba8))
     Console.WriteLine($"gainmap.hdr sha={Hash(hdr.WritablePixels)}");
 }
 
-using (var dithered = image.DitherToPalette(PaletteQuantizer.WebSafe))
+using (var dithered = image.Pipe().DitherToPalette(PaletteQuantizer.WebSafe).ToImage())
     Console.WriteLine($"dither sha={Hash(dithered.WritablePixels)}");
 
 using (var gradient = Image.Create(64, 48, WorkingFormat.Rgba8))
@@ -298,7 +298,7 @@ using (var gradient = Image.Create(64, 48, WorkingFormat.Rgba8))
     Console.WriteLine($"gradient sha={Hash(gradient.WritablePixels)}");
 }
 
-using (var edges = image.Median3x3().Sobel())
+using (var edges = image.Pipe().Median3x3().Sobel().ToImage())
     Console.WriteLine($"median.sobel sha={Hash(edges.WritablePixels)}");
 
 // Sixteen-bit point operator: it now goes through a 4 x 65536 table instead of the float row path, so its
@@ -311,46 +311,46 @@ using (var widePoint = Image.Create(160, 120, WorkingFormat.Rgba16))
     for (var i = 0; i < samples.Length; i++)
         samples[i] = (ushort)((i * 7919 + 3) & 0xFFFF);
 
-    using var inverted16 = widePoint.Invert();
+    using var inverted16 = widePoint.Pipe().Invert().ToImage();
     Console.WriteLine($"invert16 sha={Hash(inverted16.WritablePixels)}");
 }
 
-using (var quantized = image.Quantize(8))
+using (var quantized = image.Pipe().Quantize(8).ToImage())
     Console.WriteLine($"quantize sha={Hash(quantized.WritablePixels)}");
 
-using (var equalized = image.EqualizeHistogram())
+using (var equalized = image.Pipe().EqualizeHistogram().ToImage())
     Console.WriteLine($"equalize sha={Hash(equalized.WritablePixels)}");
 
-using (var wu = image.Quantize(8, Quantizer.Wu))
+using (var wu = image.Pipe().Quantize(8, Quantizer.Wu).ToImage())
     Console.WriteLine($"quantize.wu sha={Hash(wu.WritablePixels)}");
 
-using (var opened = image.Open3x3())
+using (var opened = image.Pipe().Open3x3().ToImage())
     Console.WriteLine($"morph sha={Hash(opened.WritablePixels)}");
 
-using (var bilateral = image.GaussianBlur(2f).Bilateral(2, 0f, 0.2f))
+using (var bilateral = image.Pipe().GaussianBlur(2f).Bilateral(2, 0f, 0.2f).ToImage())
     Console.WriteLine($"bilateral sha={Hash(bilateral.WritablePixels)}");
 
 // Oil paint is the sliding-window histogram: the second call uses a window wider than the row, which is the
 // clamped-slide path rather than the interior one, and the two are different code.
 // Self-guided has its own inner loop (it must keep its bytes), and it had no hash entry at all until the
 // cross path was reworked - only the cross kernel was covered.
-using (var selfGuided = image.GuidedFilter(3, 1e-4f))
+using (var selfGuided = image.Pipe().GuidedFilter(3, 1e-4f).ToImage())
     Console.WriteLine($"guided sha={Hash(selfGuided.WritablePixels)}");
 
 // Octree had no hash at all: the other two quantisers were covered, this one never was.
-using (var octree = image.Quantize(8, Quantizer.Octree))
+using (var octree = image.Pipe().Quantize(8, Quantizer.Octree).ToImage())
     Console.WriteLine($"quantize.octree sha={Hash(octree.WritablePixels)}");
 
-using (var painted = image.OilPaint(2, 20))
+using (var painted = image.Pipe().OilPaint(2, 20).ToImage())
     Console.WriteLine($"oilpaint sha={Hash(painted.WritablePixels)}");
 
-using (var paintedWide = image.OilPaint(40, 5))
+using (var paintedWide = image.Pipe().OilPaint(40, 5).ToImage())
     Console.WriteLine($"oilpaint.clamp sha={Hash(paintedWide.WritablePixels)}");
 
 // Cross-guided filter: cov(I, G) and var(G) from a guide that is not the source, so the second box-pass
 // layout is hashed too. The self-guided path is already covered through the one-argument call.
-using (var guide = image.GaussianBlur(1f))
-using (var crossGuided = image.GuidedFilter(guide, 2, 1e-4f))
+using (var guide = image.Pipe().GaussianBlur(1f).ToImage())
+using (var crossGuided = image.Pipe().GuidedFilter(guide, 2, 1e-4f).ToImage())
     Console.WriteLine($"guided.cross sha={Hash(crossGuided.WritablePixels)}");
 
 using (var canvas = Image.Create(64, 48, WorkingFormat.Rgba8))
@@ -365,16 +365,16 @@ using (var canvas = Image.Create(64, 48, WorkingFormat.Rgba8))
     Console.WriteLine($"draw sha={Hash(canvas.WritablePixels)}");
 }
 
-using (var overlay = image.Crop(new PixelRect(2, 3, 9, 7)).Resize(9, 7, Resampler.Nearest))
-using (var baseImage = image.Resize(64, 48, Resampler.Nearest))
+using (var overlay = image.Pipe().Crop(new PixelRect(2, 3, 9, 7)).Resize(9, 7, Resampler.Nearest).ToImage())
+using (var baseImage = image.Pipe().Resize(64, 48, Resampler.Nearest).ToImage())
 {
-    using (var composed = baseImage.Composite(overlay, 5, 5))
+    using (var composed = baseImage.Pipe().Composite(overlay, 5, 5).ToImage())
         Console.WriteLine($"composite sha={Hash(composed.WritablePixels)}");
 
-    using (var xored = baseImage.Composite(overlay, 5, 5, PorterDuff.Xor))
+    using (var xored = baseImage.Pipe().Composite(overlay, 5, 5, PorterDuff.Xor).ToImage())
         Console.WriteLine($"composite.xor sha={Hash(xored.WritablePixels)}");
 
-    using (var multiplied = baseImage.Blend(overlay, 5, 5, BlendMode.Multiply))
+    using (var multiplied = baseImage.Pipe().Blend(overlay, 5, 5, BlendMode.Multiply).ToImage())
         Console.WriteLine($"blend.multiply sha={Hash(multiplied.WritablePixels)}");
 }
 

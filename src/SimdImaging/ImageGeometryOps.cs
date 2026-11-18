@@ -9,60 +9,17 @@ namespace SimdImaging;
 /// background colour for the corners the source does not cover.</summary>
 public sealed partial class Image
 {
-    /// <summary>Rotates by any angle, expanding the canvas to fit the rotated bounds.</summary>
-    /// <param name="degrees">Clockwise positive, in a y-down coordinate system.</param>
-    /// <param name="background">Colour for the corners outside the rotated source.</param>
-    /// <param name="pool">Where the destination is rented.</param>
-    public Image Rotate(float degrees, RgbaColor background = default, IPixelPool? pool = null)
-    {
-        var (width, height, forward) = RotationCanvas(Width, Height, degrees);
-        return ReplaceBuffer(Mapping.Transform(this[0].Pixels.View, forward, width, height, background, pool));
-    }
+    
 
-    /// <summary>Rotates with an explicit sampling contract; the canvas still expands to the rotated bounds.</summary>
-    /// <param name="degrees">Clockwise positive, in a y-down coordinate system.</param>
-    /// <param name="resampler">Any of the five reconstruction kernels.</param>
-    /// <param name="options">Sampling domain, curve, alpha, edge and out-of-gamut contract.</param>
-    /// <param name="background">Colour for the corners outside the rotated source.</param>
-    /// <param name="pool">Where the destination is rented.</param>
-    public Image RotateWithOptions(float degrees, Resampler resampler, SampleOptions options,
-        RgbaColor background = default, IPixelPool? pool = null)
-    {
-        var (width, height, forward) = RotationCanvas(Width, Height, degrees);
-        return ReplaceBuffer(Mapping.TransformWithOptions(this[0].Pixels.View, forward, width, height,
-            resampler, options, background, pool));
-    }
+    
 
-    /// <summary>Applies an 8-parameter perspective homography into a new canvas.</summary>
-    /// <exception cref="ArgumentException">The homography is not eight values or is singular.</exception>
-    public Image Perspective(ReadOnlySpan<float> homography, int width, int height,
-        RgbaColor background = default, IPixelPool? pool = null) =>
-        ReplaceBuffer(Mapping.Perspective(this[0].Pixels.View, homography, width, height, background, pool));
+    
 
-    /// <summary>Applies an 8-parameter perspective homography with an explicit sampling contract.</summary>
-    /// <exception cref="ArgumentException">The homography is not eight values or is singular.</exception>
-    public Image PerspectiveWithOptions(ReadOnlySpan<float> homography, int width, int height, Resampler resampler,
-        SampleOptions options, RgbaColor background = default, IPixelPool? pool = null) =>
-        ReplaceBuffer(Mapping.PerspectiveWithOptions(this[0].Pixels.View, homography, width, height,
-            resampler, options, background, pool));
+    
 
-    /// <summary>Applies an arbitrary affine transform into a new canvas.</summary>
-    /// <param name="forward">Source → destination transform.</param>
-    /// <param name="width">Destination width.</param>
-    /// <param name="height">Destination height.</param>
-    /// <param name="background">Colour outside the source.</param>
-    /// <param name="pool">Where the destination is rented.</param>
-    /// <exception cref="ArgumentException">The transform is singular.</exception>
-    public Image Affine(AffineMatrix forward, int width, int height, RgbaColor background = default,
-        IPixelPool? pool = null) =>
-        ReplaceBuffer(Mapping.Transform(this[0].Pixels.View, forward, width, height, background, pool));
+    
 
-    /// <summary>Applies an arbitrary affine transform with an explicit sampling contract.</summary>
-    /// <exception cref="ArgumentException">The transform is singular.</exception>
-    public Image AffineWithOptions(AffineMatrix forward, int width, int height, Resampler resampler,
-        SampleOptions options, RgbaColor background = default, IPixelPool? pool = null) =>
-        ReplaceBuffer(Mapping.TransformWithOptions(this[0].Pixels.View, forward, width, height,
-            resampler, options, background, pool));
+    
 
     // Canvas expansion for an arbitrary-angle rotation, extracted verbatim from Rotate so the
     // frozen legacy path and the WithOptions path share one definition. Pure code motion.

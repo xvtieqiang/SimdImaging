@@ -89,10 +89,10 @@ public class RowMathTests
         try
         {
             Pixels.ForceScalarWrite = true;
-            using var scalar = source.Resize(31, 19, SimdImaging.Processing.Resampler.Lanczos3);
+            using var scalar = source.Pipe().Resize(31, 19, SimdImaging.Processing.Resampler.Lanczos3).ToImage();
 
             Pixels.ForceScalarWrite = false;
-            using var vector = source.Resize(31, 19, SimdImaging.Processing.Resampler.Lanczos3);
+            using var vector = source.Pipe().Resize(31, 19, SimdImaging.Processing.Resampler.Lanczos3).ToImage();
 
             vector.WritablePixels.ToArray().ShouldBe(scalar.WritablePixels.ToArray());
         }
@@ -113,10 +113,10 @@ public class RowMathTests
         try
         {
             Pixels.ForceScalarWrite = true;
-            using var scalar = source.Resize(97, 71, SimdImaging.Processing.Resampler.Lanczos3);
+            using var scalar = source.Pipe().Resize(97, 71, SimdImaging.Processing.Resampler.Lanczos3).ToImage();
 
             Pixels.ForceScalarWrite = false;
-            using var vector = source.Resize(97, 71, SimdImaging.Processing.Resampler.Lanczos3);
+            using var vector = source.Pipe().Resize(97, 71, SimdImaging.Processing.Resampler.Lanczos3).ToImage();
 
             var a = scalar.WritablePixels.ToArray();
             var b = vector.WritablePixels.ToArray();

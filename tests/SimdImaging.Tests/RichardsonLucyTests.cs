@@ -21,7 +21,7 @@ public class RichardsonLucyTests
         using var image = Bars(23, 17, format);
         var before = image.WritablePixels.ToArray();
 
-        using var result = image.RichardsonLucy(1.4f, 0);
+        using var result = image.Pipe().RichardsonLucy(1.4f, 0).ToImage();
 
         result.WritablePixels.ToArray().ShouldBe(before);
     }
@@ -30,8 +30,8 @@ public class RichardsonLucyTests
     public void GaussianDeconvolution_RecoversMoreDetailThanTheBlurLeft()
     {
         using var sharp = Bars(96, 64, WorkingFormat.Rgba8);
-        using var blurred = sharp.GaussianBlur(1.6f);
-        using var restored = blurred.RichardsonLucy(1.6f, 12);
+        using var blurred = sharp.Pipe().GaussianBlur(1.6f).ToImage();
+        using var restored = blurred.Pipe().RichardsonLucy(1.6f, 12).ToImage();
 
         var blurPsnr = AnalysisOps.Psnr(View(sharp), View(blurred));
         var restorePsnr = AnalysisOps.Psnr(View(sharp), View(restored));
@@ -44,8 +44,8 @@ public class RichardsonLucyTests
     public void MotionDeconvolution_RecoversAHorizontalTrail()
     {
         using var sharp = Bars(96, 64, WorkingFormat.Rgba8);
-        using var blurred = sharp.MotionBlur(9, 0f);
-        using var restored = blurred.RichardsonLucyMotion(9, 0f, 12);
+        using var blurred = sharp.Pipe().MotionBlur(9, 0f).ToImage();
+        using var restored = blurred.Pipe().RichardsonLucyMotion(9, 0f, 12).ToImage();
 
         var blurPsnr = AnalysisOps.Psnr(View(sharp), View(blurred));
         var restorePsnr = AnalysisOps.Psnr(View(sharp), View(restored));
@@ -62,7 +62,7 @@ public class RichardsonLucyTests
         using var image = Bars(19, 13, WorkingFormat.Rgba8);
         var before = image.WritablePixels.ToArray();
 
-        using var result = image.RichardsonLucyMotion(1, angle, 8);
+        using var result = image.Pipe().RichardsonLucyMotion(1, angle, 8).ToImage();
 
         result.WritablePixels.ToArray().ShouldBe(before);
     }
@@ -76,7 +76,7 @@ public class RichardsonLucyTests
             pixels[i + 3] = (byte)((i / 4 * 37) & 0xFF);
 
         var before = image.WritablePixels.ToArray();
-        using var result = image.RichardsonLucy(1.1f, 6);
+        using var result = image.Pipe().RichardsonLucy(1.1f, 6).ToImage();
         var after = result.WritablePixels.ToArray();
 
         for (var i = 3; i < after.Length; i += 4)
@@ -96,7 +96,7 @@ public class RichardsonLucyTests
             BitConverter.TryWriteBytes(pixels.Slice(i + 12, 4), 1.0f);
         }
 
-        using var result = image.RichardsonLucy(1.2f, 4);
+        using var result = image.Pipe().RichardsonLucy(1.2f, 4).ToImage();
 
         var span = result.WritablePixels;
         var value = BitConverter.ToSingle(span.Slice((8 * 24 + 8) * 4, 4));
@@ -107,13 +107,13 @@ public class RichardsonLucyTests
     public void ScalarAndVectorPathsAgreeByteForByte()
     {
         using var image = Noise(37, 29, WorkingFormat.Rgba8);
-        using var vector = image.RichardsonLucy(1.3f, 4);
+        using var vector = image.Pipe().RichardsonLucy(1.3f, 4).ToImage();
         var expected = vector.WritablePixels.ToArray();
 
         PlanarConvolve.ForceScalar = true;
         try
         {
-            using var scalar = image.RichardsonLucy(1.3f, 4);
+            using var scalar = image.Pipe().RichardsonLucy(1.3f, 4).ToImage();
             scalar.WritablePixels.ToArray().ShouldBe(expected);
         }
         finally
@@ -126,13 +126,13 @@ public class RichardsonLucyTests
     public void MotionAndGaussianPathsBothAgreeWithTheScalarTwin()
     {
         using var image = Noise(29, 23, WorkingFormat.Rgba16);
-        using var vector = image.RichardsonLucyMotion(7, 33f, 3);
+        using var vector = image.Pipe().RichardsonLucyMotion(7, 33f, 3).ToImage();
         var expected = vector.WritablePixels.ToArray();
 
         PlanarConvolve.ForceScalar = true;
         try
         {
-            using var scalar = image.RichardsonLucyMotion(7, 33f, 3);
+            using var scalar = image.Pipe().RichardsonLucyMotion(7, 33f, 3).ToImage();
             scalar.WritablePixels.ToArray().ShouldBe(expected);
         }
         finally
@@ -145,7 +145,7 @@ public class RichardsonLucyTests
     public void PatternIsStableAcrossWorkerCounts()
     {
         using var image = Bars(41, 33, WorkingFormat.Rgba8);
-        using var reference = image.RichardsonLucy(1.5f, 5);
+        using var reference = image.Pipe().RichardsonLucy(1.5f, 5).ToImage();
         var expected = reference.WritablePixels.ToArray();
 
         foreach (var degree in new[] { 1, 2, 16 })
@@ -153,7 +153,7 @@ public class RichardsonLucyTests
             RowParallel.DegreeOverride = degree;
             try
             {
-                using var result = image.RichardsonLucy(1.5f, 5);
+                using var result = image.Pipe().RichardsonLucy(1.5f, 5).ToImage();
                 result.WritablePixels.ToArray().ShouldBe(expected, $"degree {degree}");
             }
             finally
@@ -173,7 +173,7 @@ public class RichardsonLucyTests
     public void RunningAsAPlanStep_MatchesTheWholeImageCall()
     {
         using var image = Noise(29, 23, WorkingFormat.Rgba8);
-        using var direct = image.RichardsonLucy(1.2f, 3);
+        using var direct = image.Pipe().RichardsonLucy(1.2f, 3).ToImage();
 
         const float sigma = 1.2f;
         var halo = RichardsonLucyOps.RequiredHalo(sigma, 3);

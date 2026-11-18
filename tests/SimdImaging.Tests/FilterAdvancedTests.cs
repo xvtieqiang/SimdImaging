@@ -39,7 +39,7 @@ public class FilterAdvancedTests
     public void OilPaint_LeavesAFlatImageAlone()
     {
         using var source = Solid(9, 7, 120);
-        using var painted = source.OilPaint(2, 20);
+        using var painted = source.Pipe().OilPaint(2, 20).ToImage();
 
         for (var y = 0; y < 7; y++)
         {
@@ -60,7 +60,7 @@ public class FilterAdvancedTests
             span[o + 3] = 255;
         }
 
-        using var painted = source.OilPaint(1, 20);
+        using var painted = source.Pipe().OilPaint(1, 20).ToImage();
 
         Red(painted, 1, 0).ShouldBe((byte)0);
         Red(painted, 4, 0).ShouldBe((byte)0);     // window holds two blacks and one white
@@ -72,16 +72,16 @@ public class FilterAdvancedTests
     public void OilPaint_RejectsIllegalParameters()
     {
         using var source = Solid(4, 4, 10);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.OilPaint(0));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.OilPaint(1, 1));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.OilPaint(1, 257));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().OilPaint(0).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().OilPaint(1, 1).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().OilPaint(1, 257).ToImage());
     }
 
     [Fact]
     public void Clahe_LeavesAFlatImageAlone()
     {
         using var source = Solid(16, 16, 128);
-        using var equalised = source.Clahe(4, 4);
+        using var equalised = source.Pipe().Clahe(4, 4).ToImage();
 
         for (var y = 0; y < 16; y++)
         {
@@ -109,7 +109,7 @@ public class FilterAdvancedTests
             }
         }
 
-        using var equalised = source.Clahe(4, 4, 200f);
+        using var equalised = source.Pipe().Clahe(4, 4, 200f).ToImage();
 
         var minimum = (byte)255;
         var maximum = (byte)0;
@@ -131,18 +131,18 @@ public class FilterAdvancedTests
     public void Clahe_RejectsMoreTilesThanPixels()
     {
         using var source = Solid(4, 4, 10);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Clahe(8, 4));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Clahe(4, 8));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Clahe(2, 2, 0f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Clahe(8, 4).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Clahe(4, 8).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Clahe(2, 2, 0f).ToImage());
     }
 
     [Fact]
     public void Noise_IsReproducible()
     {
         using var source = Solid(16, 16, 128);
-        using var first = source.Noise(0.1f, NoiseKind.Gaussian, seed: 7);
-        using var second = source.Noise(0.1f, NoiseKind.Gaussian, seed: 7);
-        using var other = source.Noise(0.1f, NoiseKind.Gaussian, seed: 8);
+        using var first = source.Pipe().Noise(0.1f, NoiseKind.Gaussian, seed: 7).ToImage();
+        using var second = source.Pipe().Noise(0.1f, NoiseKind.Gaussian, seed: 7).ToImage();
+        using var other = source.Pipe().Noise(0.1f, NoiseKind.Gaussian, seed: 8).ToImage();
 
         second.WritablePixels.ToArray().ShouldBe(first.WritablePixels.ToArray());
         other.WritablePixels.ToArray().ShouldNotBe(first.WritablePixels.ToArray());
@@ -152,7 +152,7 @@ public class FilterAdvancedTests
     public void Noise_ZeroAmountIsACopy()
     {
         using var source = Solid(9, 5, 77);
-        using var noisy = source.Noise(0f);
+        using var noisy = source.Pipe().Noise(0f).ToImage();
 
         noisy.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -161,7 +161,7 @@ public class FilterAdvancedTests
     public void Noise_KeepsAlphaAndStaysInRange()
     {
         using var source = Solid(32, 32, 128);
-        using var noisy = source.Noise(0.3f, NoiseKind.Uniform, seed: 3);
+        using var noisy = source.Pipe().Noise(0.3f, NoiseKind.Uniform, seed: 3).ToImage();
 
         var span = noisy.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -172,15 +172,15 @@ public class FilterAdvancedTests
     public void Noise_RejectsIllegalAmount()
     {
         using var source = Solid(4, 4, 10);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Noise(-0.1f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Noise(1.5f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Noise(-0.1f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Noise(1.5f).ToImage());
     }
 
     [Fact]
     public void GuidedFilter_LeavesAFlatImageAlone()
     {
         using var source = Solid(12, 12, 90);
-        using var filtered = source.GuidedFilter(3, 1e-4f);
+        using var filtered = source.Pipe().GuidedFilter(3, 1e-4f).ToImage();
 
         for (var y = 0; y < 12; y++)
         {
@@ -205,7 +205,7 @@ public class FilterAdvancedTests
             }
         }
 
-        using var filtered = source.GuidedFilter(3, 0.01f);
+        using var filtered = source.Pipe().GuidedFilter(3, 0.01f).ToImage();
 
         Variance(filtered).ShouldBeLessThan(Variance(source) * 0.5);
     }
@@ -232,7 +232,7 @@ public class FilterAdvancedTests
             }
         }
 
-        using var blurred = source.GaussianBlur(Sigma);
+        using var blurred = source.Pipe().GaussianBlur(Sigma).ToImage();
 
         // The reference is a plain 2-D convolution with the same kernel, clamped at the edges; the separable
         // implementation must agree with it to within float summation order, seams included.
@@ -297,7 +297,7 @@ public class FilterAdvancedTests
 
         // A copy: a Span cannot be captured by the reference's local functions.
         var pixels = source.WritablePixels.ToArray();
-        using var filtered = source.GuidedFilter(Radius, Epsilon);
+        using var filtered = source.Pipe().GuidedFilter(Radius, Epsilon).ToImage();
         var result = filtered.WritablePixels;
 
         // The reference is the definition: two rounds of a plain (2r+1)² box average with replicated edges,
@@ -365,8 +365,8 @@ public class FilterAdvancedTests
             }
         }
 
-        using var narrow = source.GuidedFilter(3, 0.01f, bandRows: 5);
-        using var wide = source.GuidedFilter(3, 0.01f, bandRows: 1024);
+        using var narrow = source.Pipe().GuidedFilter(3, 0.01f, bandRows: 5).ToImage();
+        using var wide = source.Pipe().GuidedFilter(3, 0.01f, bandRows: 1024).ToImage();
 
         narrow.WritablePixels.ToArray().ShouldBe(wide.WritablePixels.ToArray());
     }
@@ -375,7 +375,7 @@ public class FilterAdvancedTests
     public void GuidedFilter_RejectsIllegalParameters()
     {
         using var source = Solid(5, 5, 10);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.GuidedFilter(0));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.GuidedFilter(1, 0f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().GuidedFilter(0).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().GuidedFilter(1, 0f).ToImage());
     }
 }

@@ -200,8 +200,9 @@ public class FusedExecutorEquivalenceTests
             ("a", OpCategory.Neighborhood, recordFirst, 2, 2),
             ("b", OpCategory.Neighborhood, recordSecond, 3, 3));
 
+        // This test is about the fused windows, so it asks for fusion rather than relying on the heuristic.
         using var result = plan.ExecuteWithOptions(View(image),
-            new ExecuteOptions { MaxDegreeOfParallelism = 2 });
+            new ExecuteOptions { MaxDegreeOfParallelism = 2, ForceFusion = true });
 
         first.Count.ShouldBe(second.Count, "every band runs both steps once");
         first.Count.ShouldBeGreaterThanOrEqualTo(5); // ceil(13 / 3)

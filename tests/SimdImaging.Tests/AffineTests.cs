@@ -34,7 +34,7 @@ public class AffineTests
     public void Rotate_ZeroDegreesIsIdentity()
     {
         using var source = Pattern(7, 5);
-        using var rotated = source.Rotate(0f);
+        using var rotated = source.Pipe().Rotate(0f).ToImage();
 
         rotated.Width.ShouldBe(7);
         rotated.Height.ShouldBe(5);
@@ -49,7 +49,7 @@ public class AffineTests
     public void Rotate_NinetyDegreesSwapsTheCanvas()
     {
         using var source = Pattern(9, 5);
-        using var rotated = source.Rotate(90f);
+        using var rotated = source.Pipe().Rotate(90f).ToImage();
 
         rotated.Width.ShouldBe(5);
         rotated.Height.ShouldBe(9);
@@ -62,7 +62,7 @@ public class AffineTests
     public void Rotate_FortyFiveDegreesFillsTheCornersWithTheBackground()
     {
         using var source = Pattern(11, 11);
-        using var rotated = source.Rotate(45f, new RgbaColor(0, 0, 0, 0));
+        using var rotated = source.Pipe().Rotate(45f, new RgbaColor(0, 0, 0, 0)).ToImage();
 
         rotated.Width.ShouldBeGreaterThan(11);
         At(rotated, 0, 0).ShouldBe(new byte[] { 0, 0, 0, 0 });
@@ -72,7 +72,7 @@ public class AffineTests
     public void Affine_IdentityIsACopy()
     {
         using var source = Pattern(6, 4);
-        using var copied = source.Affine(AffineMatrix.Identity, 6, 4);
+        using var copied = source.Pipe().Affine(AffineMatrix.Identity, 6, 4).ToImage();
 
         copied.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -81,7 +81,7 @@ public class AffineTests
     public void Affine_ScaleDoublesTheCanvas()
     {
         using var source = Pattern(4, 3);
-        using var scaled = source.Affine(AffineMatrix.Scale(2f, 2f), 8, 6);
+        using var scaled = source.Pipe().Affine(AffineMatrix.Scale(2f, 2f), 8, 6).ToImage();
 
         scaled.Width.ShouldBe(8);
         scaled.Height.ShouldBe(6);
@@ -94,7 +94,7 @@ public class AffineTests
         using var source = Pattern(3, 3);
         var singular = new AffineMatrix(1f, 2f, 0f, 2f, 4f, 0f);
 
-        Should.Throw<ArgumentException>(() => source.Affine(singular, 3, 3));
+        Should.Throw<ArgumentException>(() => source.Pipe().Affine(singular, 3, 3).ToImage());
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class AffineTests
         source.WritablePixels[2] = 128;
         source.WritablePixels[3] = 255;
 
-        using var clamped = source.Clamp(0.25f, 0.75f);
+        using var clamped = source.Pipe().Clamp(0.25f, 0.75f).ToImage();
 
         clamped.WritablePixels[0].ShouldBe((byte)64);
         clamped.WritablePixels[1].ShouldBe((byte)191);
@@ -129,7 +129,7 @@ public class AffineTests
     public void Clamp_RejectsAnInvertedRange()
     {
         using var source = Pattern(2, 2);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Clamp(0.8f, 0.2f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Clamp(0.8f, 0.2f).ToImage());
     }
 
     [Fact]

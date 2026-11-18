@@ -34,7 +34,7 @@ public class DitherTests
             span[i + 3] = 255;
         }
 
-        using var dithered = source.Dither(1, DitherKernel.Bayer2);
+        using var dithered = source.Pipe().Dither(1, DitherKernel.Bayer2).ToImage();
         var result = dithered.WritablePixels;
 
         for (var y = 0; y < 4; y++)
@@ -61,7 +61,7 @@ public class DitherTests
     public void Dither_StaysOnTheLevelGrid(DitherKernel kernel)
     {
         using var source = Gradient(23, 17);
-        using var dithered = source.Dither(2, kernel);
+        using var dithered = source.Pipe().Dither(2, kernel).ToImage();
 
         // Two bits is four levels; every channel must land on one of them.
         var allowed = new[] { 0, 85, 170, 255 };
@@ -92,8 +92,8 @@ public class DitherTests
     public void Dither_IsDeterministic(DitherKernel kernel)
     {
         using var source = Gradient(31, 19);
-        using var first = source.Dither(3, kernel);
-        using var second = source.Dither(3, kernel);
+        using var first = source.Pipe().Dither(3, kernel).ToImage();
+        using var second = source.Pipe().Dither(3, kernel).ToImage();
 
         second.WritablePixels.ToArray().ShouldBe(first.WritablePixels.ToArray());
     }
@@ -102,9 +102,9 @@ public class DitherTests
     public void Dither_KernelsProduceDifferentPatterns()
     {
         using var source = Gradient(32, 32);
-        using var floyd = source.Dither(1, DitherKernel.FloydSteinberg);
-        using var atkinson = source.Dither(1, DitherKernel.Atkinson);
-        using var bayer = source.Dither(1, DitherKernel.Bayer8);
+        using var floyd = source.Pipe().Dither(1, DitherKernel.FloydSteinberg).ToImage();
+        using var atkinson = source.Pipe().Dither(1, DitherKernel.Atkinson).ToImage();
+        using var bayer = source.Pipe().Dither(1, DitherKernel.Bayer8).ToImage();
 
         floyd.WritablePixels.ToArray().ShouldNotBe(atkinson.WritablePixels.ToArray());
         floyd.WritablePixels.ToArray().ShouldNotBe(bayer.WritablePixels.ToArray());
@@ -120,7 +120,7 @@ public class DitherTests
         span[4] = span[5] = span[6] = 200;      // 200/255 + 0.5 = 1.284 -> level 1
         span[7] = 255;
 
-        using var dithered = source.Dither(1, DitherKernel.None);
+        using var dithered = source.Pipe().Dither(1, DitherKernel.None).ToImage();
         dithered.WritablePixels[0].ShouldBe((byte)0);
         dithered.WritablePixels[4].ShouldBe((byte)255);
     }
@@ -129,7 +129,7 @@ public class DitherTests
     public void Dither_EightBitsIsACopy()
     {
         using var source = Gradient(9, 7);
-        using var dithered = source.Dither(8);
+        using var dithered = source.Pipe().Dither(8).ToImage();
 
         dithered.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -138,8 +138,8 @@ public class DitherTests
     public void Dither_RejectsIllegalBitDepth()
     {
         using var source = Gradient(4, 4);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Dither(0));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Dither(9));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Dither(0).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Dither(9).ToImage());
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class DitherTests
             new RgbaColor(255, 255, 255, 255),
         });
 
-        using var dithered = source.DitherToPalette(palette, DitherKernel.Atkinson);
+        using var dithered = source.Pipe().DitherToPalette(palette, DitherKernel.Atkinson).ToImage();
 
         var span = dithered.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -173,7 +173,7 @@ public class DitherTests
             new RgbaColor(255, 255, 255, 255),
         });
 
-        Should.Throw<NotSupportedException>(() => source.DitherToPalette(palette, DitherKernel.Bayer4));
-        Should.Throw<NotSupportedException>(() => source.ReduceColors(4, kernel: DitherKernel.Bayer2));
+        Should.Throw<NotSupportedException>(() => source.Pipe().DitherToPalette(palette, DitherKernel.Bayer4).ToImage());
+        Should.Throw<NotSupportedException>(() => source.Pipe().ReduceColors(4, kernel: DitherKernel.Bayer2).ToImage());
     }
 }

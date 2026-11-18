@@ -328,8 +328,13 @@ public static class Resample
         {
             var row = FloatScratch.Rent(source.Width * 4);
             var outputRow = FloatScratch.Rent(stride);
-            var scratchRows = initialRows;
-            var scratch = FloatScratch.Rent(stride * scratchRows);
+
+            // A ring of horizontally resized rows instead of a whole source band. Bands used to redo the
+            // 2-taps rows of overlap at every boundary, which is why a small scratch cost time and a big
+            // one cost memory: the eight-megabyte band held 94 MiB at 7680 wide for a 960-wide answer.
+            var ringRows = Math.Min(source.Height, weightsY.Taps + 2);
+            var scratch = FloatScratch.Rent(stride * ringRows);
+            var filledThrough = -1;
             try
             {
                 for (var b = start; b < end; b++)
@@ -337,42 +342,26 @@ public static class Resample
                     var bandStart = b * bandHeight;
                     var bandEnd = Math.Min(bandStart + bandHeight, height);
 
-                    var sourceStart = int.MaxValue;
-                    var sourceEnd = int.MinValue;
-                    for (var dy = bandStart; dy < bandEnd; dy++)
-                    {
-                        var startRow = weightsY.Starts[dy];
-                        sourceStart = Math.Min(sourceStart, Math.Clamp(startRow, 0, source.Height - 1));
-                        sourceEnd = Math.Max(sourceEnd, Math.Clamp(startRow + weightsY.Taps - 1, 0, source.Height - 1));
-                    }
-
-                    var neededRows = sourceEnd - sourceStart + 1;
-                    if (neededRows > scratchRows)
-                    {
-                        // This path used to grow without a ceiling, silently exceeding the documented
-                        // working-set contract. A band whose tap window spans more than MaxScratchBytes is
-                        // now refused instead of quietly renting gigabytes.
-                        var required = (long)stride * neededRows * sizeof(float);
-                        if (required > MaxScratchBytes)
-                            throw new InvalidOperationException(
-                                $"The vertical pass needs {required / (1024 * 1024)} MiB of scratch for one " +
-                                $"band ({neededRows} rows x {stride} floats), above the {MaxScratchBytes / (1024 * 1024)} MiB " +
-                                "working-set limit. Reduce the downsample ratio or resize in two steps.");
-
-                        FloatScratch.Return(scratch);
-                        scratchRows = neededRows;
-                        scratch = FloatScratch.Rent(stride * scratchRows);
-                    }
-
-                    for (var sy = sourceStart; sy <= sourceEnd; sy++)
-                    {
-                        Pixels.ReadRowPremultiplied(source.Row(sy), source.Width, source.Format, row);
-                        HorizontalRow(row, source.Width, scratch.AsSpan((sy - sourceStart) * stride, stride), width, weightsX);
-                    }
+                    var required = (long)stride * ringRows * sizeof(float);
+                    if (required > MaxScratchBytes)
+                        throw new InvalidOperationException(
+                            $"The vertical pass needs {required / (1024 * 1024)} MiB of scratch " +
+                            $"({ringRows} rows x {stride} floats), above the {MaxScratchBytes / (1024 * 1024)} MiB " +
+                            "working-set limit. Reduce the downsample ratio or resize in two steps.");
 
                     for (var dy = bandStart; dy < bandEnd; dy++)
                     {
-                        VerticalRow(scratch, sourceStart, source.Height, width, dy, weightsY, outputRow);
+                        // Tap windows advance monotonically, so each source row is resized once per worker.
+                        var first = Math.Clamp(weightsY.Starts[dy], 0, source.Height - 1);
+                        var last = Math.Clamp(weightsY.Starts[dy] + weightsY.Taps - 1, 0, source.Height - 1);
+                        for (var sy = Math.Max(filledThrough + 1, first); sy <= last; sy++)
+                        {
+                            Pixels.ReadRowPremultiplied(source.Row(sy), source.Width, source.Format, row);
+                            HorizontalRow(row, source.Width, scratch.AsSpan(sy % ringRows * stride, stride), width, weightsX);
+                            filledThrough = sy;
+                        }
+
+                        VerticalRow(scratch, ringRows, source.Height, width, dy, weightsY, outputRow);
                         Pixels.WriteRowUnpremultiplied(outputRow, width, source.Format, view.Row(dy));
                     }
                 }
@@ -433,7 +422,7 @@ public static class Resample
 
 
     /// <summary>One destination row: accumulate every tap in a register, write the row once.</summary>
-    private static void VerticalRow(float[] scratch, int scratchStart, int sourceHeight, int width, int dy, WeightTable weights, float[] destination)
+    private static void VerticalRow(float[] scratch, int ringRows, int sourceHeight, int width, int dy, WeightTable weights, float[] destination)
     {
         var stride = width * 4;
         var start = weights.Starts[dy];
@@ -448,7 +437,7 @@ public static class Resample
         {
             Span<int> rows = stackalloc int[StackTapLimit];
             Span<float> tapWeights = stackalloc float[StackTapLimit];
-            Convolve(scratch, scratchStart, sourceHeight, stride, interior, start, weights, tapBase,
+            Convolve(scratch, ringRows, sourceHeight, stride, interior, start, weights, tapBase,
                 rows, tapWeights, destination);
             return;
         }
@@ -457,7 +446,7 @@ public static class Resample
         var rentedWeights = ArrayPool<float>.Shared.Rent(weights.Taps);
         try
         {
-            Convolve(scratch, scratchStart, sourceHeight, stride, interior, start, weights, tapBase,
+            Convolve(scratch, ringRows, sourceHeight, stride, interior, start, weights, tapBase,
                 rentedRows, rentedWeights, destination);
         }
         finally
@@ -472,7 +461,7 @@ public static class Resample
     /// time. Each lane starts at zero and adds taps in ascending order, so the float result — and therefore
     /// every output byte — matches the scalar path.
     /// </summary>
-    private static void Convolve(float[] scratch, int scratchStart, int sourceHeight, int stride, bool interior,
+    private static void Convolve(float[] scratch, int ringRows, int sourceHeight, int stride, bool interior,
         int start, WeightTable weights, int tapBase, Span<int> rows, Span<float> tapWeights, float[] destination)
     {
         var tapCount = 0;
@@ -482,7 +471,7 @@ public static class Resample
             if (weight == 0f)
                 continue;
             var sy = interior ? start + k : Math.Clamp(start + k, 0, sourceHeight - 1);
-            rows[tapCount] = (sy - scratchStart) * stride;
+            rows[tapCount] = sy % ringRows * stride;
             tapWeights[tapCount] = weight;
             tapCount++;
         }

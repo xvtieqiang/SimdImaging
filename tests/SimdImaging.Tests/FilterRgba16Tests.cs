@@ -37,7 +37,7 @@ public class FilterRgba16Tests
                 using var image = SimdImaging.Image.Create(Width, Height, WorkingFormat.Rgba16);
                 source.AsSpan().CopyTo(image.WritablePixels);
 
-                using var blurred = image.GaussianBlur(sigma);
+                using var blurred = image.Pipe().GaussianBlur(sigma).ToImage();
                 Assert.Equal(expected, blurred.WritablePixels.ToArray());
             }
             finally
@@ -59,7 +59,7 @@ public class FilterRgba16Tests
         using var image = SimdImaging.Image.Create(Width, Height, WorkingFormat.Rgba16);
         source.AsSpan().CopyTo(image.WritablePixels);
 
-        using var blurred = image.BoxBlur(Radius);
+        using var blurred = image.Pipe().BoxBlur(Radius).ToImage();
         Assert.Equal(expected, blurred.WritablePixels.ToArray());
     }
 
@@ -95,7 +95,7 @@ public class FilterRgba16Tests
         using var image = SimdImaging.Image.Create(narrowWidth, narrowHeight, WorkingFormat.Rgba16);
         bytes.AsSpan().CopyTo(image.WritablePixels);
 
-        using var blurred = image.GaussianBlur(sigma);
+        using var blurred = image.Pipe().GaussianBlur(sigma).ToImage();
         Assert.Equal(expected, blurred.WritablePixels.ToArray());
     }
 
@@ -124,7 +124,7 @@ public class FilterRgba16Tests
         using var image = SimdImaging.Image.Create(width, height, WorkingFormat.Rgba16);
         bytes.AsSpan().CopyTo(image.WritablePixels);
 
-        using var blurred = image.GaussianBlur(sigma);
+        using var blurred = image.Pipe().GaussianBlur(sigma).ToImage();
         Assert.Equal(expected, blurred.WritablePixels.ToArray());
     }
 
@@ -142,7 +142,7 @@ public class FilterRgba16Tests
         using var image = SimdImaging.Image.Create(width, height, WorkingFormat.Rgba16);
         bytes.AsSpan().CopyTo(image.WritablePixels);
 
-        using var blurred = image.BoxBlur(Radius);
+        using var blurred = image.Pipe().BoxBlur(Radius).ToImage();
         Assert.Equal(expected, blurred.WritablePixels.ToArray());
     }
 

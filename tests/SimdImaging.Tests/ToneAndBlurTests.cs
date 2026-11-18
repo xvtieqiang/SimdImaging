@@ -27,8 +27,8 @@ public class ToneAndBlurTests
         var shifts = new SimdImaging.Processing.ColorBalanceShifts(0.2f, 0f, 0f);
         var none = new SimdImaging.Processing.ColorBalanceShifts(0f, 0f, 0f);
 
-        using var darkResult = dark.ColorBalance(shifts, none, none);
-        using var brightResult = bright.ColorBalance(shifts, none, none);
+        using var darkResult = dark.Pipe().ColorBalance(shifts, none, none).ToImage();
+        using var brightResult = bright.Pipe().ColorBalance(shifts, none, none).ToImage();
 
         var darkDelta = darkResult.WritablePixels[0] - dark.WritablePixels[0];
         var brightDelta = brightResult.WritablePixels[0] - bright.WritablePixels[0];
@@ -47,7 +47,7 @@ public class ToneAndBlurTests
             image.WritablePixels[2] = 30;
             image.WritablePixels[3] = 40;
 
-            using var swapped = image.ChannelSwap(2, 1, 0);
+            using var swapped = image.Pipe().ChannelSwap(2, 1, 0).ToImage();
             swapped.WritablePixels[..4].ToArray().ShouldBe(new byte[] { 30, 20, 10, 40 });
         }
     }
@@ -56,7 +56,7 @@ public class ToneAndBlurTests
     public void ChannelSwap_RejectsAnUnknownChannel()
     {
         using var image = Solid(1, 1, 100);
-        Should.Throw<ArgumentOutOfRangeException>(() => image.ChannelSwap(3, 1, 0));
+        Should.Throw<ArgumentOutOfRangeException>(() => image.Pipe().ChannelSwap(3, 1, 0).ToImage());
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class ToneAndBlurTests
         using var image = Solid(3, 1, 100);
         image.WritablePixels[4] = 200;
 
-        using var result = image.BlackWhite(0.5f);
+        using var result = image.Pipe().BlackWhite(0.5f).ToImage();
 
         result.WritablePixels[0].ShouldBe((byte)0);
         result.WritablePixels[4].ShouldBe((byte)255);
@@ -81,7 +81,7 @@ public class ToneAndBlurTests
         image.WritablePixels[centre + 2] = 255;
         image.WritablePixels[centre + 3] = 255;
 
-        using var blurred = image.MotionBlur(5, 0f);
+        using var blurred = image.Pipe().MotionBlur(5, 0f).ToImage();
 
         At(blurred, 4, 4).ShouldBeGreaterThan((byte)0);
         At(blurred, 3, 4).ShouldBeGreaterThan((byte)0);
@@ -99,7 +99,7 @@ public class ToneAndBlurTests
         image.WritablePixels[centre + 2] = 255;
         image.WritablePixels[centre + 3] = 255;
 
-        using var blurred = image.BokehBlur(1);
+        using var blurred = image.Pipe().BokehBlur(1).ToImage();
 
         // radius 1 disc = centre + four orthogonal neighbours; the diagonal corners are outside it.
         At(blurred, 4, 4).ShouldBeGreaterThan((byte)0);
@@ -116,7 +116,7 @@ public class ToneAndBlurTests
     public void MotionBlur_KeepsAConstantImageConstant(int angle)
     {
         using var image = Solid(7, 7, 66);
-        using var blurred = image.MotionBlur(5, angle);
+        using var blurred = image.Pipe().MotionBlur(5, angle).ToImage();
 
         var span = blurred.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -130,7 +130,7 @@ public class ToneAndBlurTests
     public void BokehBlur_KeepsAConstantImageConstant()
     {
         using var image = Solid(7, 7, 66);
-        using var blurred = image.BokehBlur(2);
+        using var blurred = image.Pipe().BokehBlur(2).ToImage();
 
         var span = blurred.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)

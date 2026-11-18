@@ -32,7 +32,7 @@ public class WarpPrecisionTests
 
         using var image = Image.Create(vector.Width, vector.Height, vector.Format);
         vector.Input.AsSpan().CopyTo(image.WritablePixels);
-        using var warped = image.Warp(vector.Width, vector.Height, Identity, Resampler.Bilinear);
+        using var warped = image.Pipe().Warp(vector.Width, vector.Height, Identity, Resampler.Bilinear).ToImage();
 
         warped.WritablePixels.ToArray().ShouldBe(vector.Expected);
     }
@@ -43,7 +43,7 @@ public class WarpPrecisionTests
         var vector = Load("warp-identity-rgba32f");
         using var image = Image.Create(vector.Width, vector.Height, vector.Format);
         vector.Input.AsSpan().CopyTo(image.WritablePixels);
-        using var warped = image.Warp(vector.Width, vector.Height, Identity, Resampler.Bilinear);
+        using var warped = image.Pipe().Warp(vector.Width, vector.Height, Identity, Resampler.Bilinear).ToImage();
 
         var samples = MemoryMarshal.Cast<byte, float>(warped.WritablePixels).ToArray();
         samples.ShouldContain(4f);       // HDR > 1
@@ -73,7 +73,7 @@ public class WarpPrecisionTests
             sx = x - 0.25f;
             sy = y;
         };
-        using var warped = image.Warp(2, 1, halfShift, Resampler.Bilinear);
+        using var warped = image.Pipe().Warp(2, 1, halfShift, Resampler.Bilinear).ToImage();
         var result = MemoryMarshal.Cast<byte, ushort>(warped.WritablePixels);
 
         // The first output pixel is background; the second one blends the two neighbours.
@@ -98,7 +98,7 @@ public class WarpPrecisionTests
             sy = y - 4f;
         };
 
-        using var warped = image.Warp(size, size, shifted, Resampler.Bilinear, background);
+        using var warped = image.Pipe().Warp(size, size, shifted, Resampler.Bilinear, background).ToImage();
         var row = warped.WritablePixels;
 
         switch (format)
@@ -205,7 +205,7 @@ public class WarpPrecisionTests
             throw new InvalidOperationException("injected mapping failure");
 
         Should.Throw<InvalidOperationException>(() =>
-            image.Warp(4, 4, boom, Resampler.Bilinear, default, pool));
+            image.Pipe(pool).Warp(4, 4, boom, Resampler.Bilinear, default).ToImage());
 
         pool.DisposeCount.ShouldBe(1);
     }

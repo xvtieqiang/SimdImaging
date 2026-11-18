@@ -85,7 +85,7 @@ internal static class SeamProfile
             SeamCarving.ResetProfile();
             SeamCarving.ProfilePhases = true;
             var start = Stopwatch.GetTimestamp();
-            using var carved = source.RemoveSeams(axis, count);
+            using var carved = source.Pipe().RemoveSeams(axis, count).ToImage();
             var elapsed = Stopwatch.GetTimestamp() - start;
             SeamCarving.ProfilePhases = false;
 

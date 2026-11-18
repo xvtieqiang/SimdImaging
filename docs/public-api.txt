@@ -23,6 +23,7 @@
   SimdImaging.Abstractions.ExecuteOptions.Diagnostics : System.Boolean { get; set; }
   SimdImaging.Abstractions.ExecuteOptions.Equals(SimdImaging.Abstractions.ExecuteOptions? other) -> System.Boolean
   SimdImaging.Abstractions.ExecuteOptions.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.Abstractions.ExecuteOptions.ForceFusion : System.Boolean { get; set; }
   SimdImaging.Abstractions.ExecuteOptions.GetHashCode() -> System.Int32
   SimdImaging.Abstractions.ExecuteOptions.MaxDegreeOfParallelism : System.Int32 { get; set; }
   SimdImaging.Abstractions.ExecuteOptions.MaxWorkingBytes : System.Int64 { get; set; }
@@ -228,179 +229,62 @@
   SimdImaging.GainMappedImage.ScaleY : System.Double { get; }
   SimdImaging.GainMappedImage.ToHdr(System.Single displayHeadroom, System.Single weight, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.GainMappedImage.WarpNormalized(System.Int32 width, System.Int32 height, SimdImaging.NormalizedWarp map, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.RgbaColor baseBackground, SimdImaging.Abstractions.RgbaColor gainBackground, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.GainMappedImage
-  SimdImaging.Image.AdaptiveThreshold(System.Int32 radius, System.Single offset, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Affine(SimdImaging.Processing.Geometry.AffineMatrix forward, System.Int32 width, System.Int32 height, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.AffineWithOptions(SimdImaging.Processing.Geometry.AffineMatrix forward, System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.AlphaBounds(System.Single threshold) -> Sdcb.SimdCodecs.Abstractions.PixelRect
-  SimdImaging.Image.AlphaThreshold(System.Single threshold, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Apply(SimdImaging.Processing.ProcessingPlan plan, SimdImaging.Abstractions.IPixelPool? pool, SimdImaging.Processing.PlanObserver? observe) -> SimdImaging.Image
-  SimdImaging.Image.ApplyGainMap(SimdImaging.Image gainMap, System.Single headroom, System.Single weight, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.ApplyWithOptions(SimdImaging.Processing.ProcessingPlan plan, SimdImaging.Abstractions.ExecuteOptions options, SimdImaging.Abstractions.IPixelPool? pool, SimdImaging.Processing.PlanObserver? observe) -> SimdImaging.Image
-  SimdImaging.Image.AutoOrient(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Bilateral(System.Int32 radius, System.Single sigmaSpace, System.Single sigmaRange, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.BlackWhite(System.Single threshold, System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Blend(SimdImaging.Image overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.BlendMode mode, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.BokehBlur(System.Int32 radius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.BoxBlur(System.Int32 radius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Brightness(System.Single shift, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.BuildPalette(System.Int32 maxColors, SimdImaging.Processing.Quantizer quantizer) -> SimdImaging.Abstractions.ColorPalette
-  SimdImaging.Image.ChannelSwap(System.Int32 redSource, System.Int32 greenSource, System.Int32 blueSource, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ChromaResample(SimdImaging.Processing.ChromaSubsampling mode, SimdImaging.Processing.YCbCrStandard ycbcr, System.Boolean limitedRange, System.Int32 bandRows, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Clahe(System.Int32 tilesX, System.Int32 tilesY, System.Single clipLimit, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Clamp(System.Single low, System.Single high, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Clear() -> System.Void
   SimdImaging.Image.ClipPath(SimdImaging.Processing.PixelPath path, SimdImaging.Processing.PathFillRule rule) -> System.Void
   SimdImaging.Image.Clone(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Close3x3(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ColorBalance(SimdImaging.Processing.ColorBalanceShifts shadows, SimdImaging.Processing.ColorBalanceShifts midtones, SimdImaging.Processing.ColorBalanceShifts highlights, System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ColorBlindness(SimdImaging.Processing.ColorVisionDeficiency kind, System.Single severity, System.Boolean correct, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.ColorEncoding : Sdcb.SimdCodecs.Abstractions.ColorEncoding { get; }
-  SimdImaging.Image.ColorMatrix(System.ReadOnlySpan<System.Single> matrix, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.ComposeAnimation(System.Int32 width, System.Int32 height, System.Collections.Generic.IReadOnlyList<SimdImaging.Image> frames, System.TimeSpan? frameDuration) -> SimdImaging.Image
-  SimdImaging.Image.Composite(SimdImaging.Image overlay, System.Int32 x, System.Int32 y, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Composite(SimdImaging.Image overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.PorterDuff mode, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Contrast(System.Single gain, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ConvertColorSpace(SimdImaging.Processing.ColorSpace target, SimdImaging.Processing.YCbCrStandard ycbcr, System.Boolean limitedRange, SimdImaging.Processing.WhitePoint white, SimdImaging.Processing.ChromaticAdaptation adaptation, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Convolve(System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Convolve3x3(System.ReadOnlySpan<System.Single> kernel, System.Single bias, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.CopyMetadataFrom(SimdImaging.Image source) -> SimdImaging.Image
   SimdImaging.Image.Create(System.Int32 width, System.Int32 height, SimdImaging.Abstractions.WorkingFormat format, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Crop(Sdcb.SimdCodecs.Abstractions.PixelRect region, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Curves(System.ReadOnlySpan<SimdImaging.Processing.CurvePoint> points, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Dehaze(System.Int32 patchRadius, System.Single omega, System.Single tMin, System.Int32 refineRadius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Delinearize(SimdImaging.Processing.TransferCurve curve, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Diff(SimdImaging.Image other, System.Single threshold) -> SimdImaging.Processing.DiffResult
-  SimdImaging.Image.Dilate3x3(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Dispose() -> System.Void
-  SimdImaging.Image.DistanceTransform(System.Single threshold, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Dither(System.Int32 bits, SimdImaging.Processing.DitherKernel kernel, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.DitherToPalette(SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Processing.DitherKernel kernel, System.Single maxError, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.DominantColors(System.Int32 count) -> SimdImaging.Abstractions.RgbaColor[]
-  SimdImaging.Image.DrawImage(SimdImaging.Image source, Sdcb.SimdCodecs.Abstractions.PixelRect destination, System.Single opacity) -> SimdImaging.Image
   SimdImaging.Image.DrawLine(System.Int32 x0, System.Int32 y0, System.Int32 x1, System.Int32 y1, SimdImaging.Abstractions.RgbaColor color) -> System.Void
   SimdImaging.Image.DrawPath(SimdImaging.Processing.PixelPath path, SimdImaging.Abstractions.RgbaColor color) -> System.Void
   SimdImaging.Image.DrawPath(SimdImaging.Processing.PixelPath path, SimdImaging.Abstractions.RgbaColor color, SimdImaging.Processing.StrokeOptions options) -> System.Void
   SimdImaging.Image.DrawRect(Sdcb.SimdCodecs.Abstractions.PixelRect rect, SimdImaging.Abstractions.RgbaColor color, System.Int32 thickness) -> System.Void
-  SimdImaging.Image.Emboss(System.Single strength, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Encode(SimdImaging.Image image, Sdcb.SimdCodecs.Abstractions.ImageFormat format, SimdImaging.Abstractions.SaveOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Byte[]
-  SimdImaging.Image.EntropyCrop(System.Single threshold, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.EqualizeHistogram(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Erode3x3(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Fill(SimdImaging.Abstractions.RgbaColor color) -> System.Void
   SimdImaging.Image.FillEllipse(Sdcb.SimdCodecs.Abstractions.PixelRect bounds, SimdImaging.Abstractions.RgbaColor color) -> System.Void
   SimdImaging.Image.FillPath(SimdImaging.Processing.PixelPath path, SimdImaging.Abstractions.RgbaColor color, SimdImaging.Processing.PathFillRule rule) -> System.Void
   SimdImaging.Image.FillPolygon(System.ReadOnlySpan<SimdImaging.Abstractions.PixelPoint> points, SimdImaging.Abstractions.RgbaColor color) -> System.Void
   SimdImaging.Image.FillRect(Sdcb.SimdCodecs.Abstractions.PixelRect rect, SimdImaging.Abstractions.RgbaColor color) -> System.Void
-  SimdImaging.Image.FlipHorizontal(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.FlipVertical(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.FloodFill(System.Int32 x, System.Int32 y, SimdImaging.Abstractions.RgbaColor color, System.Single tolerance) -> System.Void
   SimdImaging.Image.Format : SimdImaging.Abstractions.WorkingFormat { get; }
   SimdImaging.Image.FrameCount : System.Int32 { get; }
   SimdImaging.Image.Frames : System.ReadOnlySpan<SimdImaging.ImageFrame> { get; }
   SimdImaging.Image.FuseExposures(System.Collections.Generic.IReadOnlyList<SimdImaging.Image> frames, System.Single contrast, System.Single saturation, System.Single exposure, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Gamma(System.Single gamma, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.GaussianBlur(System.Single sigma, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.GaussianSharpen(System.Single gain, System.Single sigma, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Glow(System.Single threshold, System.Single sigma, System.Single amount, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Grayscale(System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.GuidedFilter(SimdImaging.Image guide, System.Int32 radius, System.Single epsilon, System.Int32 bandRows, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.GuidedFilter(System.Int32 radius, System.Single epsilon, System.Int32 bandRows, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Height : System.Int32 { get; }
   SimdImaging.Image.Histogram(System.Int32 channel, System.Int32 bins) -> System.Int32[]
-  SimdImaging.Image.HueRotate(System.Single degrees, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.IccTransform(System.ReadOnlySpan<System.Byte> sourceProfile, System.ReadOnlySpan<System.Byte> destinationProfile, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Info : Sdcb.SimdCodecs.Abstractions.ImageInfo { get; }
-  SimdImaging.Image.InsertSeams(SimdImaging.Abstractions.SeamAxis axis, System.Int32 count, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Invert(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Item : SimdImaging.ImageFrame { get; }
   SimdImaging.Image.KeepFrames(System.Int32[] indices) -> SimdImaging.Image
-  SimdImaging.Image.Laplacian(System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Levels(System.Single inputBlack, System.Single inputWhite, System.Single gamma, System.Single outputBlack, System.Single outputWhite, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Lightness(System.Single factor, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.LinearGradient(Sdcb.SimdCodecs.Abstractions.PixelRect rect, SimdImaging.Abstractions.RgbaColor from, SimdImaging.Abstractions.RgbaColor to, System.Single angleDegrees) -> System.Void
-  SimdImaging.Image.Linearize(SimdImaging.Processing.TransferCurve curve, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Load(System.IO.Stream stream, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> SimdImaging.Image
   SimdImaging.Image.Load(System.ReadOnlySpan<System.Byte> data, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> SimdImaging.Image
   SimdImaging.Image.Load(System.String path, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> SimdImaging.Image
   SimdImaging.Image.LoadAsync(System.IO.Stream stream, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<SimdImaging.Image>
   SimdImaging.Image.LoadAsync(System.String path, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<SimdImaging.Image>
-  SimdImaging.Image.LocalLaplacian(System.Int32 levels, System.Int32 samples, System.Single alpha, System.Single beta, System.Single sigmaR, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.MapToPalette(SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Median(System.Int32 radius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Median3x3(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Metadata : Sdcb.SimdCodecs.Abstractions.ImageMetadata { get; }
   SimdImaging.Image.MinMax() -> System.ValueTuple<SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange>
-  SimdImaging.Image.Morph(System.Int32 radius, SimdImaging.Abstractions.Morphology kind, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.MotionBlur(System.Int32 length, System.Single angleDegrees, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Mutate(System.Action<SimdImaging.ImagePipeline> steps, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Noise(System.Single amplitude, SimdImaging.Processing.NoiseKind kind, System.UInt32 seed, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.NonLocalMeans(System.Int32 searchRadius, System.Int32 patchRadius, System.Single h, System.Single sigma, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Normalize(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.OilPaint(System.Int32 radius, System.Int32 levels, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Opacity(System.Single opacity, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Open3x3(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Pad(System.Int32 left, System.Int32 top, System.Int32 right, System.Int32 bottom, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Pad(System.Int32 margin, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Perspective(System.ReadOnlySpan<System.Single> homography, System.Int32 width, System.Int32 height, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.PerspectiveWithOptions(System.ReadOnlySpan<System.Single> homography, System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Pixelate(System.Int32 blockSize, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.PointChain(SimdImaging.Processing.PointChainTable table, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.PointChain(SimdImaging.Processing.PointOps+RowTransform[] transforms) -> SimdImaging.Image
-  SimdImaging.Image.Posterize(System.Int32 levels, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Premultiply(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Prewitt(System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Psnr(SimdImaging.Image other) -> System.Double
-  SimdImaging.Image.Quantize(System.Int32 maxColors, SimdImaging.Processing.Quantizer quantizer, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.QuantizeWebSafe(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.RadialGradient(Sdcb.SimdCodecs.Abstractions.PixelRect rect, System.Single centreX, System.Single centreY, System.Single radius, SimdImaging.Abstractions.RgbaColor inner, SimdImaging.Abstractions.RgbaColor outer) -> System.Void
-  SimdImaging.Image.ReduceColors(System.Int32 maxColors, SimdImaging.Processing.Quantizer quantizer, SimdImaging.Processing.DitherKernel kernel, System.Single maxError, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.RemoveSeams(SimdImaging.Abstractions.SeamAxis axis, System.Int32 count, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ReplaceBackground(SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.RgbaColor replacement, System.Single tolerance, System.Single feather, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Resize(System.Int32 width, System.Int32 height, SimdImaging.Processing.Geometry.ResizeMode mode, SimdImaging.Processing.Geometry.Anchor anchor, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Resize(System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ResizeCanvas(System.Int32 width, System.Int32 height, SimdImaging.Processing.Geometry.Anchor anchor, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ResizeToHeight(System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ResizeToWidth(System.Int32 width, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ResizeWithOptions(System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.RichardsonLucy(System.Single sigma, System.Int32 iterations, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.RichardsonLucyMotion(System.Int32 length, System.Single angleDegrees, System.Int32 iterations, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Rotate(System.Single degrees, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Rotate180(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Rotate90(System.Boolean clockwise, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.RotateFlip(System.Int32 quarterTurns, System.Boolean flipHorizontal, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.RotateWithOptions(System.Single degrees, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.RoundCorners(System.Single radius, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.SamplePixel(System.Single x, System.Single y, SimdImaging.Processing.Resampler resampler) -> SimdImaging.Abstractions.RgbaColor
-  SimdImaging.Image.Saturation(System.Single gain, System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Save(SimdImaging.Image image, System.String path, SimdImaging.Abstractions.SaveOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Void
-  SimdImaging.Image.Scharr(System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.SeamCarve(System.Int32 width, System.Int32 height, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Sepia(System.Single blend, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Sharpen(System.Single gain, System.Single sigma, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Sobel(System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Ssim(SimdImaging.Image other) -> System.Double
   SimdImaging.Image.Statistics() -> System.ValueTuple<SimdImaging.Processing.ChannelStatistics, SimdImaging.Processing.ChannelStatistics, SimdImaging.Processing.ChannelStatistics, SimdImaging.Processing.ChannelStatistics>
   SimdImaging.Image.SweepGradient(Sdcb.SimdCodecs.Abstractions.PixelRect rect, System.Single centreX, System.Single centreY, SimdImaging.Abstractions.RgbaColor from, SimdImaging.Abstractions.RgbaColor to, System.Single startAngleDegrees) -> System.Void
-  SimdImaging.Image.Temperature(System.Single shift, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Threshold(System.Single threshold, System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Thumbnail(System.Int32 maxWidth, System.Int32 maxHeight, SimdImaging.Processing.Resampler resampler, System.Single sharpenAmount, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Tile(System.Int32 width, System.Int32 height, System.Boolean mirror, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Tint(SimdImaging.Abstractions.RgbaColor tint, System.Single amount, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.ToneMap(SimdImaging.Processing.ToneMapCurve curve, System.Single exposure, System.Single whitePoint, System.Boolean autoExposure, System.Single targetLuminance, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.Transcode(System.String sourcePath, System.String destinationPath, Sdcb.SimdCodecs.Abstractions.ImageMetadata? metadata, SimdImaging.Abstractions.SaveOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Void
-  SimdImaging.Image.Transpose(System.Boolean anti, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Trim(System.Single tolerance, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.TryLoad(System.IO.Stream stream, SimdImaging.Image& image, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Boolean
   SimdImaging.Image.TryLoad(System.ReadOnlySpan<System.Byte> data, SimdImaging.Image& image, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Boolean
   SimdImaging.Image.TryLoadAsync(System.IO.Stream stream, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<SimdImaging.Image?>
   SimdImaging.Image.TryLoadAsync(System.String path, SimdImaging.Abstractions.LoadOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<SimdImaging.Image?>
   SimdImaging.Image.TryLoadEmbeddedThumbnail(System.String path, SimdImaging.Image& thumbnail) -> System.Boolean
-  SimdImaging.Image.Unpremultiply(SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Vibrance(System.Single lift, System.Boolean bt709, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Vignette(System.Single radius, System.Single darkening, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Warp(System.Int32 width, System.Int32 height, SimdImaging.Processing.Geometry.PixelWarp map, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.WarpWithOptions(System.Int32 width, System.Int32 height, SimdImaging.Processing.Geometry.PixelWarp map, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
-  SimdImaging.Image.Watermark(SimdImaging.Image mark, SimdImaging.WatermarkPosition position, System.Int32 margin, System.Single opacity) -> SimdImaging.Image
   SimdImaging.Image.Width : System.Int32 { get; }
   SimdImaging.Image.WithMetadata(Sdcb.SimdCodecs.Abstractions.ImageMetadata metadata, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.WritablePixels : System.Span<System.Byte> { get; }
@@ -408,32 +292,64 @@
   SimdImaging.ImageFrame.Duration : System.TimeSpan? { get; }
   SimdImaging.ImageFrame.Pixels : SimdImaging.Abstractions.WorkingBuffer { get; }
   SimdImaging.ImagePipeline.AdaptiveThreshold(System.Int32 radius, System.Single offset) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Affine(SimdImaging.Processing.Geometry.AffineMatrix forward, System.Int32 width, System.Int32 height, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.AffineWithOptions(SimdImaging.Processing.Geometry.AffineMatrix forward, System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.AlphaThreshold(System.Single threshold) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ApplyGainMap(SimdImaging.Image gainMap, System.Single headroom, System.Single weight) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.AutoOrient() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.BandRows(System.Int32 rows) -> SimdImaging.ImagePipeline
-  SimdImaging.ImagePipeline.Bilateral(System.Int32 radius, System.Single sigmaRange) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Bilateral(System.Int32 radius, System.Single sigmaSpace, System.Single sigmaRange) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.BlackWhite(System.Single threshold, System.Boolean bt709) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Blend(SimdImaging.Image overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.BlendMode mode) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.BokehBlur(System.Int32 radius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.BoxBlur(System.Int32 radius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Brightness(System.Single shift) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ChannelSwap(System.Int32 redSource, System.Int32 greenSource, System.Int32 blueSource) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ChromaResample(SimdImaging.Processing.ChromaSubsampling mode, SimdImaging.Processing.YCbCrStandard ycbcr, System.Boolean limitedRange, System.Int32 bandRows) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Clahe(System.Int32 tilesX, System.Int32 tilesY, System.Single clipLimit) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Clamp(System.Single low, System.Single high) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Close3x3() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ColorBalance(SimdImaging.Processing.ColorBalanceShifts shadows, SimdImaging.Processing.ColorBalanceShifts midtones, SimdImaging.Processing.ColorBalanceShifts highlights, System.Boolean bt709) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ColorBlindness(SimdImaging.Processing.ColorVisionDeficiency kind, System.Single severity, System.Boolean correct) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ColorMatrix(System.ReadOnlySpan<System.Single> matrix) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Composite(SimdImaging.Image overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.PorterDuff mode) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Contrast(System.Single gain) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ConvertColorSpace(SimdImaging.Processing.ColorSpace target, SimdImaging.Processing.YCbCrStandard ycbcr, System.Boolean limitedRange, SimdImaging.Processing.WhitePoint white, SimdImaging.Processing.ChromaticAdaptation adaptation) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Convolve(System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Convolve3x3(System.ReadOnlySpan<System.Single> kernel, System.Single bias) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Crop(Sdcb.SimdCodecs.Abstractions.PixelRect region) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Curves(SimdImaging.Processing.CurvePoint[] points) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Dehaze(System.Int32 patchRadius, System.Single omega, System.Single tMin, System.Int32 refineRadius) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Delinearize(SimdImaging.Processing.TransferCurve curve) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Dilate3x3() -> SimdImaging.ImagePipeline
-  SimdImaging.ImagePipeline.Emboss() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.DistanceTransform(System.Single threshold) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Dither(System.Int32 bits, SimdImaging.Processing.DitherKernel kernel) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.DitherToPalette(SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Processing.DitherKernel kernel, System.Single maxError) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.DrawImage(SimdImaging.Image source, Sdcb.SimdCodecs.Abstractions.PixelRect destination, System.Single opacity) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Emboss(System.Single strength) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.EntropyCrop(System.Single threshold) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Equalize() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.EqualizeHistogram() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Erode3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.FlipHorizontal() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.FlipVertical() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Gamma(System.Single gamma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.GaussianBlur(System.Single sigma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.GaussianSharpen(System.Single gain, System.Single sigma) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Glow(System.Single threshold, System.Single sigma, System.Single amount) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Grayscale(System.Boolean bt709) -> SimdImaging.ImagePipeline
-  SimdImaging.ImagePipeline.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.GuidedFilter(SimdImaging.Image guide, System.Int32 radius, System.Single epsilon, System.Int32 bandRows) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.GuidedFilter(System.Int32 radius, System.Single epsilon, System.Int32 bandRows) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.HueRotate(System.Single degrees) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.IccTransform(System.ReadOnlySpan<System.Byte> sourceProfile, System.ReadOnlySpan<System.Byte> destinationProfile) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.InsertSeams(SimdImaging.Abstractions.SeamAxis axis, System.Int32 count) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Invert() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Laplacian(System.Boolean bt709) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Levels(System.Single inputBlack, System.Single inputWhite, System.Single gamma, System.Single outputBlack, System.Single outputWhite) -> SimdImaging.ImagePipeline
-  SimdImaging.ImagePipeline.LocalLaplacian(System.Int32 levels, System.Int32 samples) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Lightness(System.Single factor) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Linearize(SimdImaging.Processing.TransferCurve curve) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.LocalLaplacian(System.Int32 levels, System.Int32 samples, System.Single alpha, System.Single beta, System.Single sigmaR) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.MapToPalette(SimdImaging.Abstractions.ColorPalette palette) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Median(System.Int32 radius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Median3x3() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Morph(System.Int32 radius, SimdImaging.Abstractions.Morphology kind) -> SimdImaging.ImagePipeline
@@ -442,21 +358,58 @@
   SimdImaging.ImagePipeline.NonLocalMeans(System.Int32 searchRadius, System.Int32 patchRadius, System.Single h) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Normalize() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.OilPaint(System.Int32 radius, System.Int32 levels) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Opacity(System.Single opacity) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Open3x3() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Pad(System.Int32 left, System.Int32 top, System.Int32 right, System.Int32 bottom, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Pad(System.Int32 margin, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Perspective(System.ReadOnlySpan<System.Single> homography, System.Int32 width, System.Int32 height, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.PerspectiveWithOptions(System.ReadOnlySpan<System.Single> homography, System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Pixelate(System.Int32 blockSize) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.PointChain(SimdImaging.Processing.PointChainTable table) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.PointChain(SimdImaging.Processing.PointOps+RowTransform[] transforms) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Posterize(System.Int32 levels) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Premultiply() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Prewitt(System.Boolean bt709) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Quantize(System.Int32 maxColors, SimdImaging.Processing.Quantizer quantizer) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.QuantizeWebSafe() -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ReduceColors(System.Int32 maxColors, SimdImaging.Processing.Quantizer quantizer, SimdImaging.Processing.DitherKernel kernel, System.Single maxError) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.RemoveSeams(SimdImaging.Abstractions.SeamAxis axis, System.Int32 count) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ReplaceBackground(SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.RgbaColor replacement, System.Single tolerance, System.Single feather) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Resize(System.Int32 width, System.Int32 height, SimdImaging.Processing.Geometry.ResizeMode mode, SimdImaging.Processing.Geometry.Anchor anchor, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Resize(System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ResizeCanvas(System.Int32 width, System.Int32 height, SimdImaging.Processing.Geometry.Anchor anchor, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ResizeToHeight(System.Int32 height, SimdImaging.Processing.Resampler resampler) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ResizeToWidth(System.Int32 width, SimdImaging.Processing.Resampler resampler) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.ResizeWithOptions(System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.RichardsonLucy(System.Single sigma, System.Int32 iterations) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.RichardsonLucyMotion(System.Int32 length, System.Single angleDegrees, System.Int32 iterations) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Rotate(System.Single degrees, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Rotate180() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Rotate90(System.Boolean clockwise) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.RotateFlip(System.Int32 quarterTurns, System.Boolean flipHorizontal) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.RotateWithOptions(System.Single degrees, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.RoundCorners(System.Single radius) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Saturation(System.Single gain, System.Boolean bt709) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Scharr(System.Boolean bt709) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.SeamCarve(System.Int32 width, System.Int32 height) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sepia(System.Single blend) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sharpen(System.Single gain, System.Single sigma) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Sobel() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Temperature(System.Single shift) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Threshold(System.Single threshold, System.Boolean bt709) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Thumbnail(System.Int32 maxWidth, System.Int32 maxHeight, SimdImaging.Processing.Resampler resampler, System.Single sharpenAmount) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Tile(System.Int32 width, System.Int32 height, System.Boolean mirror) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Tint(SimdImaging.Abstractions.RgbaColor tint, System.Single amount) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.ToImage() -> SimdImaging.Image
+  SimdImaging.ImagePipeline.ToneMap(SimdImaging.Processing.ToneMapCurve curve, System.Single exposure, System.Single whitePoint, System.Boolean autoExposure, System.Single targetLuminance) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Transpose(System.Boolean anti) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Trim(System.Single tolerance) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Unpremultiply() -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Vibrance(System.Single lift, System.Boolean bt709) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Vignette(System.Single radius, System.Single darkening) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Warp(System.Int32 width, System.Int32 height, SimdImaging.Processing.Geometry.PixelWarp map, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.WarpWithOptions(System.Int32 width, System.Int32 height, SimdImaging.Processing.Geometry.PixelWarp map, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
+  SimdImaging.ImagePipeline.Watermark(SimdImaging.Image mark, SimdImaging.WatermarkPosition position, System.Int32 margin, System.Single opacity) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipelineExtensions.Pipe(SimdImaging.Image image, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.ImagePipeline
   SimdImaging.NormalizedWarp.#ctor(System.Object object, System.IntPtr method)
   SimdImaging.NormalizedWarp.BeginInvoke(System.Single u, System.Single v, System.Single& sourceU, System.Single& sourceV, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
@@ -791,6 +744,10 @@
   SimdImaging.Processing.Internal.ScratchStatistics.ToString() -> System.String
   SimdImaging.Processing.Internal.ScratchStatistics.op_Equality(SimdImaging.Processing.Internal.ScratchStatistics left, SimdImaging.Processing.Internal.ScratchStatistics right) -> System.Boolean
   SimdImaging.Processing.Internal.ScratchStatistics.op_Inequality(SimdImaging.Processing.Internal.ScratchStatistics left, SimdImaging.Processing.Internal.ScratchStatistics right) -> System.Boolean
+  SimdImaging.Processing.IntoKernel.#ctor(System.Object object, System.IntPtr method)
+  SimdImaging.Processing.IntoKernel.BeginInvoke(SimdImaging.Abstractions.PixelView sourceWindow, SimdImaging.Abstractions.PixelView destination, System.Int32 destinationY, System.Int32 rows, System.Int32 sourceRowOffset, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
+  SimdImaging.Processing.IntoKernel.EndInvoke(System.IAsyncResult result) -> System.Void
+  SimdImaging.Processing.IntoKernel.Invoke(SimdImaging.Abstractions.PixelView sourceWindow, SimdImaging.Abstractions.PixelView destination, System.Int32 destinationY, System.Int32 rows, System.Int32 sourceRowOffset) -> System.Void
   SimdImaging.Processing.LineCap.Butt = 0
   SimdImaging.Processing.LineCap.Round = 1
   SimdImaging.Processing.LineCap.Square = 2
@@ -898,7 +855,7 @@
   SimdImaging.Processing.PlanOps.Curves(System.ReadOnlySpan<SimdImaging.Processing.CurvePoint> points) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dehaze(System.Int32 patchRadius, System.Single omega, System.Single tMin, System.Int32 refineRadius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dilate3x3() -> SimdImaging.Processing.ImageOp
-  SimdImaging.Processing.PlanOps.Emboss() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Emboss(System.Single strength) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Equalize() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Erode3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Gamma(System.Single gamma) -> SimdImaging.Processing.ImageOp
@@ -919,6 +876,7 @@
   SimdImaging.Processing.PlanOps.OilPaint(System.Int32 radius, System.Int32 levels) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Open3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Pixelate(System.Int32 blockSize) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.PointChain(SimdImaging.Processing.PointChainTable table) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.PointChain(SimdImaging.Processing.PointOps+RowTransform[] transforms) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Posterize(System.Int32 levels) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Saturation(System.Single amount, System.Boolean bt709) -> SimdImaging.Processing.ImageOp
@@ -1012,6 +970,7 @@
   SimdImaging.Processing.ProcessingPlan.Add(SimdImaging.Processing.ImageOp op) -> SimdImaging.Processing.ProcessingPlan
   SimdImaging.Processing.ProcessingPlan.AddPointLut(System.String name, System.ReadOnlySpan<System.Byte> rgbaTable) -> SimdImaging.Processing.ProcessingPlan
   SimdImaging.Processing.ProcessingPlan.BandRows : System.Int32 { get; set; }
+  SimdImaging.Processing.ProcessingPlan.DefaultBandPixels : System.Int32
   SimdImaging.Processing.ProcessingPlan.DefaultBandRows : System.Int32
   SimdImaging.Processing.ProcessingPlan.Execute(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.IPixelPool? pool, SimdImaging.Processing.PlanObserver? observe) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.ProcessingPlan.ExecuteWithOptions(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.ExecuteOptions options, SimdImaging.Abstractions.IPixelPool? pool, SimdImaging.Processing.PlanObserver? observe) -> SimdImaging.Abstractions.WorkingBuffer
@@ -1137,6 +1096,7 @@ class SimdImaging.Processing.TransferOps
 class SimdImaging.Processing.WuQuantizer
 delegate SimdImaging.NormalizedWarp
 delegate SimdImaging.Processing.Geometry.PixelWarp
+delegate SimdImaging.Processing.IntoKernel
 delegate SimdImaging.Processing.OpKernel
 delegate SimdImaging.Processing.PlanObserver
 delegate SimdImaging.Processing.PointOps.RowTransform

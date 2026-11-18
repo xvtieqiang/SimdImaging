@@ -27,7 +27,7 @@ public class FilterExtrasTests
         span[4] = span[5] = span[6] = 200;
         span[7] = 255;
 
-        using var pixelated = source.Pixelate(2);
+        using var pixelated = source.Pipe().Pixelate(2).ToImage();
 
         Red(pixelated, 0, 0).ShouldBe((byte)100);
         Red(pixelated, 1, 0).ShouldBe((byte)100);
@@ -37,7 +37,7 @@ public class FilterExtrasTests
     public void Pixelate_BlockOfOneIsACopy()
     {
         using var source = Solid(7, 5, 33);
-        using var pixelated = source.Pixelate(1);
+        using var pixelated = source.Pipe().Pixelate(1).ToImage();
 
         pixelated.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -46,7 +46,7 @@ public class FilterExtrasTests
     public void Pixelate_LeavesAUniformImageAlone()
     {
         using var source = Solid(9, 7, 77);
-        using var pixelated = source.Pixelate(4);
+        using var pixelated = source.Pipe().Pixelate(4).ToImage();
 
         for (var y = 0; y < 7; y++)
         {
@@ -59,15 +59,15 @@ public class FilterExtrasTests
     public void Pixelate_RejectsNonPositiveBlocks()
     {
         using var source = Solid(4, 4, 10);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Pixelate(0));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Pixelate(-2));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Pixelate(0).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Pixelate(-2).ToImage());
     }
 
     [Fact]
     public void Vignette_LeavesTheCentreAndDarkensTheCorners()
     {
         using var source = Solid(21, 21, 255);
-        using var vignetted = source.Vignette(0.5f, 1f);
+        using var vignetted = source.Pipe().Vignette(0.5f, 1f).ToImage();
 
         Red(vignetted, 10, 10).ShouldBe((byte)255);
         Red(vignetted, 0, 0).ShouldBeLessThan((byte)64);
@@ -78,7 +78,7 @@ public class FilterExtrasTests
     public void Vignette_ZeroStrengthIsACopy()
     {
         using var source = Solid(8, 6, 90);
-        using var vignetted = source.Vignette(0.5f, 0f);
+        using var vignetted = source.Pipe().Vignette(0.5f, 0f).ToImage();
 
         vignetted.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -98,7 +98,7 @@ public class FilterExtrasTests
             }
         }
 
-        using var glowed = source.Glow(0.5f, 2f, 1f);
+        using var glowed = source.Pipe().Glow(0.5f, 2f, 1f).ToImage();
 
         Red(glowed, 10, 10).ShouldBe((byte)255);
         // Four pixels above the bright square: only the blurred halo can light this up.
@@ -111,7 +111,7 @@ public class FilterExtrasTests
     {
         // Nothing is strictly brighter than 1, so the highlight mask is empty and the image must not move.
         using var source = Solid(9, 9, 200);
-        using var glowed = source.Glow(1f, 2f, 1f);
+        using var glowed = source.Pipe().Glow(1f, 2f, 1f).ToImage();
 
         glowed.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -120,8 +120,8 @@ public class FilterExtrasTests
     public void Glow_RejectsIllegalParameters()
     {
         using var source = Solid(5, 5, 10);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Glow(1.5f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Glow(0.5f, 0f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Glow(0.5f, 2f, -1f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Glow(1.5f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Glow(0.5f, 0f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Glow(0.5f, 2f, -1f).ToImage());
     }
 }

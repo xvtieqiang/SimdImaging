@@ -85,7 +85,7 @@ public sealed partial class Image
                     throw new ArgumentException(
                         $"Frame {i} is {frame.Width}x{frame.Height}, larger than the {width}x{height} canvas.", nameof(frames));
 
-                var next = canvas.DrawImage(frame, new PixelRect(0, 0, frame.Width, frame.Height));
+                var next = canvas.Pipe().DrawImage(frame, new PixelRect(0, 0, frame.Width, frame.Height)).ToImage();
                 canvas.Dispose();
                 canvas = next;
                 composed[i] = new ImageFrame(canvas[0].Pixels.Clone(), frameDuration);
@@ -106,33 +106,7 @@ public sealed partial class Image
             frames[0].ColorEncoding, frames[0].Metadata);
     }
 
-    /// <summary>
-    /// Shrinks into a box, keeping the aspect ratio, then sharpens lightly — the residue a downscale leaves.
-    /// An image that already fits is not upscaled.
-    /// </summary>
-    /// <param name="maxWidth">Box width.</param>
-    /// <param name="maxHeight">Box height.</param>
-    /// <param name="resampler">Downscale filter.</param>
-    /// <param name="sharpenAmount">Unsharp mask amount; 0 leaves the resize alone.</param>
-    /// <param name="pool">Where the destination is rented.</param>
-    /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive, or the amount is negative.</exception>
-    public Image Thumbnail(int maxWidth, int maxHeight, Resampler resampler = Resampler.Lanczos3,
-        float sharpenAmount = 0.4f, IPixelPool? pool = null)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxWidth);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxHeight);
-        ArgumentOutOfRangeException.ThrowIfNegative(sharpenAmount);
-
-        var scale = MathF.Min(maxWidth / (float)Width, maxHeight / (float)Height);
-        if (scale >= 1f)
-            return Clone(pool);
-
-        var width = Math.Max(1, (int)MathF.Round(Width * scale));
-        var height = Math.Max(1, (int)MathF.Round(Height * scale));
-
-        using var resized = Resize(width, height, resampler);
-        return sharpenAmount > 0f ? resized.Sharpen(sharpenAmount, 0.8f, pool) : resized.Clone(pool);
-    }
+    
 
     /// <summary>
     /// Reads the reduced-size preview the file embeds (JPEG EXIF, HEIF, WebP), without decoding the full image.

@@ -60,7 +60,7 @@ public class MetadataOpsTests
             using var loaded = Image.Load(path);
             loaded.Info.Orientation.ShouldBe(ImageOrientation.Rotate90);
 
-            using var upright = loaded.AutoOrient();
+            using var upright = loaded.Pipe().AutoOrient().ToImage();
 
             upright.Info.Orientation.ShouldBe(ImageOrientation.Normal);
             upright.Width.ShouldBe(2);
@@ -95,7 +95,7 @@ public class MetadataOpsTests
             stored.Height.ShouldBe(2);
 
             using var shown = Image.Load(bytes, new LoadOptions { ApplyOrientation = true });
-            using var viaOperator = stored.AutoOrient();
+            using var viaOperator = stored.Pipe().AutoOrient().ToImage();
 
             shown.Info.Orientation.ShouldBe(ImageOrientation.Normal);
             shown.Width.ShouldBe(2);
@@ -121,7 +121,7 @@ public class MetadataOpsTests
     public void AutoOrient_LeavesANormalImageAlone()
     {
         using var source = Indexed(4, 3);
-        using var oriented = source.AutoOrient();
+        using var oriented = source.Pipe().AutoOrient().ToImage();
 
         oriented.Info.Orientation.ShouldBe(ImageOrientation.Normal);
         oriented.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
@@ -199,7 +199,7 @@ public class MetadataOpsTests
     public void ResizeToWidth_KeepsTheAspectRatio()
     {
         using var source = Indexed(4, 2);
-        using var resized = source.ResizeToWidth(16, SimdImaging.Processing.Resampler.Nearest);
+        using var resized = source.Pipe().ResizeToWidth(16, SimdImaging.Processing.Resampler.Nearest).ToImage();
 
         resized.Width.ShouldBe(16);
         resized.Height.ShouldBe(8);
@@ -209,7 +209,7 @@ public class MetadataOpsTests
     public void ResizeToHeight_KeepsTheAspectRatio()
     {
         using var source = Indexed(4, 2);
-        using var resized = source.ResizeToHeight(10, SimdImaging.Processing.Resampler.Nearest);
+        using var resized = source.Pipe().ResizeToHeight(10, SimdImaging.Processing.Resampler.Nearest).ToImage();
 
         resized.Width.ShouldBe(20);
         resized.Height.ShouldBe(10);
@@ -219,8 +219,8 @@ public class MetadataOpsTests
     public void ResizeByAxis_RejectsIllegalSizes()
     {
         using var source = Indexed(4, 2);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.ResizeToWidth(0));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.ResizeToHeight(-1));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().ResizeToWidth(0).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().ResizeToHeight(-1).ToImage());
     }
 
     [Fact]
@@ -228,8 +228,8 @@ public class MetadataOpsTests
     {
         using var source = Indexed(2, 1);
 
-        using var darker = source.Lightness(0.5f);
-        using var brighter = source.Lightness(2f);
+        using var darker = source.Pipe().Lightness(0.5f).ToImage();
+        using var brighter = source.Pipe().Lightness(2f).ToImage();
 
         ((int)Red(darker, 1, 0)).ShouldBeLessThanOrEqualTo(1);   // 1 * 0.5 rounds back to one
         Red(brighter, 1, 0).ShouldBe((byte)2);
@@ -240,6 +240,6 @@ public class MetadataOpsTests
     public void Lightness_RejectsNegativeFactors()
     {
         using var source = Indexed(2, 2);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Lightness(-0.5f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Lightness(-0.5f).ToImage());
     }
 }

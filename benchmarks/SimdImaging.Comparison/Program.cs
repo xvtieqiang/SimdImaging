@@ -2,7 +2,7 @@ using System.Globalization;
 using SimdImaging.Comparison;
 
 // Comparison harness. Usage:
-//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|realworld|icc|disposecheck|fusion|batch|chainab|perf32|sizes|mem|seamprofile|matrix|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate] [WxH]
+//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|realworld|icc|disposecheck|fusion|batch|chainab|perf32|sizes|mem|seamprofile|matrix|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate|trimcost|batchmem|bandcost] [WxH]
 // Not part of SimdImaging.slnx on purpose: the shipped solution must stay buildable without the
 // git-ignored Six Labors licence file (AGENTS.md clean-room rules).
 
@@ -25,6 +25,12 @@ if (args.Length > 0 && args[0] == "peakmem-child")
     return;
 }
 
+if (args.Length > 0 && args[0] == "chainpeak-child")
+{
+    PeakMemory.ChainChild(args);
+    return;
+}
+
 if (args.Length > 0 && args[0] == "memsteady-child")
 {
     MemSteady.Child(args);
@@ -40,6 +46,24 @@ if (args.Length > 0 && args[0] == "memestimate-child")
 
 // M2 steady-state allocation probe. Measures our side only (no oracle, no licence, no report,
 // no golden), so it runs as a child-style early exit before the comparison harness is set up.
+if (args.Length > 0 && args[0] == "bandcost")
+{
+    BandCost.Run(int.Parse(args[1]), int.Parse(args[2]), int.Parse(args[3]));
+    return;
+}
+
+if (args.Length > 0 && args[0] == "batchmem")
+{
+    BatchMemory.Run(int.Parse(args[1]), int.Parse(args[2]), int.Parse(args[3]));
+    return;
+}
+
+if (args.Length > 0 && args[0] == "trimcost")
+{
+    TrimCost.Run();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "allocplan")
 {
     AllocPlan.Run();

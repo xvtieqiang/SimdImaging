@@ -61,7 +61,7 @@ internal static class RealWorld
         var height = image.Height;
 
         var dehazeWatch = Stopwatch.StartNew();
-        using var dehazed = image.Dehaze(7, 0.95f, 0.1f, 20);
+        using var dehazed = image.Pipe().Dehaze(7, 0.95f, 0.1f, 20).ToImage();
         dehazeWatch.Stop();
 
         // Three exposures of the same scene: 0.45×, 1× and 2.2×, each clipped the way a sensor clips.
@@ -87,9 +87,9 @@ internal static class RealWorld
             {
                 var small = (int)(width * scale);
                 var smallH = (int)(height * scale);
-                using var thumbSource = image.Resize(small, smallH);
-                using var thumbDehaze = dehazed.Resize(small, smallH);
-                using var thumbFused = fused.Resize(small, smallH);
+                using var thumbSource = image.Pipe().Resize(small, smallH).ToImage();
+                using var thumbDehaze = dehazed.Pipe().Resize(small, smallH).ToImage();
+                using var thumbFused = fused.Pipe().Resize(small, smallH).ToImage();
                 Image.Save(thumbSource, Path.Combine(dump, stem + ".source.small.png"));
                 Image.Save(thumbDehaze, Path.Combine(dump, stem + ".dehaze.small.png"));
                 Image.Save(thumbFused, Path.Combine(dump, stem + ".fusion.small.png"));
@@ -117,20 +117,20 @@ internal static class RealWorld
             }
         }
 
-        Run("blur", i => i.GaussianBlur(2f));
-        Run("sharpen", i => i.Sharpen());
-        Run("median", i => i.Median3x3());
-        Run("sobel", i => i.Sobel(), sparse: true);
-        Run("bilateral", i => i.Bilateral(2));
-        Run("oilpaint", i => i.OilPaint(2));
-        Run("guided", i => i.GuidedFilter(4));
-        Run("nlm", i => i.NonLocalMeans(2));
-        Run("clahe", i => i.Clahe());
-        Run("equalize", i => i.EqualizeHistogram());
-        Run("vignette", i => i.Vignette());
-        Run("local-laplacian", i => i.LocalLaplacian(3, 8));
-        Run("resize", i => i.Resize(Math.Max(8, i.Width / 2), Math.Max(8, i.Height / 2)));
-        Run("rotate", i => i.Rotate90());
+        Run("blur", i => i.Pipe().GaussianBlur(2f).ToImage());
+        Run("sharpen", i => i.Pipe().Sharpen().ToImage());
+        Run("median", i => i.Pipe().Median3x3().ToImage());
+        Run("sobel", i => i.Pipe().Sobel().ToImage(), sparse: true);
+        Run("bilateral", i => i.Pipe().Bilateral(2).ToImage());
+        Run("oilpaint", i => i.Pipe().OilPaint(2).ToImage());
+        Run("guided", i => i.Pipe().GuidedFilter(4).ToImage());
+        Run("nlm", i => i.Pipe().NonLocalMeans(2).ToImage());
+        Run("clahe", i => i.Pipe().Clahe().ToImage());
+        Run("equalize", i => i.Pipe().EqualizeHistogram().ToImage());
+        Run("vignette", i => i.Pipe().Vignette().ToImage());
+        Run("local-laplacian", i => i.Pipe().LocalLaplacian(3, 8).ToImage());
+        Run("resize", i => i.Pipe().Resize(Math.Max(8, i.Width / 2), Math.Max(8, i.Height / 2)).ToImage());
+        Run("rotate", i => i.Pipe().Rotate90().ToImage());
 
         var (mean, deviation, nan) = Statistics(fused);
         var usable = mean is > 0.02f and < 0.98f && deviation > 0.01f && nan == 0;

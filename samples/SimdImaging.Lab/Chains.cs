@@ -83,7 +83,7 @@ internal static class Chains
             [new("strength", "整体强度", 0.2, 1, 0.05, 0.7)],
             BrandMark,
             "唯一需要第二张图的配方：水印层按底图尺寸生成，同尺寸全幅混合，之后继续走流水线。",
-            Compose: (backdrop, layer) => backdrop.Blend(layer, 0, 0, BlendMode.Multiply),
+            Compose: (backdrop, layer) => backdrop.Pipe().Blend(layer, 0, 0, BlendMode.Multiply).ToImage(),
             OverlayDemo: "mark"),
     ];
 

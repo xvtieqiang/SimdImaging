@@ -30,7 +30,7 @@ public class FilterOpsTests
     public void BoxBlur_KeepsAConstantImageConstant(int radius)
     {
         using var source = Solid(9, 7, 77, 88, 99);
-        using var blurred = source.BoxBlur(radius);
+        using var blurred = source.Pipe().BoxBlur(radius).ToImage();
 
         var span = blurred.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -49,7 +49,7 @@ public class FilterOpsTests
     public void GaussianBlur_KeepsAConstantImageConstant(float sigma)
     {
         using var source = Solid(11, 9, 40, 120, 200);
-        using var blurred = source.GaussianBlur(sigma);
+        using var blurred = source.Pipe().GaussianBlur(sigma).ToImage();
 
         var span = blurred.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -67,7 +67,7 @@ public class FilterOpsTests
         var centre = (2 * 5 + 2) * 4;
         source.WritablePixels[centre] = 255;
 
-        using var blurred = source.BoxBlur(1);
+        using var blurred = source.Pipe().BoxBlur(1).ToImage();
 
         // 255 / 9 = 28.3
         PixelAt(blurred, 2, 2)[0].ShouldBe((byte)28);
@@ -79,7 +79,7 @@ public class FilterOpsTests
     public void BoxBlur_ZeroRadiusIsACopy()
     {
         using var source = Solid(4, 4, 12, 34, 56);
-        using var blurred = source.BoxBlur(0);
+        using var blurred = source.Pipe().BoxBlur(0).ToImage();
         blurred.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
 
@@ -91,7 +91,7 @@ public class FilterOpsTests
         source.WritablePixels[centre] = 255;
         source.WritablePixels[centre + 3] = 255;
 
-        using var blurred = source.BoxBlur(2);
+        using var blurred = source.Pipe().BoxBlur(2).ToImage();
 
         var corner = PixelAt(blurred, 0, 0);
         corner[0].ShouldBe((byte)0);
@@ -102,15 +102,15 @@ public class FilterOpsTests
     public void GaussianBlur_RejectsInvalidSigma()
     {
         using var source = Solid(2, 2, 1, 2, 3);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.GaussianBlur(0f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.GaussianBlur(float.NaN));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().GaussianBlur(0f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().GaussianBlur(float.NaN).ToImage());
     }
 
     [Fact]
     public void BoxBlur_RejectsNegativeRadius()
     {
         using var source = Solid(2, 2, 1, 2, 3);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.BoxBlur(-1));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().BoxBlur(-1).ToImage());
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class FilterOpsTests
         var centre = (2 * 5 + 2) * 4;
         source.WritablePixels[centre] = 250;
 
-        using var median = source.Median3x3();
+        using var median = source.Pipe().Median3x3().ToImage();
 
         PixelAt(median, 2, 2).ShouldBe(new byte[] { 10, 20, 30, 255 });
         PixelAt(median, 0, 0).ShouldBe(new byte[] { 10, 20, 30, 255 });
@@ -130,7 +130,7 @@ public class FilterOpsTests
     public void Median3x3_KeepsAConstantImageConstant()
     {
         using var source = Solid(6, 4, 55, 66, 77, a: 88);
-        using var median = source.Median3x3();
+        using var median = source.Pipe().Median3x3().ToImage();
 
         var span = median.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -146,7 +146,7 @@ public class FilterOpsTests
     public void Sobel_FlatImageIsBlack()
     {
         using var source = Solid(7, 5, 120, 120, 120);
-        using var edges = source.Sobel();
+        using var edges = source.Pipe().Sobel().ToImage();
 
         var span = edges.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -171,7 +171,7 @@ public class FilterOpsTests
             }
         }
 
-        using var edges = source.Sobel();
+        using var edges = source.Pipe().Sobel().ToImage();
 
         PixelAt(edges, 0, 1)[0].ShouldBe((byte)0);
         PixelAt(edges, 2, 1)[0].ShouldBe((byte)255);
@@ -183,7 +183,7 @@ public class FilterOpsTests
     public void Bilateral_KeepsAConstantImageConstant()
     {
         using var source = Solid(9, 7, 60, 120, 180);
-        using var filtered = source.Bilateral(2, sigmaRange: 0.1f);
+        using var filtered = source.Pipe().Bilateral(2, sigmaRange: 0.1f).ToImage();
 
         var span = filtered.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -209,7 +209,7 @@ public class FilterOpsTests
             }
         }
 
-        using var filtered = source.Bilateral(2, sigmaRange: 0.05f);
+        using var filtered = source.Pipe().Bilateral(2, sigmaRange: 0.05f).ToImage();
 
         PixelAt(filtered, 0, 2)[0].ShouldBe((byte)0);
         PixelAt(filtered, 8, 2)[0].ShouldBe((byte)255);
@@ -222,7 +222,7 @@ public class FilterOpsTests
     public void Bilateral_RejectsInvalidParameters()
     {
         using var source = Solid(3, 3, 10, 10, 10);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Bilateral(0));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Bilateral(2, sigmaRange: 0f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Bilateral(0).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Bilateral(2, sigmaRange: 0f).ToImage());
     }
 }

@@ -30,77 +30,77 @@ internal static class Cases
         return
         [
             new Case("resize-bicubic", "GEO-5", $"Resize {width}x{height} -> {dw}x{dh}, bicubic",
-                i => i.Resize(dw, dh, Resampler.Bicubic),
+                i => i.Pipe().Resize(dw, dh, Resampler.Bicubic).ToImage(),
                 i => i.Clone(x => x.Resize(dw, dh, KnownResamplers.Bicubic)), pixels),
 
             new Case("resize-lanczos3", "GEO-5", $"Resize {width}x{height} -> {dw}x{dh}, Lanczos3",
-                i => i.Resize(dw, dh, Resampler.Lanczos3),
+                i => i.Pipe().Resize(dw, dh, Resampler.Lanczos3).ToImage(),
                 i => i.Clone(x => x.Resize(dw, dh, KnownResamplers.Lanczos3)), pixels),
 
             // Added after the resize pass and the byte-domain work: two more resamplers, because a single
             // kernel says nothing about the other three, and the two remaining pure permutations, which are
             // the cleanest cases in the table (a permutation either matches or it does not).
             new Case("resize-nearest", "GEO-5", $"Resize {width}x{height} -> {dw}x{dh}, nearest",
-                i => i.Resize(dw, dh, Resampler.Nearest),
+                i => i.Pipe().Resize(dw, dh, Resampler.Nearest).ToImage(),
                 i => i.Clone(x => x.Resize(dw, dh, KnownResamplers.NearestNeighbor)), pixels),
 
             new Case("resize-bilinear", "GEO-5", $"Resize {width}x{height} -> {dw}x{dh}, bilinear",
-                i => i.Resize(dw, dh, Resampler.Bilinear),
+                i => i.Pipe().Resize(dw, dh, Resampler.Bilinear).ToImage(),
                 i => i.Clone(x => x.Resize(dw, dh, KnownResamplers.Triangle)), pixels),
 
             new Case("crop", "GEO-1", $"Crop to {dw}x{dh}",
-                i => i.Crop(new PixelRect(0, 0, dw, dh)),
+                i => i.Pipe().Crop(new PixelRect(0, 0, dw, dh)).ToImage(),
                 i => i.Clone(x => x.Crop(new Rectangle(0, 0, dw, dh))), pixels),
 
             new Case("rotate90", "GEO-9", "Rotate 90 degrees",
-                i => i.Rotate90(clockwise: true),
+                i => i.Pipe().Rotate90(clockwise: true).ToImage(),
                 i => i.Clone(x => x.Rotate(RotateMode.Rotate90)), full),
 
             new Case("flip-horizontal", "GEO-10", "Horizontal flip",
-                i => i.FlipHorizontal(),
+                i => i.Pipe().FlipHorizontal().ToImage(),
                 i => i.Clone(x => x.Flip(FlipMode.Horizontal)), full),
 
             new Case("rotate180", "GEO-9", "Rotate 180 degrees",
-                i => i.Rotate180(),
+                i => i.Pipe().Rotate180().ToImage(),
                 i => i.Clone(x => x.Rotate(RotateMode.Rotate180)), full),
 
             new Case("flip-vertical", "GEO-10", "Vertical flip",
-                i => i.FlipVertical(),
+                i => i.Pipe().FlipVertical().ToImage(),
                 i => i.Clone(x => x.Flip(FlipMode.Vertical)), full),
 
             new Case("gaussian-blur", "FLT-2", "Gaussian blur, sigma 3",
-                i => i.GaussianBlur(3f),
+                i => i.Pipe().GaussianBlur(3f).ToImage(),
                 i => i.Clone(x => x.GaussianBlur(3f)), full),
 
             new Case("box-blur", "FLT-3", "Box blur, radius 3",
-                i => i.BoxBlur(3),
+                i => i.Pipe().BoxBlur(3).ToImage(),
                 i => i.Clone(x => x.BoxBlur(3)), full),
 
             new Case("grayscale", "COL-13", "Grayscale (BT.601)",
-                i => i.Grayscale(bt709: false),
+                i => i.Pipe().Grayscale(bt709: false).ToImage(),
                 i => i.Clone(x => x.Grayscale(GrayscaleMode.Bt601)), full),
 
             new Case("invert", "COL-7", "Invert colour channels",
-                i => i.Invert(),
+                i => i.Pipe().Invert().ToImage(),
                 i => i.Clone(x => x.Invert()), full),
 
             new Case("brightness", "COL-1", "Brightness +0.2",
-                i => i.Brightness(0.2f),
+                i => i.Pipe().Brightness(0.2f).ToImage(),
                 i => i.Clone(x => x.Brightness(0.2f)), full),
 
             new Case("contrast", "COL-2", "Contrast 1.2",
-                i => i.Contrast(1.2f),
+                i => i.Pipe().Contrast(1.2f).ToImage(),
                 i => i.Clone(x => x.Contrast(1.2f)), full),
 
             // Added after the histogram pass was rewritten: it used to call Histogram() three times, each
             // converting every row to float and back, on one thread. The lab showed 36-45 ms against
             // ImageSharp's 8-9 ms; this case is what turns that observation into an auditable number.
             new Case("equalize", "HIS-1", "Histogram equalization",
-                i => i.EqualizeHistogram(),
+                i => i.Pipe().EqualizeHistogram().ToImage(),
                 i => i.Clone(x => x.HistogramEqualization()), full),
 
             new Case("sepia", "COL-17", "Sepia, full strength",
-                i => i.Sepia(1f),
+                i => i.Pipe().Sepia(1f).ToImage(),
                 i => i.Clone(x => x.Sepia()), full),
 
             // Both were missing from this list, and that is exactly how they stayed slow: nothing measured
@@ -108,11 +108,11 @@ internal static class Cases
             // float loop while grayscale and sepia already used the matrix path. These two cases are the
             // reason that cannot happen again silently.
             new Case("saturation", "COL-3", "Saturation 1.6x",
-                i => i.Saturation(1.6f),
+                i => i.Pipe().Saturation(1.6f).ToImage(),
                 i => i.Clone(x => x.Saturate(1.6f)), full),
 
             new Case("pixelate", "FLT-13", "Pixelate, block 12",
-                i => i.Pixelate(12),
+                i => i.Pipe().Pixelate(12).ToImage(),
                 i => i.Clone(x => x.Pixelate(12)), full),
         ];
     }

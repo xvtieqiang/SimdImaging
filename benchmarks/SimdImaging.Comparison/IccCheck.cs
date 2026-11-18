@@ -41,12 +41,12 @@ internal static class IccCheck
         var rows = new List<string[]>();
 
         // 1. Identity.
-        using (var identity = swatches.IccTransform(srgb, srgb))
+        using (var identity = swatches.Pipe().IccTransform(srgb, srgb).ToImage())
             rows.Add(["同一 profile（恒等）", MaxDeltaE(swatches, identity), "应 ≈ 0"]);
 
         // 2. Round trip through Display P3.
-        using (var toP3 = swatches.IccTransform(srgb, p3))
-        using (var back = toP3.IccTransform(p3, srgb))
+        using (var toP3 = swatches.Pipe().IccTransform(srgb, p3).ToImage())
+        using (var back = toP3.Pipe().IccTransform(p3, srgb).ToImage())
             rows.Add(["sRGB→P3→sRGB（往返）", MaxDeltaE(swatches, back), "应 < 1.5"]);
 
         // 3. Neutral stays neutral.
@@ -99,7 +99,7 @@ internal static class IccCheck
 
     private static string Neutral(Image source, byte[] srgb, byte[] p3)
     {
-        using var converted = source.IccTransform(srgb, p3);
+        using var converted = source.Pipe().IccTransform(srgb, p3).ToImage();
         var expected = source.WritablePixels;
         var actual = converted.WritablePixels;
         var worst = 0.0;

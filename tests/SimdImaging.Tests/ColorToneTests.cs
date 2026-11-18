@@ -19,7 +19,7 @@ public class ColorToneTests
     public void Vibrance_ZeroIsIdentity()
     {
         using var source = Solid(120, 90, 60);
-        using var result = source.Vibrance(0f);
+        using var result = source.Pipe().Vibrance(0f).ToImage();
         Pixels(result).ShouldBe(Pixels(source));
     }
 
@@ -29,8 +29,8 @@ public class ColorToneTests
         using var muted = Solid(130, 120, 110);
         using var saturated = Solid(255, 0, 0);
 
-        using var mutedResult = muted.Vibrance(0.5f);
-        using var saturatedResult = saturated.Vibrance(0.5f);
+        using var mutedResult = muted.Pipe().Vibrance(0.5f).ToImage();
+        using var saturatedResult = saturated.Pipe().Vibrance(0.5f).ToImage();
 
         var mutedDelta = Math.Abs(mutedResult.WritablePixels[0] - muted.WritablePixels[0]);
         var saturatedDelta = Math.Abs(saturatedResult.WritablePixels[1] - saturated.WritablePixels[1]);
@@ -43,11 +43,11 @@ public class ColorToneTests
     {
         using var source = Solid(128, 128, 128);
 
-        using var warm = source.Temperature(1f);
+        using var warm = source.Pipe().Temperature(1f).ToImage();
         warm.WritablePixels[0].ShouldBeGreaterThan((byte)128);
         warm.WritablePixels[2].ShouldBeLessThan((byte)128);
 
-        using var cool = source.Temperature(-1f);
+        using var cool = source.Pipe().Temperature(-1f).ToImage();
         cool.WritablePixels[0].ShouldBeLessThan((byte)128);
         cool.WritablePixels[2].ShouldBeGreaterThan((byte)128);
     }
@@ -57,10 +57,10 @@ public class ColorToneTests
     {
         using var source = Solid(100, 100, 100, a: 60);
 
-        using var none = source.Tint(new RgbaColor(255, 0, 0, 255), 0f);
+        using var none = source.Pipe().Tint(new RgbaColor(255, 0, 0, 255), 0f).ToImage();
         Pixels(none).ShouldBe(Pixels(source));
 
-        using var half = source.Tint(new RgbaColor(255, 0, 0, 255), 0.5f);
+        using var half = source.Pipe().Tint(new RgbaColor(255, 0, 0, 255), 0.5f).ToImage();
         var p = Pixels(half);
         ((int)p[0]).ShouldBeInRange(176, 179);
         ((int)p[1]).ShouldBeInRange(49, 51);
@@ -73,7 +73,7 @@ public class ColorToneTests
         using var source = Image.Create(5, 5, WorkingFormat.Rgba8);
         source.WritablePixels.Fill(80);
 
-        using var result = source.Sharpen(0f);
+        using var result = source.Pipe().Sharpen(0f).ToImage();
         var after = Pixels(result);
         for (var i = 0; i < after.Length; i++)
             Math.Abs(after[i] - source.WritablePixels[i]).ShouldBeLessThanOrEqualTo(1);
@@ -97,7 +97,7 @@ public class ColorToneTests
             }
         }
 
-        using var sharpened = source.Sharpen(1f, 1f);
+        using var sharpened = source.Pipe().Sharpen(1f, 1f).ToImage();
 
         var dark = sharpened.WritablePixels[(4 * 9 + 3) * 4];
         var bright = sharpened.WritablePixels[(4 * 9 + 5) * 4];
@@ -116,7 +116,7 @@ public class ColorToneTests
             span[i + 3] = 77;
         }
 
-        using var result = source.Sharpen(0.8f);
+        using var result = source.Pipe().Sharpen(0.8f).ToImage();
         var after = result.WritablePixels;
         for (var i = 3; i < after.Length; i += 4)
             after[i].ShouldBe((byte)77);

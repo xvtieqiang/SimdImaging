@@ -23,6 +23,12 @@ namespace SimdImaging.Processing.Internal;
 internal static class FloatScratch
 {
     /// <summary>Idle bytes one thread may keep.</summary>
+    /// <remarks>
+    /// 64 MiB per thread is a resident floor near a gigabyte on sixteen cores, and it is not released without
+    /// <see cref="Trim"/>. Lowering it to 4 MiB was tried and reverted: at 7680×4320 the peak rose from 671 to
+    /// 747 MiB, because re-allocating fifteen-megabyte planes each band costs more memory than parking them.
+    /// Whether it costs time is not settled — see docs/architecture.md §6.2.1.
+    /// </remarks>
     public const long DefaultRetainedBytes = 64L << 20;
 
     /// <summary>The largest single buffer a thread keeps idle; bigger ones are used and then dropped.</summary>

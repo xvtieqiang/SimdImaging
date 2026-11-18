@@ -27,7 +27,7 @@ public class BokehBlurTests
         using var image = SimdImaging.Image.Create(width, height, WorkingFormat.Rgba8);
         source.AsSpan().CopyTo(image.WritablePixels);
 
-        using var blurred = image.BokehBlur(radius);
+        using var blurred = image.Pipe().BokehBlur(radius).ToImage();
         Assert.Equal(expected, blurred.WritablePixels.ToArray());
     }
 

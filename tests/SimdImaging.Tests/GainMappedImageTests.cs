@@ -100,9 +100,9 @@ public class GainMappedImageTests
         var region = new PixelRect(x, y, width, height);
 
         using var cropped = pair.Crop(region);
-        using var expectedBase = pair.Base.Crop(region);
-        using var expectedGain = pair.GainMap.Crop(
-            DeriveCrop(region, baseWidth, baseHeight, gainWidth, gainHeight));
+        using var expectedBase = pair.Base.Pipe().Crop(region).ToImage();
+        using var expectedGain = pair.GainMap.Pipe().Crop(
+            DeriveCrop(region, baseWidth, baseHeight, gainWidth, gainHeight)).ToImage();
 
         SameBytes(cropped.Base, expectedBase, "base crop");
         SameBytes(cropped.GainMap, expectedGain, "gain crop");
@@ -135,8 +135,8 @@ public class GainMappedImageTests
                     {
                         var region = new PixelRect(x, y, width, height);
                         using var cropped = pair.Crop(region);
-                        using var expected = pair.GainMap.Crop(
-                            DeriveCrop(region, baseWidth, baseHeight, gainWidth, gainHeight));
+                        using var expected = pair.GainMap.Pipe().Crop(
+                            DeriveCrop(region, baseWidth, baseHeight, gainWidth, gainHeight)).ToImage();
 
                         Bytes(cropped.GainMap).ShouldBe(Bytes(expected), $"gain crop of {region}");
                     }
@@ -149,25 +149,25 @@ public class GainMappedImageTests
 
         using (var flipped = pair.FlipHorizontal())
         {
-            using var expected = pair.Base.FlipHorizontal();
+            using var expected = pair.Base.Pipe().FlipHorizontal().ToImage();
             SameBytes(flipped.Base, expected, "base flip");
         }
 
         using (var flipped = pair.FlipVertical())
         {
-            using var expected = pair.GainMap.FlipVertical();
+            using var expected = pair.GainMap.Pipe().FlipVertical().ToImage();
             SameBytes(flipped.GainMap, expected, "gain flip");
         }
 
         using (var rotated = pair.Rotate90())
         {
-            using var expected = pair.GainMap.Rotate90(true);
+            using var expected = pair.GainMap.Pipe().Rotate90(true).ToImage();
             SameBytes(rotated.GainMap, expected, "gain rotate90");
         }
 
         using (var rotated = pair.Rotate180())
         {
-            using var expected = pair.Base.Rotate180();
+            using var expected = pair.Base.Pipe().Rotate180().ToImage();
             SameBytes(rotated.Base, expected, "base rotate180");
         }
     }
@@ -195,9 +195,9 @@ public class GainMappedImageTests
         using var pair = Pair(baseWidth, baseHeight, gainWidth, gainHeight);
 
         using var resized = pair.Resize(width, height, Resampler.Bicubic);
-        using var expectedBase = pair.Base.Resize(width, height, Resampler.Bicubic);
-        using var expectedGain = pair.GainMap.Resize(Scaled(width, baseWidth, gainWidth),
-            Scaled(height, baseHeight, gainHeight), Resampler.Bicubic);
+        using var expectedBase = pair.Base.Pipe().Resize(width, height, Resampler.Bicubic).ToImage();
+        using var expectedGain = pair.GainMap.Pipe().Resize(Scaled(width, baseWidth, gainWidth),
+            Scaled(height, baseHeight, gainHeight), Resampler.Bicubic).ToImage();
 
         SameBytes(resized.Base, expectedBase, "base resize");
         SameBytes(resized.GainMap, expectedGain, "gain resize");
@@ -210,10 +210,10 @@ public class GainMappedImageTests
         var forward = new AffineMatrix(1.1f, 0.2f, 3f, -0.1f, 0.9f, -2f);
 
         using var result = pair.Affine(forward, 60, 40, new RgbaColor(10, 20, 30, 255), new RgbaColor(0, 0, 0, 255));
-        using var expectedBase = pair.Base.Affine(forward, 60, 40, new RgbaColor(10, 20, 30, 255));
-        using var expectedGain = pair.GainMap.Affine(
+        using var expectedBase = pair.Base.Pipe().Affine(forward, 60, 40, new RgbaColor(10, 20, 30, 255)).ToImage();
+        using var expectedGain = pair.GainMap.Pipe().Affine(
             Conjugate(forward, 97, 61, 25, 16, 60, 40),
-            Scaled(60, 97, 25), Scaled(40, 61, 16), new RgbaColor(0, 0, 0, 255));
+            Scaled(60, 97, 25), Scaled(40, 61, 16), new RgbaColor(0, 0, 0, 255)).ToImage();
 
         SameBytes(result.Base, expectedBase, "base affine");
         SameBytes(result.GainMap, expectedGain, "gain affine");
@@ -254,7 +254,7 @@ public class GainMappedImageTests
         using var pair = Pair(97, 61, 25, 16);
 
         using var rotated = pair.Rotate(23f, new RgbaColor(5, 6, 7, 255), new RgbaColor(0, 0, 0, 255));
-        using var expectedBase = pair.Base.Rotate(23f, new RgbaColor(5, 6, 7, 255));
+        using var expectedBase = pair.Base.Pipe().Rotate(23f, new RgbaColor(5, 6, 7, 255)).ToImage();
 
         SameBytes(rotated.Base, expectedBase, "base rotate");
 
@@ -270,10 +270,10 @@ public class GainMappedImageTests
         var homography = new[] { 1.05f, 0.12f, -3f, -0.08f, 0.98f, 2f, 0.0008f, 0.0004f };
 
         using var result = pair.Perspective(homography, 70, 50, new RgbaColor(9, 9, 9, 255));
-        using var expectedBase = pair.Base.Perspective(homography, 70, 50, new RgbaColor(9, 9, 9, 255));
-        using var expectedGain = pair.GainMap.Perspective(
+        using var expectedBase = pair.Base.Pipe().Perspective(homography, 70, 50, new RgbaColor(9, 9, 9, 255)).ToImage();
+        using var expectedGain = pair.GainMap.Pipe().Perspective(
             Conjugate(homography, 97, 61, 25, 16, 70, 50),
-            Scaled(70, 97, 25), Scaled(50, 61, 16));
+            Scaled(70, 97, 25), Scaled(50, 61, 16)).ToImage();
 
         SameBytes(result.Base, expectedBase, "base perspective");
         SameBytes(result.GainMap, expectedGain, "gain perspective");
@@ -301,8 +301,8 @@ public class GainMappedImageTests
                 sourceY = v * height;
             };
 
-        using var expectedBase = pair.Base.Warp(70, 50, Scale(Map, 97, 61));
-        using var expectedGain = pair.GainMap.Warp(Scaled(70, 97, 25), Scaled(50, 61, 16), Scale(Map, 25, 16));
+        using var expectedBase = pair.Base.Pipe().Warp(70, 50, Scale(Map, 97, 61)).ToImage();
+        using var expectedGain = pair.GainMap.Pipe().Warp(Scaled(70, 97, 25), Scaled(50, 61, 16), Scale(Map, 25, 16)).ToImage();
 
         SameBytes(result.Base, expectedBase, "base warp");
         SameBytes(result.GainMap, expectedGain, "gain warp");

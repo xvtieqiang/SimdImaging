@@ -29,7 +29,7 @@ public class CurveGradientTests
         using var source = Solid(3, 1, 90);
         CurvePoint[] identity = [new(0f, 0f), new(1f, 1f)];
 
-        using var result = source.Curves(identity);
+        using var result = source.Pipe().Curves(identity).ToImage();
 
         for (var i = 0; i < result.WritablePixels.Length; i += 4)
             Math.Abs(result.WritablePixels[i] - 90).ShouldBeLessThanOrEqualTo(1);
@@ -47,7 +47,7 @@ public class CurveGradientTests
             source.WritablePixels[7] = 255;
 
             CurvePoint[] sCurve = [new(0f, 0f), new(0.5f, 0.5f), new(1f, 1f)];
-            using var result = source.Curves(sCurve);
+            using var result = source.Pipe().Curves(sCurve).ToImage();
 
             // A symmetric S-curve through the midpoint leaves 0.25 and 0.75 near where they started, but the
             // interpolation must stay monotone: output is non-decreasing in input.
@@ -60,15 +60,15 @@ public class CurveGradientTests
     public void Curves_RejectsBadControlPoints()
     {
         using var source = Solid(2, 2, 10);
-        Should.Throw<ArgumentException>(() => source.Curves(new[] { new CurvePoint(0f, 0f) }));
-        Should.Throw<ArgumentException>(() => source.Curves(new[] { new CurvePoint(0.5f, 0f), new CurvePoint(0.2f, 1f) }));
+        Should.Throw<ArgumentException>(() => source.Pipe().Curves(new[] { new CurvePoint(0f, 0f) }).ToImage());
+        Should.Throw<ArgumentException>(() => source.Pipe().Curves(new[] { new CurvePoint(0.5f, 0f), new CurvePoint(0.2f, 1f) }).ToImage());
     }
 
     [Fact]
     public void Opacity_MultipliesAlphaOnly()
     {
         using var source = Solid(2, 1, 100, alpha: 200);
-        using var result = source.Opacity(0.5f);
+        using var result = source.Pipe().Opacity(0.5f).ToImage();
 
         result.WritablePixels[0].ShouldBe((byte)100);
         ((int)result.WritablePixels[3]).ShouldBeInRange(99, 101);
@@ -100,7 +100,7 @@ public class CurveGradientTests
         using var background = Solid(6, 6, 0);
         using var mark = Solid(2, 2, 255);
 
-        using var result = background.DrawImage(mark, new PixelRect(2, 2, 2, 2));
+        using var result = background.Pipe().DrawImage(mark, new PixelRect(2, 2, 2, 2)).ToImage();
 
         At(result, 2, 2).ShouldBe((byte)255);
         At(result, 3, 3).ShouldBe((byte)255);
@@ -114,7 +114,7 @@ public class CurveGradientTests
         using var background = Solid(8, 8, 0);
         using var mark = Solid(2, 2, 255);
 
-        using var result = background.Watermark(mark, WatermarkPosition.BottomRight, margin: 1, opacity: 1f);
+        using var result = background.Pipe().Watermark(mark, WatermarkPosition.BottomRight, margin: 1, opacity: 1f).ToImage();
 
         At(result, 5, 5).ShouldBe((byte)255);
         At(result, 6, 6).ShouldBe((byte)255);
@@ -128,6 +128,6 @@ public class CurveGradientTests
         using var background = Solid(3, 3, 0);
         using var mark = Solid(2, 2, 255);
 
-        Should.Throw<ArgumentException>(() => background.Watermark(mark, WatermarkPosition.BottomRight, margin: 2));
+        Should.Throw<ArgumentException>(() => background.Pipe().Watermark(mark, WatermarkPosition.BottomRight, margin: 2).ToImage());
     }
 }

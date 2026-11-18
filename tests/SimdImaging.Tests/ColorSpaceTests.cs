@@ -139,7 +139,7 @@ public class ColorSpaceTests
         using var source = Image.Create(4, 3, WorkingFormat.Rgba8);
         source.Fill(new RgbaColor(200, 100, 50, 128));
 
-        using var lab = source.ConvertColorSpace(ColorSpace.Lab);
+        using var lab = source.Pipe().ConvertColorSpace(ColorSpace.Lab).ToImage();
 
         lab.Format.ShouldBe(WorkingFormat.Rgba32F);
         lab.Width.ShouldBe(4);
@@ -157,7 +157,7 @@ public class ColorSpaceTests
         using var source = Image.Create(2, 2, WorkingFormat.Rgba8);
         source.Fill(RgbaColor.White);
 
-        using var lab = source.ConvertColorSpace(ColorSpace.Lab, white: WhitePoint.D50);
+        using var lab = source.Pipe().ConvertColorSpace(ColorSpace.Lab, white: WhitePoint.D50).ToImage();
         var samples = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(lab.WritablePixels);
 
         samples[0].ShouldBe(100f, 0.05f);
@@ -171,7 +171,7 @@ public class ColorSpaceTests
         using var source = Image.Create(2, 2, WorkingFormat.Rgba8);
         source.Fill(new RgbaColor(255, 0, 0, 255));
 
-        using var ycbcr = source.ConvertColorSpace(ColorSpace.YCbCr, YCbCrStandard.Bt709);
+        using var ycbcr = source.Pipe().ConvertColorSpace(ColorSpace.YCbCr, YCbCrStandard.Bt709).ToImage();
         var samples = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(ycbcr.WritablePixels);
 
         samples[0].ShouldBe(0.2126f, 1e-3f);   // BT.709 luma of pure red
@@ -187,7 +187,7 @@ public class ColorSpaceTests
         for (var i = 0; i < span.Length; i++)
             span[i] = (byte)(i * 7);
 
-        using var result = source.ChromaResample(ChromaSubsampling.Yuv444);
+        using var result = source.Pipe().ChromaResample(ChromaSubsampling.Yuv444).ToImage();
 
         result.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -209,13 +209,13 @@ public class ColorSpaceTests
             }
         }
 
-        using var narrow = source.ChromaResample(ChromaSubsampling.Yuv420, YCbCrStandard.Bt709, bandRows: 3);
-        using var wide = source.ChromaResample(ChromaSubsampling.Yuv420, YCbCrStandard.Bt709, bandRows: 1024);
+        using var narrow = source.Pipe().ChromaResample(ChromaSubsampling.Yuv420, YCbCrStandard.Bt709, bandRows: 3).ToImage();
+        using var wide = source.Pipe().ChromaResample(ChromaSubsampling.Yuv420, YCbCrStandard.Bt709, bandRows: 1024).ToImage();
 
         narrow.WritablePixels.ToArray().ShouldBe(wide.WritablePixels.ToArray());
 
-        using var narrow422 = source.ChromaResample(ChromaSubsampling.Yuv422, YCbCrStandard.Bt601, bandRows: 2);
-        using var wide422 = source.ChromaResample(ChromaSubsampling.Yuv422, YCbCrStandard.Bt601, bandRows: 1024);
+        using var narrow422 = source.Pipe().ChromaResample(ChromaSubsampling.Yuv422, YCbCrStandard.Bt601, bandRows: 2).ToImage();
+        using var wide422 = source.Pipe().ChromaResample(ChromaSubsampling.Yuv422, YCbCrStandard.Bt601, bandRows: 1024).ToImage();
 
         narrow422.WritablePixels.ToArray().ShouldBe(wide422.WritablePixels.ToArray());
     }
@@ -238,7 +238,7 @@ public class ColorSpaceTests
             }
         }
 
-        using var subsampled = source.ChromaResample(ChromaSubsampling.Yuv420, YCbCrStandard.Bt709);
+        using var subsampled = source.Pipe().ChromaResample(ChromaSubsampling.Yuv420, YCbCrStandard.Bt709).ToImage();
 
         // Luma is preserved per pixel; the chroma cell averages red and blue, so both columns become the same
         // purple — R falls, B appears where there was none.

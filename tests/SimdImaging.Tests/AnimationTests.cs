@@ -117,13 +117,13 @@ public class AnimationTests
         using var source = Image.Create(100, 50, WorkingFormat.Rgba8);
         source.Fill(RgbaColor.White);
 
-        using var thumbnail = source.Thumbnail(20, 20);
+        using var thumbnail = source.Pipe().Thumbnail(20, 20).ToImage();
 
         thumbnail.Width.ShouldBe(20);
         thumbnail.Height.ShouldBe(10);
 
         using var small = Image.Create(10, 10, WorkingFormat.Rgba8);
-        using var untouched = small.Thumbnail(64, 64);
+        using var untouched = small.Pipe().Thumbnail(64, 64).ToImage();
         untouched.Width.ShouldBe(10);
         untouched.Height.ShouldBe(10);
     }

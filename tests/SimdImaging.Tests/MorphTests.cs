@@ -65,7 +65,7 @@ public class MorphTests
         using var image = Pattern();
         var expected = Reference(image, radius, minimum);
 
-        using var actual = image.Morph(radius, minimum ? Morphology.Erode : Morphology.Dilate);
+        using var actual = image.Pipe().Morph(radius, minimum ? Morphology.Erode : Morphology.Dilate).ToImage();
 
         for (var y = 0; y < image.Height; y++)
         {
@@ -79,7 +79,7 @@ public class MorphTests
     public void BandedPlan_MatchesTheWholeImage()
     {
         using var image = Pattern();
-        using var whole = image.Morph(3, Morphology.Dilate);
+        using var whole = image.Pipe().Morph(3, Morphology.Dilate).ToImage();
 
         var plan = new ProcessingPlan { BandRows = 4 }.Add(PlanOps.Morph(3, Morphology.Dilate));
         using var banded = plan.ExecuteWithOptions(image[0].Pixels.View,
@@ -103,10 +103,10 @@ public class MorphTests
     {
         using var image = Pattern();
 
-        using var first = image.Morph(radius, kind == Morphology.Open ? Morphology.Erode : Morphology.Dilate);
-        using var second = first.Morph(radius, kind == Morphology.Open ? Morphology.Dilate : Morphology.Erode);
+        using var first = image.Pipe().Morph(radius, kind == Morphology.Open ? Morphology.Erode : Morphology.Dilate).ToImage();
+        using var second = first.Pipe().Morph(radius, kind == Morphology.Open ? Morphology.Dilate : Morphology.Erode).ToImage();
 
-        using var combined = image.Morph(radius, kind);
+        using var combined = image.Pipe().Morph(radius, kind).ToImage();
 
         combined.WritablePixels.ToArray().ShouldBe(second.WritablePixels.ToArray());
     }
@@ -129,8 +129,8 @@ public class MorphTests
         var speck = ((7 * 15) + 7) * 4;
         span[speck] = span[speck + 1] = span[speck + 2] = 200;
 
-        using var topHat = image.Morph(2, Morphology.TopHat);
-        using var blackHat = image.Morph(2, Morphology.BlackHat);
+        using var topHat = image.Pipe().Morph(2, Morphology.TopHat).ToImage();
+        using var blackHat = image.Pipe().Morph(2, Morphology.BlackHat).ToImage();
 
         topHat.WritablePixels[speck].ShouldBe((byte)140, "the top-hat holds the speck the opening removed");
         blackHat.WritablePixels[speck].ShouldBe((byte)0, "a bright speck leaves the black-hat empty");
@@ -143,8 +143,8 @@ public class MorphTests
     {
         using var image = Pattern();
 
-        using var fast = image.Erode3x3();
-        using var general = image.Morph(1, Morphology.Erode);
+        using var fast = image.Pipe().Erode3x3().ToImage();
+        using var general = image.Pipe().Morph(1, Morphology.Erode).ToImage();
 
         general.WritablePixels.ToArray().ShouldBe(fast.WritablePixels.ToArray());
     }

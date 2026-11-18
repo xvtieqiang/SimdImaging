@@ -29,7 +29,7 @@ public class IccTests
     public void IccTransform_SRgbToSRgbSurvivesTheRoundTrip()
     {
         using var source = Ramp(32, 32);
-        using var converted = source.IccTransform(IccProfiles.SRgbV4.Span);
+        using var converted = source.Pipe().IccTransform(IccProfiles.SRgbV4.Span).ToImage();
 
         var before = source.WritablePixels;
         var after = converted.WritablePixels;
@@ -48,7 +48,7 @@ public class IccTests
     public void IccTransform_EmptyProfilesAreACopy()
     {
         using var source = Ramp(8, 8);
-        using var converted = source.IccTransform(default, default);
+        using var converted = source.Pipe().IccTransform(default, default).ToImage();
 
         converted.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -59,7 +59,7 @@ public class IccTests
         using var source = Ramp(4, 4);
         var notRgb = new byte[200];
 
-        Should.Throw<NotSupportedException>(() => source.IccTransform(notRgb));
+        Should.Throw<NotSupportedException>(() => source.Pipe().IccTransform(notRgb).ToImage());
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class IccTests
         using var source = Ramp(4, 4);
         var truncated = new byte[10];
 
-        Should.Throw<InvalidDataException>(() => source.IccTransform(truncated));
+        Should.Throw<InvalidDataException>(() => source.Pipe().IccTransform(truncated).ToImage());
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class IccTests
         // Tag table: zero entries, so no rXYZ/gXYZ/bXYZ or TRC.
         empty[131] = 0;
 
-        Should.Throw<NotSupportedException>(() => source.IccTransform(empty));
+        Should.Throw<NotSupportedException>(() => source.Pipe().IccTransform(empty).ToImage());
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -110,7 +110,7 @@ public class IccTests
         // mid-grey through it must land where ColorMath says that PCS lands in sRGB. This is also the
         // test that catches a PCSXYZ decode divided by 65535 instead of 32768 — it would halve the light.
         using var source = Grey16(32768);
-        using var converted = source.IccTransform(SyntheticIccProfiles.Lut16XyzIdentity());
+        using var converted = source.Pipe().IccTransform(SyntheticIccProfiles.Lut16XyzIdentity()).ToImage();
 
         var (x65, y65, z65) = ColorMath.Adapt(0.5f, 0.5f, 0.5f, WhitePoint.D50, WhitePoint.D65);
         var (r, g, b) = ColorMath.FromXyz(x65, y65, z65);
@@ -192,7 +192,7 @@ public class IccTests
     {
         // The fixture's B2A0 is a constant CLUT answering every PCS with device (1.0, 0.5, 0.5).
         using var source = Grey16(32768);
-        using var converted = source.IccTransform(default, SyntheticIccProfiles.MbaLabConstant(65535, 32768, 32768));
+        using var converted = source.Pipe().IccTransform(default, SyntheticIccProfiles.MbaLabConstant(65535, 32768, 32768)).ToImage();
 
         var pixels = MemoryMarshal.Cast<byte, ushort>(converted.WritablePixels);
         pixels[0].ShouldBeInRange((ushort)65534, (ushort)65535);

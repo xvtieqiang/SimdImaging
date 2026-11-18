@@ -23,7 +23,7 @@ public class ColorBatchTests
         using var source = Solid(37, 128, 210);
         float[] identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
 
-        using var result = source.ColorMatrix(identity);
+        using var result = source.Pipe().ColorMatrix(identity).ToImage();
         Pixels(result).ShouldBe(Pixels(source));
     }
 
@@ -33,7 +33,7 @@ public class ColorBatchTests
         using var source = Solid(255, 0, 0);
         float[] swapGreenAndRed = [0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0];
 
-        using var result = source.ColorMatrix(swapGreenAndRed);
+        using var result = source.Pipe().ColorMatrix(swapGreenAndRed).ToImage();
         Pixels(result).ShouldBe(new byte[] { 0, 255, 0, 255 });
     }
 
@@ -41,14 +41,14 @@ public class ColorBatchTests
     public void ColorMatrix_RejectsWrongLength()
     {
         using var source = Solid(1, 2, 3);
-        Should.Throw<ArgumentException>(() => source.ColorMatrix(new float[9]));
+        Should.Throw<ArgumentException>(() => source.Pipe().ColorMatrix(new float[9]).ToImage());
     }
 
     [Fact]
     public void HueRotate_ZeroIsIdentity()
     {
         using var source = Solid(120, 60, 200);
-        using var result = source.HueRotate(0f);
+        using var result = source.Pipe().HueRotate(0f).ToImage();
 
         for (var i = 0; i < 3; i++)
             Math.Abs(result.WritablePixels[i] - source.WritablePixels[i]).ShouldBeLessThanOrEqualTo(1);
@@ -58,7 +58,7 @@ public class ColorBatchTests
     public void HueRotate_360IsIdentity()
     {
         using var source = Solid(120, 60, 200);
-        using var result = source.HueRotate(360f);
+        using var result = source.Pipe().HueRotate(360f).ToImage();
 
         for (var i = 0; i < 3; i++)
             Math.Abs(result.WritablePixels[i] - source.WritablePixels[i]).ShouldBeLessThanOrEqualTo(1);
@@ -69,10 +69,10 @@ public class ColorBatchTests
     {
         using var source = Solid(255, 255, 255);
 
-        using var none = source.Sepia(0f);
+        using var none = source.Pipe().Sepia(0f).ToImage();
         Pixels(none).ShouldBe(Pixels(source));
 
-        using var full = source.Sepia(1f);
+        using var full = source.Pipe().Sepia(1f).ToImage();
         var p = Pixels(full);
         p[0].ShouldBe((byte)255);
         p[1].ShouldBe((byte)255);
@@ -83,7 +83,7 @@ public class ColorBatchTests
     public void Levels_IdentityLeavesTheImageAlone()
     {
         using var source = Solid(20, 130, 240);
-        using var result = source.Levels(0f, 1f, 1f);
+        using var result = source.Pipe().Levels(0f, 1f, 1f).ToImage();
 
         var before = Pixels(source);
         var after = Pixels(result);
@@ -95,7 +95,7 @@ public class ColorBatchTests
     public void Levels_StretchesADarkRange()
     {
         using var source = Solid(100, 100, 100);
-        using var result = source.Levels(100f / 255f, 150f / 255f);
+        using var result = source.Pipe().Levels(100f / 255f, 150f / 255f).ToImage();
 
         result.WritablePixels[0].ShouldBe((byte)0);
     }
@@ -104,8 +104,8 @@ public class ColorBatchTests
     public void Levels_RejectsAnEmptyInputRange()
     {
         using var source = Solid(1, 2, 3);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Levels(0.5f, 0.5f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Levels(0f, 1f, 0f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Levels(0.5f, 0.5f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Levels(0f, 1f, 0f).ToImage());
     }
 
     [Fact]
@@ -114,8 +114,8 @@ public class ColorBatchTests
         using var low = Solid(10, 20, 30, a: 100);
         using var high = Solid(10, 20, 30, a: 200);
 
-        Pixels(low.AlphaThreshold(0.5f)).ShouldBe(new byte[] { 10, 20, 30, 0 });
-        Pixels(high.AlphaThreshold(0.5f)).ShouldBe(new byte[] { 10, 20, 30, 255 });
+        Pixels(low.Pipe().AlphaThreshold(0.5f).ToImage()).ShouldBe(new byte[] { 10, 20, 30, 0 });
+        Pixels(high.Pipe().AlphaThreshold(0.5f).ToImage()).ShouldBe(new byte[] { 10, 20, 30, 255 });
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class ColorBatchTests
             span[3] = 255;
             span[7] = 255;
 
-            using var result = source.Normalize();
+            using var result = source.Pipe().Normalize().ToImage();
             result.WritablePixels[0].ShouldBe((byte)0);
             result.WritablePixels[4].ShouldBe((byte)255);
             result.WritablePixels[3].ShouldBe((byte)255);
@@ -150,7 +150,7 @@ public class ColorBatchTests
             span[i] = (byte)(i * 7);
 
         float[] identity = [0, 0, 0, 0, 1, 0, 0, 0, 0];
-        using var result = source.Convolve3x3(identity);
+        using var result = source.Pipe().Convolve3x3(identity).ToImage();
 
         result.WritablePixels.ToArray().ShouldBe(Pixels(source));
     }
@@ -159,14 +159,14 @@ public class ColorBatchTests
     public void Convolve3x3_RejectsWrongLength()
     {
         using var source = Solid(1, 2, 3);
-        Should.Throw<ArgumentException>(() => source.Convolve3x3(new float[8]));
+        Should.Throw<ArgumentException>(() => source.Pipe().Convolve3x3(new float[8]).ToImage());
     }
 
     [Fact]
     public void Emboss_FlatAreasBecomeMidGrey()
     {
         using var source = Solid(100, 100, 100);
-        using var result = source.Emboss();
+        using var result = source.Pipe().Emboss().ToImage();
 
         ((int)result.WritablePixels[0]).ShouldBeInRange(126, 129);
         result.WritablePixels[3].ShouldBe((byte)255);

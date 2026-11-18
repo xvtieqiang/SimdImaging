@@ -32,7 +32,7 @@ public class PorterDuffTests
         using (background)
         using (overlay)
         {
-            return background.Composite(overlay, 1, 1, mode);
+            return background.Pipe().Composite(overlay, 1, 1, mode).ToImage();
         }
     }
 
@@ -90,6 +90,6 @@ public class PorterDuffTests
         using var background = Solid(2, 0, 0, 0, 255);
         using var overlay = Image.Create(1, 1, WorkingFormat.Rgba16);
 
-        Should.Throw<ArgumentException>(() => background.Composite(overlay, 0, 0, PorterDuff.SourceOver));
+        Should.Throw<ArgumentException>(() => background.Pipe().Composite(overlay, 0, 0, PorterDuff.SourceOver).ToImage());
     }
 }

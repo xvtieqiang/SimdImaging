@@ -30,13 +30,7 @@ public sealed partial class Image
         return WithMetadata(source.Metadata);
     }
 
-    /// <summary>
-    /// Applies the EXIF orientation to the pixels and resets the tag to <see cref="ImageOrientation.Normal"/>.
-    /// A file already upright is copied unchanged.
-    /// </summary>
-    public Image AutoOrient(IPixelPool? pool = null) =>
-        ReplaceBuffer(Orientation.AutoOrient(this[0].Pixels.View, Info.Orientation, pool), Metadata,
-            ImageOrientation.Normal);
+    
 
     /// <summary>
     /// Re-encodes a file, optionally replacing its metadata blocks on the way through. This is a decode and an

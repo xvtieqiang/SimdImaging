@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <!-- Tests compare each vector kernel against its scalar twin directly. -->
+    <InternalsVisibleTo Include="SimdImaging" />
     <InternalsVisibleTo Include="SimdImaging.Tests" />
     <!-- The comparison harness tunes the row-band budget in-process to attribute resize cost. -->
     <InternalsVisibleTo Include="SimdImaging.Comparison" />

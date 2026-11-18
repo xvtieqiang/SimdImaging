@@ -44,6 +44,18 @@ public sealed record ExecuteOptions
     public bool AllowFusion { get; init; } = true;
 
     /// <summary>
+    /// Fuse regardless of what the plan would decide for itself.
+    /// </summary>
+    /// <remarks>
+    /// The executor picks per plan: a segment containing a small kernel fuses, and a chain of expensive steps fuses
+    /// only when the intermediates it avoids are large (see <c>ProcessingPlan.ShouldFuse</c>, which lists the
+    /// measurements). This switch exists because that decision is a heuristic and the fused path still needs to be
+    /// reachable on demand — the equivalence tests use it to hold the two paths byte-identical on inputs the
+    /// heuristic would otherwise route stepwise.
+    /// </remarks>
+    public bool ForceFusion { get; init; }
+
+    /// <summary>
     /// Collect a <c>PlanReport</c>. <c>false</c> (default) allocates nothing, times nothing and
     /// changes no hot-path byte — the report is only built when this is on.
     /// </summary>

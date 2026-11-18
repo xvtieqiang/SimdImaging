@@ -58,11 +58,11 @@ internal static class Profile
         report.Heading(3, "1. 并行度扫描（同一算子，1→16 workers）");
         var ops = new (string Name, Func<OurImage, OurImage> Run)[]
         {
-            ("Invert", i => i.Invert()),
-            ("Grayscale", i => i.Grayscale()),
-            ("Sepia", i => i.Sepia()),
-            ("GaussianBlur σ3", i => i.GaussianBlur(3f)),
-            ("Resize bicubic", i => i.Resize(width / 2, height / 2, Resampler.Bicubic)),
+            ("Invert", i => i.Pipe().Invert().ToImage()),
+            ("Grayscale", i => i.Pipe().Grayscale().ToImage()),
+            ("Sepia", i => i.Pipe().Sepia().ToImage()),
+            ("GaussianBlur σ3", i => i.Pipe().GaussianBlur(3f).ToImage()),
+            ("Resize bicubic", i => i.Pipe().Resize(width / 2, height / 2, Resampler.Bicubic).ToImage()),
         };
 
         var rows = new List<string[]>();
@@ -407,7 +407,7 @@ internal static class Profile
                 FilterOps.BandRowsOverride = bandRows;
                 var ms = TimeOncePerCall(() =>
                 {
-                    using var result = image.GaussianBlur(3f);
+                    using var result = image.Pipe().GaussianBlur(3f).ToImage();
                     GC.KeepAlive(result);
                 });
                 rows.Add([bandRows.ToString(CultureInfo.InvariantCulture), Timing.F(ms),
@@ -638,11 +638,11 @@ internal static class Profile
 
         var ops = new (string Name, Func<OurImage> Run)[]
         {
-            ("Grayscale (BT.601)", () => image.Grayscale()),
-            ("Sepia()", () => image.Sepia()),
-            ("ColorMatrix(sepia 系数)", () => image.ColorMatrix(sepia)),
-            ("ColorMatrix(非对称系数)", () => image.ColorMatrix(asymmetric)),
-            ("Invert（字节 LUT 路径）", () => image.Invert()),
+            ("Grayscale (BT.601)", () => image.Pipe().Grayscale().ToImage()),
+            ("Sepia()", () => image.Pipe().Sepia().ToImage()),
+            ("ColorMatrix(sepia 系数)", () => image.Pipe().ColorMatrix(sepia).ToImage()),
+            ("ColorMatrix(非对称系数)", () => image.Pipe().ColorMatrix(asymmetric).ToImage()),
+            ("Invert（字节 LUT 路径）", () => image.Pipe().Invert().ToImage()),
         };
 
         var coefficientRows = new List<string[]>();
@@ -697,7 +697,7 @@ internal static class Profile
                 var owner = ArrayPixelPool.Shared.Rent(length);
                 owner.Dispose();
             }),
-            new Runner("公开 API Sepia()", () => { using var r = image.Sepia(); GC.KeepAlive(r); }),
+            new Runner("公开 API Sepia()", () => { using var r = image.Pipe().Sepia().ToImage(); GC.KeepAlive(r); }),
             new Runner("裸内核 ApplyMatrixRgba8", () =>
             {
                 using var r = PointLut.ApplyMatrixRgba8(view, null, matrix);
@@ -725,10 +725,10 @@ internal static class Profile
         var granularities = new[] { 16, 32, 64, 128, 256, 512 };
         var ops = new (string Name, Func<OurImage, OurImage> Run)[]
         {
-            ("Invert", i => i.Invert()),
-            ("Grayscale", i => i.Grayscale()),
-            ("Sepia", i => i.Sepia()),
-            ("Rotate90", i => i.Rotate90()),
+            ("Invert", i => i.Pipe().Invert().ToImage()),
+            ("Grayscale", i => i.Pipe().Grayscale().ToImage()),
+            ("Sepia", i => i.Pipe().Sepia().ToImage()),
+            ("Rotate90", i => i.Pipe().Rotate90().ToImage()),
         };
 
         var rows = new List<string[]>();

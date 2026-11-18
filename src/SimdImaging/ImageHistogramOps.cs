@@ -26,9 +26,7 @@ public sealed partial class Image
     public (ChannelRange R, ChannelRange G, ChannelRange B) MinMax() =>
         HistogramOps.MinMax(this[0].Pixels.View);
 
-    /// <summary>Equalizes each colour channel through its cumulative distribution; alpha is untouched.</summary>
-    public Image EqualizeHistogram(IPixelPool? pool = null) =>
-        ReplaceBuffer(HistogramOps.Equalize(this[0].Pixels.View, pool));
+    
 
     /// <summary>Tight box around pixels whose alpha exceeds <paramref name="threshold"/>; zero-sized when
     /// nothing qualifies.</summary>

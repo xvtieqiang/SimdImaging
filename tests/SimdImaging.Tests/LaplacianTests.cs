@@ -67,7 +67,7 @@ public class LaplacianTests
             }
         }
 
-        using var actual = image.Laplacian();
+        using var actual = image.Pipe().Laplacian().ToImage();
         for (var y = 0; y < height; y++)
         {
             actual.WritablePixels.Slice(y * width * 4, width * 4).ToArray()
@@ -89,7 +89,7 @@ public class LaplacianTests
             span[i + 3] = 77;
         }
 
-        using var result = image.Laplacian();
+        using var result = image.Pipe().Laplacian().ToImage();
         for (var i = 0; i < span.Length; i += 4)
         {
             result.WritablePixels[i].ShouldBe((byte)0);

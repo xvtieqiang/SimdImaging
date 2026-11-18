@@ -82,18 +82,23 @@ internal static class RowParallel
 
     internal static void For(int width, int height, Action<int, int> body)
     {
+        // A loop entered from inside a band worker runs inline, so it says nothing about how many workers the image
+        // was given — and writing 1 here would overwrite the count the band split just reported.
+        var nested = _nesting > 0;
         var degree = Degree;
         const long minWorkPixels = 64 * 1024;
         var perWorker = Math.Max(1, RowsPerWorker);
         var workers = Math.Min(degree, Math.Max(1, (height + perWorker - 1) / perWorker));
         if (degree <= 1 || (long)width * height < minWorkPixels || workers <= 1)
         {
-            LastWorkerCount = 1;
+            if (!nested)
+                LastWorkerCount = 1;
             body(0, height);
             return;
         }
 
-        LastWorkerCount = workers;
+        if (!nested)
+            LastWorkerCount = workers;
         var band = (height + workers - 1) / workers;
         Parallel.For(0, workers, worker =>
         {

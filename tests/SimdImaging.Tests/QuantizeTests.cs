@@ -35,7 +35,7 @@ public class QuantizeTests
     public void Quantize_KeepsTwoColourImagesExact()
     {
         using var source = TwoColours(8, 4);
-        using var quantized = source.Quantize(2);
+        using var quantized = source.Pipe().Quantize(2).ToImage();
 
         var colours = DistinctColours(quantized);
         colours.Count.ShouldBe(2);
@@ -57,7 +57,7 @@ public class QuantizeTests
             span[o + 3] = 255;
         }
 
-        using var quantized = source.Quantize(4);
+        using var quantized = source.Pipe().Quantize(4).ToImage();
         DistinctColours(quantized).Count.ShouldBeLessThanOrEqualTo(4);
     }
 
@@ -69,7 +69,7 @@ public class QuantizeTests
         for (var i = 3; i < span.Length; i += 4)
             span[i] = 77;
 
-        using var quantized = source.Quantize(2);
+        using var quantized = source.Pipe().Quantize(2).ToImage();
         var result = quantized.WritablePixels;
         for (var i = 3; i < result.Length; i += 4)
             result[i].ShouldBe((byte)77);
@@ -102,7 +102,7 @@ public class QuantizeTests
             new RgbaColor(255, 255, 255, 255),
         });
 
-        using var mapped = source.MapToPalette(palette);
+        using var mapped = source.Pipe().MapToPalette(palette).ToImage();
 
         foreach (var colour in DistinctColours(mapped))
             colour.ShouldBeOneOf(((byte)0, (byte)0, (byte)0), ((byte)255, (byte)255, (byte)255));
@@ -112,16 +112,16 @@ public class QuantizeTests
     public void Quantize_RejectsIllegalBudgets()
     {
         using var source = TwoColours(2, 2);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Quantize(1));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Quantize(257));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Quantize(1).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Quantize(257).ToImage());
     }
 
     [Fact]
     public void Quantize_IsDeterministic()
     {
         using var source = TwoColours(16, 16);
-        using var first = source.Quantize(3);
-        using var second = source.Quantize(3);
+        using var first = source.Pipe().Quantize(3).ToImage();
+        using var second = source.Pipe().Quantize(3).ToImage();
 
         second.WritablePixels.ToArray().ShouldBe(first.WritablePixels.ToArray());
     }
@@ -130,7 +130,7 @@ public class QuantizeTests
     public void Wu_KeepsTwoColourImagesClose()
     {
         using var source = TwoColours(16, 4);
-        using var quantized = source.Quantize(2, SimdImaging.Processing.Quantizer.Wu);
+        using var quantized = source.Pipe().Quantize(2, SimdImaging.Processing.Quantizer.Wu).ToImage();
 
         var colours = DistinctColours(quantized);
         if (colours.Count != 2)
@@ -154,7 +154,7 @@ public class QuantizeTests
             span[i + 3] = 255;
         }
 
-        using var quantized = source.Quantize(8, SimdImaging.Processing.Quantizer.Wu);
+        using var quantized = source.Pipe().Quantize(8, SimdImaging.Processing.Quantizer.Wu).ToImage();
         DistinctColours(quantized).Count.ShouldBeLessThanOrEqualTo(8);
     }
 
@@ -179,8 +179,8 @@ public class QuantizeTests
     public void Wu_IsDeterministic()
     {
         using var source = TwoColours(12, 12);
-        using var first = source.Quantize(5, SimdImaging.Processing.Quantizer.Wu);
-        using var second = source.Quantize(5, SimdImaging.Processing.Quantizer.Wu);
+        using var first = source.Pipe().Quantize(5, SimdImaging.Processing.Quantizer.Wu).ToImage();
+        using var second = source.Pipe().Quantize(5, SimdImaging.Processing.Quantizer.Wu).ToImage();
 
         second.WritablePixels.ToArray().ShouldBe(first.WritablePixels.ToArray());
     }

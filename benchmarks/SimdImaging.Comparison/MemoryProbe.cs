@@ -41,13 +41,13 @@ internal static class MemoryProbe
 
         var ops = new (string Id, Action<OurImage> Run)[]
         {
-            ("resize-bicubic", i => { using var r = i.Resize(width / 2, height / 2, Resampler.Bicubic); }),
-            ("gaussian-blur", i => { using var r = i.GaussianBlur(3f); }),
-            ("guided-filter", i => { using var r = i.GuidedFilter(4, 1e-4f); }),
-            ("guided.cross", i => { using var r = i.GuidedFilter(i, 4, 1e-4f); }),
-            ("oilpaint", i => { using var r = i.OilPaint(2, 20); }),
-            ("quantize-64", i => { using var r = i.Quantize(64); }),
-            ("seam-50", i => { using var r = i.RemoveSeams(SeamAxis.Vertical, 50); }),
+            ("resize-bicubic", i => { using var r = i.Pipe().Resize(width / 2, height / 2, Resampler.Bicubic).ToImage(); }),
+            ("gaussian-blur", i => { using var r = i.Pipe().GaussianBlur(3f).ToImage(); }),
+            ("guided-filter", i => { using var r = i.Pipe().GuidedFilter(4, 1e-4f).ToImage(); }),
+            ("guided.cross", i => { using var r = i.Pipe().GuidedFilter(i, 4, 1e-4f).ToImage(); }),
+            ("oilpaint", i => { using var r = i.Pipe().OilPaint(2, 20).ToImage(); }),
+            ("quantize-64", i => { using var r = i.Pipe().Quantize(64).ToImage(); }),
+            ("seam-50", i => { using var r = i.Pipe().RemoveSeams(SeamAxis.Vertical, 50).ToImage(); }),
         };
 
         var rows = new List<string[]>();

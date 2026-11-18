@@ -96,8 +96,19 @@ public static class FilterOps
         return Separable(source, kernel, pool);
     }
 
-    /// <summary>Scratch a band may hold per worker: one band of float planes, capped at eight mebibytes.</summary>
-    private const int ScratchBudgetBytes = 8 * 1024 * 1024;
+    /// <summary>Scratch a band may hold per worker: one band of float planes.</summary>
+    /// <remarks>
+    /// Sixteen mebibytes, not eight: the budget used to assume four float planes while the band actually keeps
+    /// eight, so the real ceiling was twice what the constant said. Written as the number of planes times the
+    /// budget it was tuned against, so the band height it produces does not move.
+    /// </remarks>
+    private const int ScratchBudgetBytes = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// Bytes of scratch a band costs per pixel of width. Four de-interleaved inputs plus four convolved outputs —
+    /// eight float planes, not the four this used to assume, which let a band take twice the budget.
+    /// </summary>
+    private const int ScratchBytesPerPixel = 8 * sizeof(float);
 
     /// <summary>
     /// Band height whose per-worker scratch fits <see cref="ScratchBudgetBytes"/> — sixteen bytes per pixel of the
@@ -106,7 +117,7 @@ public static class FilterOps
     /// at 273.9 MiB and costs 2.1% more time (365.5 against 357.9 ms). Widths at or below 4K still clamp to 128.
     /// </summary>
     private static int MaxBandRowsForScratch(int width) =>
-        Math.Max(32, ScratchBudgetBytes / Math.Max(1, width * 16));
+        Math.Max(32, ScratchBudgetBytes / Math.Max(1, width * ScratchBytesPerPixel));
 
     /// <summary>
     /// Runs a separable kernel as a horizontal pass followed by a vertical one. Work is done in row bands: a
@@ -134,22 +145,28 @@ public static class FilterOps
         var view = destination.View;
         var bandCount = (height + bandRows - 1) / bandRows;
 
-        void RunBand(int bandTop, int bandBottom, float[] scratch, float[] row, float[] outputRows)
+        void RunBand(int bandTop, int bandBottom, int ringRows, float[] scratch, float[] row, float[] outputRows)
         {
             var top = Math.Max(0, bandTop - radius);
-            var bottom = Math.Min(height, bandBottom + radius);
-            var rows = bottom - top;
 
             // Eight planes: four de-interleaved inputs, four convolved outputs. Per worker, because bands run
             // concurrently and a shared plane is a data race.
             var planes = FloatScratch.Rent(width * 8);
             try
             {
+            var filledThrough = top - 1;
 
-            for (var i = 0; i < rows; i++)
+            void EnsureRow(int absoluteRow)
             {
-                Pixels.ReadRowPremultiplied(source.Row(top + i), width, source.Format, row);
-                var output = scratch.AsSpan(i * stride, stride);
+                for (var current = filledThrough + 1; current <= absoluteRow; current++)
+                    FillRow(Math.Clamp(current, 0, height - 1), scratch.AsSpan(current % ringRows * stride, stride));
+                filledThrough = Math.Max(filledThrough, absoluteRow);
+            }
+
+            void FillRow(int absoluteRow, Span<float> target)
+            {
+                Pixels.ReadRowPremultiplied(source.Row(absoluteRow), width, source.Format, row);
+                var output = target;
 
                 if (Vector256.IsHardwareAccelerated)
                 {
@@ -249,12 +266,6 @@ public static class FilterOps
                 }
             }
 
-            }
-            finally
-            {
-                FloatScratch.Return(planes);
-            }
-
             // Vertical pass, two-dimensional tile. `VerticalTileRows` output rows share one read of every tap
             // row, and the accumulation for each row lives in a `VerticalBlockFloats`-wide strip instead of
             // being written and re-read once per tap. Each output sample still sums its taps in ascending k
@@ -266,10 +277,13 @@ public static class FilterOps
             for (var y0 = bandTop; y0 < bandBottom; y0 += VerticalTileRows)
             {
                 var rowCount = Math.Min(VerticalTileRows, bandBottom - y0);
+                // The ring keeps the rows this tile reads live: 2·radius + tileRows of them, not the whole band.
+                EnsureRow(Math.Min(y0 + rowCount - 1 + radius, height - 1));
+
                 for (var t = 0; t < rowCount; t++)
                 for (var k = 0; k < kernel.Length; k++)
                     tileOffsets[t * kernel.Length + k] =
-                        (Math.Clamp(y0 + t + k - radius, 0, height - 1) - top) * stride;
+                        Math.Clamp(y0 + t + k - radius, 0, height - 1) % ringRows * stride;
 
                 if (Vector256.IsHardwareAccelerated)
                 {
@@ -332,14 +346,19 @@ public static class FilterOps
                     Pixels.WriteRowUnpremultiplied(outputRows.AsSpan(t * stride, stride), width,
                         source.Format, view.Row(y0 + t));
             }
+            }
+            finally
+            {
+                FloatScratch.Return(planes);
+            }
         }
 
         // One scratch set per worker, reused across the bands that worker owns. Bands write disjoint
         // output rows and only read shared source rows, so the worker count cannot change the bytes.
         RowParallel.ForBands(bandCount, (start, end) =>
         {
-            var capacity = Math.Min(height, bandRows + radius * 2);
-            var scratch = FloatScratch.Rent(capacity * stride);
+            var ringRows = Math.Min(height, radius * 2 + VerticalTileRows);
+            var scratch = FloatScratch.Rent(ringRows * stride);
             var row = FloatScratch.Rent(stride);
             var outputRows = FloatScratch.Rent(stride * VerticalTileRows);
             try
@@ -347,7 +366,7 @@ public static class FilterOps
                 for (var b = start; b < end; b++)
                 {
                     var bandTop = b * bandRows;
-                    RunBand(bandTop, Math.Min(bandTop + bandRows, height), scratch, row, outputRows);
+                    RunBand(bandTop, Math.Min(bandTop + bandRows, height), ringRows, scratch, row, outputRows);
                 }
             }
             finally
@@ -368,24 +387,33 @@ public static class FilterOps
     /// </summary>
     public static WorkingBuffer Median3x3(PixelView source, IPixelPool? pool = null)
     {
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        Median3x3Into(source, destination.View, 0, source.Height, 0);
+        return destination;
+    }
+
+    /// <summary>3×3 median into a destination the caller owns.</summary>
+    internal static void Median3x3Into(PixelView source, PixelView destination, int destinationY, int rows,
+        int sourceRowOffset)
+    {
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
-
-        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
-        var view = destination.View;
 
         // Rgba8 gets a byte-domain kernel: four pixels (16 samples) per compare-exchange instead of one
         // channel. Legal only because the float round trip is the identity on bytes — proved exhaustively by
         // Median3x3Tests.ByteToFloatRoundTrip_IsIdentity_ForEveryByte, not assumed.
         var byteDomain = source.Format == WorkingFormat.Rgba8 && Vector128.IsHardwareAccelerated;
 
-        RowParallel.For(width, height, (start, end) =>
+        RowParallel.For(width, rows, (startRow, endRow) =>
         {
+            var start = startRow + sourceRowOffset;
+            var end = endRow + sourceRowOffset;
+
             if (byteDomain)
             {
                 for (var y = start; y < end; y++)
-                    MedianRowBytes(source, view, width, height, y);
+                    MedianRowBytes(source, destination, width, height, y, destinationY + y - sourceRowOffset);
 
                 return;
             }
@@ -422,11 +450,9 @@ public static class FilterOps
                     }
                 }
 
-                Pixels.WriteRowRaw(outputRow, width, source.Format, view.Row(y));
+                Pixels.WriteRowRaw(outputRow, width, source.Format, destination.Row(destinationY + y - sourceRowOffset));
             }
         });
-
-        return destination;
     }
 
     /// <summary>
@@ -434,12 +460,13 @@ public static class FilterOps
     /// source row; the first pixel and the last few fall back to a plain nine-element sort, because a window
     /// load at <c>x-1</c> would run off the row and clamping has to be per pixel there.
     /// </summary>
-    private static void MedianRowBytes(PixelView source, PixelView destination, int width, int height, int y)
+    private static void MedianRowBytes(PixelView source, PixelView destination, int width, int height, int y,
+        int destinationRow)
     {
         var up = source.Row(Math.Clamp(y - 1, 0, height - 1));
         var mid = source.Row(y);
         var down = source.Row(Math.Clamp(y + 1, 0, height - 1));
-        var to = destination.Row(y);
+        var to = destination.Row(destinationRow);
 
         MedianEdgePixelBytes(up, mid, down, to, 0, width);
 
@@ -614,6 +641,28 @@ public static class FilterOps
     private static WorkingBuffer Gradient(PixelView source, float top, float middle, float bottom, float scale,
         bool bt709, IPixelPool? pool)
     {
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        GradientInto(source, destination.View, 0, source.Height, 0, top, middle, bottom, scale, bt709);
+        return destination;
+    }
+
+    /// <summary>
+    /// Sobel into a destination the caller owns. <paramref name="source"/> is the window and may carry halo rows
+    /// above and below the rows being produced; <paramref name="sourceRowOffset"/> is where those rows start.
+    /// </summary>
+    /// <remarks>
+    /// The banded executor has a destination already — a band of the output image — and the renting form made every
+    /// band materialise a whole window-sized intermediate only to copy its middle rows out. At 7680×4320 with three
+    /// 3×3 steps that was about four hundred megabytes of window buffers per image, which is what `chainpeak` reads
+    /// as "one image costs five".
+    /// </remarks>
+    internal static void SobelInto(PixelView source, PixelView destination, int destinationY, int rows,
+        int sourceRowOffset, bool bt709 = false) =>
+        GradientInto(source, destination, destinationY, rows, sourceRowOffset, 1f, 2f, 1f, 0.25f, bt709);
+
+    private static void GradientInto(PixelView source, PixelView destination, int destinationY, int rows,
+        int sourceRowOffset, float top, float middle, float bottom, float scale, bool bt709)
+    {
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
@@ -622,9 +671,7 @@ public static class FilterOps
         var w1 = middle;
         var w2 = bottom;
 
-        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var luma = new float[3 * width];
-        var view = destination.View;
 
         // Three things were wrong here, none of them arithmetic:
         //   * the luma of every row was recomputed three times (once per dy), never cached;
@@ -633,8 +680,13 @@ public static class FilterOps
         //   * the three luma spans were rebuilt inside the per-pixel loop.
         // A per-band ring of three luma rows fixes the first (the value is computed by the same expression on
         // the same input, so it is the same float), and hoisting fixes the other two.
-        RowParallel.For(width, height, (start, end) =>
+        //
+        // Rows produced are [sourceRowOffset, sourceRowOffset + rows). The window already holds the halo above the
+        // first one, so the ring is primed from there and no clamping happens inside the image.
+        RowParallel.For(width, rows, (startRow, endRow) =>
         {
+            var start = startRow + sourceRowOffset;
+            var end = endRow + sourceRowOffset;
             var row = new float[stride];
             var outputRow = new float[stride];
             var luma = new float[3 * width];
@@ -688,20 +740,28 @@ public static class FilterOps
                     outputRow[o + 3] = row[o + 3];
                 }
 
-                Pixels.WriteRowRaw(outputRow, width, source.Format, view.Row(y));
+                Pixels.WriteRowRaw(outputRow, width, source.Format, destination.Row(destinationY + y - sourceRowOffset));
             }
         });
-
-        return destination;
     }
 
     /// <summary>3×3 erosion (per-channel minimum). Shrinks bright regions and opaque coverage.</summary>
     public static WorkingBuffer Erode3x3(PixelView source, IPixelPool? pool = null) =>
         Morph3x3(source, minimum: true, pool);
 
+    /// <summary>Erosion into a destination the caller owns.</summary>
+    internal static void Erode3x3Into(PixelView source, PixelView destination, int destinationY, int rows,
+        int sourceRowOffset) =>
+        Morph3x3Into(source, destination, destinationY, rows, sourceRowOffset, minimum: true);
+
     /// <summary>3×3 dilation (per-channel maximum).</summary>
     public static WorkingBuffer Dilate3x3(PixelView source, IPixelPool? pool = null) =>
         Morph3x3(source, minimum: false, pool);
+
+    /// <summary>Dilation into a destination the caller owns.</summary>
+    internal static void Dilate3x3Into(PixelView source, PixelView destination, int destinationY, int rows,
+        int sourceRowOffset) =>
+        Morph3x3Into(source, destination, destinationY, rows, sourceRowOffset, minimum: false);
 
     /// <summary>Erosion then dilation: removes small bright specks.</summary>
     public static WorkingBuffer Open3x3(PixelView source, IPixelPool? pool = null)
@@ -723,24 +783,32 @@ public static class FilterOps
     /// </summary>
     private static WorkingBuffer Morph3x3(PixelView source, bool minimum, IPixelPool? pool)
     {
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        Morph3x3Into(source, destination.View, 0, source.Height, 0, minimum);
+        return destination;
+    }
+
+    /// <summary>3×3 erosion or dilation into a destination the caller owns.</summary>
+    internal static void Morph3x3Into(PixelView source, PixelView destination, int destinationY, int rows,
+        int sourceRowOffset, bool minimum)
+    {
         var width = source.Width;
         var height = source.Height;
         var stride = width * 4;
 
-        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         // One contiguous block, three row offsets into it: a jagged float[3][] would add a pointer chase
         // per tap and three allocations per call for no benefit.
-        var rows = new float[3 * stride];
+        var lines = new float[3 * stride];
         var sourceRow = new float[stride];
         var output = new float[stride];
-        var computed = -1;
+        var computed = sourceRowOffset - 2;
 
         void EnsureRow(int y)
         {
             for (var current = computed + 1; current <= y; current++)
             {
-                Pixels.ReadRowRaw(source.Row(current), width, source.Format, sourceRow);
-                var targetOffset = (current % 3) * stride;
+                Pixels.ReadRowRaw(source.Row(Math.Clamp(current, 0, height - 1)), width, source.Format, sourceRow);
+                var targetOffset = ((current % 3) + 3) % 3 * stride;
                 for (var x = 0; x < width; x++)
                 {
                     var left = Math.Clamp(x - 1, 0, width - 1) * 4;
@@ -751,7 +819,7 @@ public static class FilterOps
                         var a = sourceRow[left + c];
                         var b = sourceRow[centre + c];
                         var d = sourceRow[right + c];
-                        rows[targetOffset + centre + c] = minimum
+                        lines[targetOffset + centre + c] = minimum
                             ? Math.Min(a, Math.Min(b, d))
                             : Math.Max(a, Math.Max(b, d));
                     }
@@ -761,8 +829,7 @@ public static class FilterOps
             }
         }
 
-        EnsureRow(0);
-        for (var y = 0; y < height; y++)
+        for (var y = sourceRowOffset; y < sourceRowOffset + rows; y++)
         {
             EnsureRow(Math.Min(y + 1, height - 1));
             var topOffset = (Math.Max(y - 1, 0) % 3) * stride;
@@ -771,16 +838,14 @@ public static class FilterOps
 
             for (var i = 0; i < stride; i++)
             {
-                var a = rows[topOffset + i];
-                var b = rows[middleOffset + i];
-                var d = rows[bottomOffset + i];
+                var a = lines[topOffset + i];
+                var b = lines[middleOffset + i];
+                var d = lines[bottomOffset + i];
                 output[i] = minimum ? Math.Min(a, Math.Min(b, d)) : Math.Max(a, Math.Max(b, d));
             }
 
-            Pixels.WriteRowRaw(output, width, source.Format, destination.View.Row(y));
+            Pixels.WriteRowRaw(output, width, source.Format, destination.Row(destinationY + y - sourceRowOffset));
         }
-
-        return destination;
     }
 
     /// <summary>
@@ -1908,6 +1973,18 @@ public static class FilterOps
     public static WorkingBuffer Convolve3x3(PixelView source, ReadOnlySpan<float> kernel, float bias = 0f,
         IPixelPool? pool = null)
     {
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        Convolve3x3Into(source, destination.View, 0, source.Height, 0, kernel, bias);
+        return destination;
+    }
+
+    /// <summary>
+    /// A 3×3 convolution into a destination the caller owns. <paramref name="source"/> is the window, which may
+    /// carry a halo row above and below; <paramref name="sourceRowOffset"/> is where the produced rows start.
+    /// </summary>
+    internal static void Convolve3x3Into(PixelView source, PixelView destination, int destinationY, int rows,
+        int sourceRowOffset, ReadOnlySpan<float> kernel, float bias)
+    {
         if (kernel.Length != 9)
             throw new ArgumentException("A 3×3 kernel needs nine weights.", nameof(kernel));
 
@@ -1916,21 +1993,19 @@ public static class FilterOps
         var height = source.Height;
         var stride = width * 4;
 
-        var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
-        var rows = new float[3 * stride];       // three rows in one block; see Morph3x3
+        var lines = new float[3 * stride];       // three rows in one block; see Morph3x3
         var output = new float[stride];
-        var computed = -1;
+        var computed = sourceRowOffset - 2;
 
         void EnsureRow(int y)
         {
             for (var current = computed + 1; current <= y; current++)
-                Pixels.ReadRowRaw(source.Row(current), width, source.Format,
-                    rows.AsSpan((current % 3) * stride, stride));
+                Pixels.ReadRowRaw(source.Row(Math.Clamp(current, 0, height - 1)), width, source.Format,
+                    lines.AsSpan((current % 3 + 3) % 3 * stride, stride));
             computed = Math.Max(computed, y);
         }
 
-        EnsureRow(0);
-        for (var y = 0; y < height; y++)
+        for (var y = sourceRowOffset; y < sourceRowOffset + rows; y++)
         {
             EnsureRow(Math.Min(y + 1, height - 1));
             var top = (Math.Max(y - 1, 0) % 3) * stride;
@@ -1945,19 +2020,17 @@ public static class FilterOps
 
                 for (var c = 0; c < 3; c++)
                 {
-                    var sum = weights[0] * rows[top + left + c] + weights[1] * rows[top + centre + c] + weights[2] * rows[top + right + c]
-                              + weights[3] * rows[middle + left + c] + weights[4] * rows[middle + centre + c] + weights[5] * rows[middle + right + c]
-                              + weights[6] * rows[bottom + left + c] + weights[7] * rows[bottom + centre + c] + weights[8] * rows[bottom + right + c];
+                    var sum = weights[0] * lines[top + left + c] + weights[1] * lines[top + centre + c] + weights[2] * lines[top + right + c]
+                              + weights[3] * lines[middle + left + c] + weights[4] * lines[middle + centre + c] + weights[5] * lines[middle + right + c]
+                              + weights[6] * lines[bottom + left + c] + weights[7] * lines[bottom + centre + c] + weights[8] * lines[bottom + right + c];
                     output[centre + c] = sum + bias;
                 }
 
-                output[centre + 3] = rows[middle + centre + 3];
+                output[centre + 3] = lines[middle + centre + 3];
             }
 
-            Pixels.WriteRowRaw(output, width, source.Format, destination.View.Row(y));
+            Pixels.WriteRowRaw(output, width, source.Format, destination.Row(destinationY + y - sourceRowOffset));
         }
-
-        return destination;
     }
 
     /// <summary>Emboss: a relief kernel with a mid-grey offset, so flat areas become grey and edges stand out.</summary>
@@ -1965,6 +2038,15 @@ public static class FilterOps
     /// <param name="strength">Multiplier on the kernel; 1 is the classic relief.</param>
     /// <param name="pool">Where the destination is rented.</param>
     public static WorkingBuffer Emboss(PixelView source, float strength = 1f, IPixelPool? pool = null)
+    {
+        var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        EmbossInto(source, destination.View, 0, source.Height, 0, strength);
+        return destination;
+    }
+
+    /// <summary>Emboss into a destination the caller owns; see <see cref="Convolve3x3Into"/> for the window rules.</summary>
+    internal static void EmbossInto(PixelView source, PixelView destination, int destinationY, int rows,
+        int sourceRowOffset, float strength = 1f)
     {
         // Sum zero (flat areas go to the bias) with a diagonal gradient.
         Span<float> kernel = stackalloc float[9]
@@ -1974,7 +2056,7 @@ public static class FilterOps
             0f, 1f * strength, 2f * strength,
         };
 
-        return Convolve3x3(source, kernel, 0.5f, pool);
+        Convolve3x3Into(source, destination, destinationY, rows, sourceRowOffset, kernel, 0.5f);
     }
 
     /// <summary>
@@ -1989,11 +2071,13 @@ public static class FilterOps
     public static WorkingBuffer Sharpen(PixelView source, float amount = 0.5f, float sigma = 1f,
         IPixelPool? pool = null)
     {
-        using var blurred = GaussianBlur(source, sigma, null);
+        // The blurred frame becomes the destination: the combine reads and writes the same row, one pixel at a
+        // time, so writing it back in place costs no extra frame. It used to rent a second full-size buffer for
+        // the result — at 7680x4320 that is 126.6 MiB for nothing.
+        var destination = GaussianBlur(source, sigma, pool);
 
         var width = source.Width;
         var stride = width * 4;
-        var destination = WorkingBuffer.Rent(source.Height > 0 ? width : width, source.Height, source.Format, pool);
         var sourceRow = new float[stride];
         var blurredRow = new float[stride];
         var output = new float[stride];
@@ -2001,7 +2085,7 @@ public static class FilterOps
         for (var y = 0; y < source.Height; y++)
         {
             Pixels.ReadRowRaw(source.Row(y), width, source.Format, sourceRow);
-            Pixels.ReadRowRaw(blurred.View.Row(y), width, source.Format, blurredRow);
+            Pixels.ReadRowRaw(destination.View.Row(y), width, source.Format, blurredRow);
 
             for (var i = 0; i < stride; i += 4)
             {

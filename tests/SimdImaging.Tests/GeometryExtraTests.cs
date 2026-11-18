@@ -31,7 +31,7 @@ public class GeometryExtraTests
     public void Transpose_SwapsTheAxes()
     {
         using var source = Indexed(3, 2);
-        using var transposed = source.Transpose();
+        using var transposed = source.Pipe().Transpose().ToImage();
 
         transposed.Width.ShouldBe(2);
         transposed.Height.ShouldBe(3);
@@ -44,7 +44,7 @@ public class GeometryExtraTests
     public void Transpose_AntiMirrorsAcrossTheOtherDiagonal()
     {
         using var source = Indexed(3, 2);
-        using var transposed = source.Transpose(anti: true);
+        using var transposed = source.Pipe().Transpose(anti: true).ToImage();
 
         transposed.Width.ShouldBe(2);
         transposed.Height.ShouldBe(3);
@@ -58,17 +58,17 @@ public class GeometryExtraTests
     {
         using var source = Indexed(2, 1);
 
-        using var quarter = source.RotateFlip(1);
+        using var quarter = source.Pipe().RotateFlip(1).ToImage();
         quarter.Width.ShouldBe(1);
         quarter.Height.ShouldBe(2);
         Red(quarter, 0, 0).ShouldBe(Red(source, 0, 0));
         Red(quarter, 0, 1).ShouldBe(Red(source, 1, 0));
 
-        using var half = source.RotateFlip(2);
+        using var half = source.Pipe().RotateFlip(2).ToImage();
         Red(half, 0, 0).ShouldBe(Red(source, 1, 0));
         Red(half, 1, 0).ShouldBe(Red(source, 0, 0));
 
-        using var flipped = source.RotateFlip(0, flipHorizontal: true);
+        using var flipped = source.Pipe().RotateFlip(0, flipHorizontal: true).ToImage();
         Red(flipped, 0, 0).ShouldBe(Red(source, 1, 0));
         Red(flipped, 1, 0).ShouldBe(Red(source, 0, 0));
     }
@@ -78,12 +78,12 @@ public class GeometryExtraTests
     {
         using var source = Indexed(3, 2);
 
-        using var minusOne = source.RotateFlip(-1);
-        using var three = source.RotateFlip(3);
+        using var minusOne = source.Pipe().RotateFlip(-1).ToImage();
+        using var three = source.Pipe().RotateFlip(3).ToImage();
         minusOne.Width.ShouldBe(three.Width);
         minusOne.WritablePixels.ToArray().ShouldBe(three.WritablePixels.ToArray());
 
-        using var four = source.RotateFlip(4);
+        using var four = source.Pipe().RotateFlip(4).ToImage();
         four.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
 
@@ -105,7 +105,7 @@ public class GeometryExtraTests
             }
         }
 
-        using var cropped = source.EntropyCrop(0.25f);
+        using var cropped = source.Pipe().EntropyCrop(0.25f).ToImage();
 
         cropped.Width.ShouldBe(12);
         cropped.Height.ShouldBe(12);
@@ -118,7 +118,7 @@ public class GeometryExtraTests
         using var source = Image.Create(8, 8, WorkingFormat.Rgba8);
         source.Fill(new RgbaColor(40, 40, 40, 255));
 
-        using var cropped = source.EntropyCrop();
+        using var cropped = source.Pipe().EntropyCrop().ToImage();
 
         cropped.Width.ShouldBe(1);
         cropped.Height.ShouldBe(1);
@@ -128,8 +128,8 @@ public class GeometryExtraTests
     public void EntropyCrop_RejectsIllegalThreshold()
     {
         using var source = Indexed(4, 4);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.EntropyCrop(-0.1f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.EntropyCrop(1.1f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().EntropyCrop(-0.1f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().EntropyCrop(1.1f).ToImage());
     }
 
     [Fact]
@@ -159,11 +159,11 @@ public class GeometryExtraTests
     public void Warp_IdentityMappingReproducesTheSource()
     {
         using var source = Indexed(4, 4);
-        using var warped = source.Warp(4, 4, (float x, float y, out float sx, out float sy) =>
+        using var warped = source.Pipe().Warp(4, 4, (float x, float y, out float sx, out float sy) =>
         {
             sx = x;
             sy = y;
-        });
+        }).ToImage();
 
         warped.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -172,11 +172,11 @@ public class GeometryExtraTests
     public void Warp_OutsideTheSourceIsBackground()
     {
         using var source = Indexed(4, 4);
-        using var warped = source.Warp(8, 8, (float x, float y, out float sx, out float sy) =>
+        using var warped = source.Pipe().Warp(8, 8, (float x, float y, out float sx, out float sy) =>
         {
             sx = x - 4f;
             sy = y - 4f;
-        }, background: new RgbaColor(10, 20, 30, 255));
+        }, background: new RgbaColor(10, 20, 30, 255)).ToImage();
 
         var span = warped.WritablePixels;
         span[0].ShouldBe((byte)10);       // top-left lands outside

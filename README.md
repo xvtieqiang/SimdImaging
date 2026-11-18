@@ -54,11 +54,11 @@ bash tests/SimdImaging.AotSmoke/run.sh
 using SimdImaging;
 
 using var photo = Image.Load("photo.jpg");   // 位深跟随源：8 → Rgba8，16 → Rgba16，float → Rgba32F
-using var small = photo.Resize(800, 600);    // 默认 bicubic；返回新图，原图不动
+using var small = photo.Pipe().Resize(800, 600).ToImage();   // 默认 bicubic；返回新图，原图不动
 Image.Save(small, "out.png");                // 格式由扩展名决定
 ```
 
-每个算子都是 `Image` 上的实例方法，**返回新图**，原图不动。
+算子只有一个入口：`image.Pipe()`。单步也要 `Pipe().ToImage()`——**只有一条路，没有第二条更慢的**。
 
 ### 一串算子
 

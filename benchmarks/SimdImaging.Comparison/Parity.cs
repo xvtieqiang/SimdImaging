@@ -78,15 +78,15 @@ internal static class Parity
         report.Line();
         var robustness = new (string Name, Action Ours, Action Theirs)[]
         {
-            ("BoxBlur(-1)", () => { using var r = ours.BoxBlur(-1); },
+            ("BoxBlur(-1)", () => { using var r = ours.Pipe().BoxBlur(-1).ToImage(); },
                 () => { using var r = theirs.Clone(x => x.BoxBlur(-1)); }),
-            ("GaussianBlur(NaN)", () => { using var r = ours.GaussianBlur(float.NaN); },
+            ("GaussianBlur(NaN)", () => { using var r = ours.Pipe().GaussianBlur(float.NaN).ToImage(); },
                 () => { using var r = theirs.Clone(x => x.GaussianBlur(float.NaN)); }),
-            ("Brightness(NaN)", () => { using var r = ours.Brightness(float.NaN); },
+            ("Brightness(NaN)", () => { using var r = ours.Pipe().Brightness(float.NaN).ToImage(); },
                 () => { using var r = theirs.Clone(x => x.Brightness(float.NaN)); }),
-            ("Resize(0,0)", () => { using var r = ours.Resize(0, 0); },
+            ("Resize(0,0)", () => { using var r = ours.Pipe().Resize(0, 0).ToImage(); },
                 () => { using var r = theirs.Clone(x => x.Resize(0, 0)); }),
-            ("Crop(0x0)", () => { using var r = ours.Crop(new PixelRect(0, 0, 0, 0)); },
+            ("Crop(0x0)", () => { using var r = ours.Pipe().Crop(new PixelRect(0, 0, 0, 0)).ToImage(); },
                 () => { using var r = theirs.Clone(x => x.Crop(new Rectangle(0, 0, 0, 0))); }),
         };
         var robustRows = new List<string[]>();
@@ -126,7 +126,7 @@ internal static class Parity
         report.Line();
         try
         {
-            using var qOurs = ours.Quantize(64, SimdImaging.Processing.Quantizer.Wu);
+            using var qOurs = ours.Pipe().Quantize(64, SimdImaging.Processing.Quantizer.Wu).ToImage();
             using var qTheirs = theirs.Clone(x => x.Quantize(
                 new SixLabors.ImageSharp.Processing.Processors.Quantization.WuQuantizer(
                     new SixLabors.ImageSharp.Processing.Processors.Quantization.QuantizerOptions

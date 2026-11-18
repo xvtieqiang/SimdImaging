@@ -39,7 +39,7 @@ public class PixelateTests
         using var image = SimdImaging.Image.Create(width, height, WorkingFormat.Rgba8);
         source.AsSpan().CopyTo(image.WritablePixels);
 
-        using var pixelated = image.Pixelate(blockSize);
+        using var pixelated = image.Pipe().Pixelate(blockSize).ToImage();
         Assert.Equal(expected, pixelated.WritablePixels.ToArray());
     }
 
@@ -136,7 +136,7 @@ public class PixelateTests
             pixels[i + 3] = 128;
         }
 
-        using var pixelated = image.Pixelate(4);
+        using var pixelated = image.Pipe().Pixelate(4).ToImage();
 
         var result = pixelated.WritablePixels;
         for (var i = 0; i < result.Length; i += 4)

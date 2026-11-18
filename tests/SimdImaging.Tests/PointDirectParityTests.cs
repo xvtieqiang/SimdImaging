@@ -34,11 +34,11 @@ public class PointDirectParityTests
 
     private static Image Direct(Image source, string id) => id switch
     {
-        "invert" => source.Invert(),
-        "brightness" => source.Brightness(0.07f),
-        "contrast" => source.Contrast(1.23f),
-        "gamma" => source.Gamma(0.85f),
-        "posterize" => source.Posterize(6),
+        "invert" => source.Pipe().Invert().ToImage(),
+        "brightness" => source.Pipe().Brightness(0.07f).ToImage(),
+        "contrast" => source.Pipe().Contrast(1.23f).ToImage(),
+        "gamma" => source.Pipe().Gamma(0.85f).ToImage(),
+        "posterize" => source.Pipe().Posterize(6).ToImage(),
         _ => throw new ArgumentOutOfRangeException(nameof(id), id, "Unknown operator."),
     };
 

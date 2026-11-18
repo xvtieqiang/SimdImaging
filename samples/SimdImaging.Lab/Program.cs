@@ -660,7 +660,7 @@ static byte[] EncodeView(PixelView view, bool snapshot = false)
         return OurImage.Encode(copy, Sdcb.SimdCodecs.Abstractions.ImageFormat.Png);
 
     var height = Math.Max(1, (int)Math.Round(view.Height * (SnapshotMaxWidth / (double)view.Width)));
-    using var scaled = copy.Resize(SnapshotMaxWidth, height, Resampler.Bilinear);
+    using var scaled = copy.Pipe().Resize(SnapshotMaxWidth, height, Resampler.Bilinear).ToImage();
     return OurImage.Encode(scaled, Sdcb.SimdCodecs.Abstractions.ImageFormat.Png);
 }
 

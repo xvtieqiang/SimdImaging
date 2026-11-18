@@ -58,43 +58,43 @@ var calibrationStart = Calibration.Measure(iterations);
 
 Measure("resize 4K->1080p bicubic", () =>
 {
-    using var result = source.Resize(1920, 1080, Resampler.Bicubic);
+    using var result = source.Pipe().Resize(1920, 1080, Resampler.Bicubic).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("resize 4K->1080p lanczos3", () =>
 {
-    using var result = source.Resize(1920, 1080, Resampler.Lanczos3);
+    using var result = source.Pipe().Resize(1920, 1080, Resampler.Lanczos3).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("crop 1000x1000", () =>
 {
-    using var result = source.Crop(new Sdcb.SimdCodecs.Abstractions.PixelRect(100, 100, 1000, 1000));
+    using var result = source.Pipe().Crop(new Sdcb.SimdCodecs.Abstractions.PixelRect(100, 100, 1000, 1000)).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("quantize 4K -> 64 colours", () =>
 {
-    using var result = source.Quantize(64);
+    using var result = source.Pipe().Quantize(64).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("quantize 4K -> 64 (wu)", () =>
 {
-    using var result = source.Quantize(64, SimdImaging.Processing.Quantizer.Wu);
+    using var result = source.Pipe().Quantize(64, SimdImaging.Processing.Quantizer.Wu).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("quantize 4K -> 64 (octree)", () =>
 {
-    using var result = source.Quantize(64, SimdImaging.Processing.Quantizer.Octree);
+    using var result = source.Pipe().Quantize(64, SimdImaging.Processing.Quantizer.Octree).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("reduce colors 4K -> 64 dithered", () =>
 {
-    using var result = source.ReduceColors(64, SimdImaging.Processing.Quantizer.Octree);
+    using var result = source.Pipe().ReduceColors(64, SimdImaging.Processing.Quantizer.Octree).ToImage();
     return result.Width * result.Height;
 });
 
@@ -120,40 +120,40 @@ Measure("clip 4K ellipse path (aa)", () =>
 
 Measure("oil paint 4K r=2", () =>
 {
-    using var result = source.OilPaint(2, 20);
+    using var result = source.Pipe().OilPaint(2, 20).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("guided filter 4K r=4", () =>
 {
-    using var result = source.GuidedFilter(4, 1e-4f);
+    using var result = source.Pipe().GuidedFilter(4, 1e-4f).ToImage();
     return result.Width * result.Height;
 });
 
 // Cross-guided: four box passes per channel instead of two plus the cross product, so the price of an
 // external guide is visible next to the line above. The guide is a blurred copy, i.e. a realistic one.
-using var guideImage = source.GaussianBlur(3f);
+using var guideImage = source.Pipe().GaussianBlur(3f).ToImage();
 Measure("guided.cross 4K r=4", () =>
 {
-    using var result = source.GuidedFilter(guideImage, 4, 1e-4f);
+    using var result = source.Pipe().GuidedFilter(guideImage, 4, 1e-4f).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("gaussian blur 4K sigma=3", () =>
 {
-    using var result = source.GaussianBlur(3f);
+    using var result = source.Pipe().GaussianBlur(3f).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("chroma 4:2:0 4K", () =>
 {
-    using var result = source.ChromaResample(SimdImaging.Processing.ChromaSubsampling.Yuv420);
+    using var result = source.Pipe().ChromaResample(SimdImaging.Processing.ChromaSubsampling.Yuv420).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("bilateral 4K r=2", () =>
 {
-    using var result = source.Bilateral(2, 0f, 0.1f);
+    using var result = source.Pipe().Bilateral(2, 0f, 0.1f).ToImage();
     return result.Width * result.Height;
 });
 
@@ -167,7 +167,7 @@ for (var y = 0; y < 1080; y++)
 
 Measure("dt 1080p 8px checker", () =>
 {
-    using var result = mask.DistanceTransform();
+    using var result = mask.Pipe().DistanceTransform().ToImage();
     return result.Width * result.Height;
 });
 
@@ -175,37 +175,37 @@ Measure("dt 1080p 8px checker", () =>
 // curve: the default radii (5.8 s measured) and the 21×21 / 5×5 quality setting (16.1 s measured).
 Measure("nlm 1080p S=3 P=1 h=0.1", () =>
 {
-    using var result = half.NonLocalMeans(3, 1, 0.1f);
+    using var result = half.Pipe().NonLocalMeans(3, 1, 0.1f).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("nlm 1080p S=5 P=2 h=0.1", () =>
 {
-    using var result = half.NonLocalMeans(5, 2, 0.1f);
+    using var result = half.Pipe().NonLocalMeans(5, 2, 0.1f).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("median 1080p 3x3", () =>
 {
-    using var result = half.Median(1);
+    using var result = half.Pipe().Median(1).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("median 1080p 5x5", () =>
 {
-    using var result = half.Median(2);
+    using var result = half.Pipe().Median(2).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("median 1080p 7x7", () =>
 {
-    using var result = half.Median(3);
+    using var result = half.Pipe().Median(3).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("median 1080p 9x9", () =>
 {
-    using var result = half.Median(4);
+    using var result = half.Pipe().Median(4).ToImage();
     return result.Width * result.Height;
 });
 
@@ -223,13 +223,13 @@ Measure("convolve 1080p 5x5 (plan)", () =>
 
 Measure("morph 1080p 3x3", () =>
 {
-    using var result = half.Morph(1, Morphology.Erode);
+    using var result = half.Pipe().Morph(1, Morphology.Erode).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("morph 1080p 15x15", () =>
 {
-    using var result = half.Morph(7, Morphology.Erode);
+    using var result = half.Pipe().Morph(7, Morphology.Erode).ToImage();
     return result.Width * result.Height;
 });
 
@@ -241,33 +241,33 @@ Measure("fusion 1080p x3", () =>
 
 Measure("dehaze 1080p r=7 refine=20", () =>
 {
-    using var result = half.Dehaze();
+    using var result = half.Pipe().Dehaze().ToImage();
     return result.Width * result.Height;
 });
 
 Measure("ll 1080p L=5 S=32", () =>
 {
-    using var result = half.LocalLaplacian();
+    using var result = half.Pipe().LocalLaplacian().ToImage();
     return result.Width * result.Height;
 });
 
 // Deconvolution: ten iterations, so the reported time is for the whole call, not one pass.
 Measure("rl 1080p sigma=1.5 it=10", () =>
 {
-    using var result = half.RichardsonLucy(1.5f, 10);
+    using var result = half.Pipe().RichardsonLucy(1.5f, 10).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("rl.motion 1080p len=15 it=10", () =>
 {
-    using var result = half.RichardsonLucyMotion(15, 25f, 10);
+    using var result = half.Pipe().RichardsonLucyMotion(15, 25f, 10).ToImage();
     return result.Width * result.Height;
 });
 
 // One energy + programme pass per seam; 50 columns is enough to read the per-seam cost off the total.
 Measure("seam 1080p remove 50 columns", () =>
 {
-    using var result = half.RemoveSeams(SeamAxis.Vertical, 50);
+    using var result = half.Pipe().RemoveSeams(SeamAxis.Vertical, 50).ToImage();
     return result.Width * result.Height;
 });
 
@@ -276,7 +276,7 @@ Measure("seam 1080p remove 50 columns", () =>
 var lutProfile = BuildLut16Profile(33);
 Measure("icc 1080p lut16 grid=33", () =>
 {
-    using var result = half.IccTransform(lutProfile);
+    using var result = half.Pipe().IccTransform(lutProfile).ToImage();
     return result.Width * result.Height;
 });
 
@@ -285,13 +285,13 @@ Measure("icc 1080p lut16 grid=33", () =>
 var tinyLut = BuildLut16Profile(2);
 Measure("icc 1080p lut16 grid=2", () =>
 {
-    using var result = half.IccTransform(tinyLut);
+    using var result = half.Pipe().IccTransform(tinyLut).ToImage();
     return result.Width * result.Height;
 });
 
 Measure("icc 1080p matrix/trc", () =>
 {
-    using var result = half.IccTransform(Sdcb.SimdCodecs.Color.Icc.IccProfiles.SRgbV4.Span);
+    using var result = half.Pipe().IccTransform(Sdcb.SimdCodecs.Color.Icc.IccProfiles.SRgbV4.Span).ToImage();
     return result.Width * result.Height;
 });
 
@@ -320,7 +320,7 @@ Measure("gainmap resize 1080p->720p", () =>
 // the byte budget is that this number stops growing; the point of the LRU is that it stops rebuilding.
 for (var i = 0; i < 40; i++)
 {
-    using var resized = half.Resize(480 + i * 7, 270 + i * 3, Resampler.Bicubic);
+    using var resized = half.Pipe().Resize(480 + i * 7, 270 + i * 3, Resampler.Bicubic).ToImage();
 }
 
 var distinct = MemoryBudget.Snapshot();
@@ -330,7 +330,7 @@ for (var round = 0; round < 4; round++)
 {
     for (var i = 0; i < 12; i++)
     {
-        using var resized = half.Resize(320 + i * 11, 180 + i * 7, Resampler.Bicubic);
+        using var resized = half.Pipe().Resize(320 + i * 11, 180 + i * 7, Resampler.Bicubic).ToImage();
     }
 }
 
@@ -353,20 +353,20 @@ if (includeSlow)
 {
     Measure("nlm 4K S=5 P=2 h=0.1", () =>
     {
-        using var result = source.NonLocalMeans(5, 2, 0.1f);
+        using var result = source.Pipe().NonLocalMeans(5, 2, 0.1f).ToImage();
         return result.Width * result.Height;
     });
 
     Measure("seam 4K remove 50 columns", () =>
     {
-        using var result = source.RemoveSeams(SeamAxis.Vertical, 50);
+        using var result = source.Pipe().RemoveSeams(SeamAxis.Vertical, 50).ToImage();
         return result.Width * result.Height;
     });
 }
 
 Measure("composite 1080p overlay", () =>
 {
-    using var result = source.Composite(overlay, 200, 200);
+    using var result = source.Pipe().Composite(overlay, 200, 200).ToImage();
     return result.Width * result.Height;
 });
 

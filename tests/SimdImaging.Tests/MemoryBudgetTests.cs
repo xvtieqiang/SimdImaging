@@ -144,18 +144,18 @@ public class MemoryBudgetTests : IDisposable
         for (var i = 0; i < pixels.Length; i++)
             pixels[i] = (byte)((i * 53 + 7) & 0xFF);
 
-        using var first = source.Resize(37, 23, Resampler.Bicubic);
+        using var first = source.Pipe().Resize(37, 23, Resampler.Bicubic).ToImage();
         var baseline = first.WritablePixels.ToArray();
 
         // Starve both caches: every rent allocates, every build recomputes.
         MemoryBudget.SetLimits(scratchRetainedBytes: 0, scratchBufferBytes: 0,
             weightCacheBytes: 0, weightCacheEntries: 1);
 
-        using var starvedImage = source.Resize(37, 23, Resampler.Bicubic);
+        using var starvedImage = source.Pipe().Resize(37, 23, Resampler.Bicubic).ToImage();
         starvedImage.WritablePixels.ToArray().ShouldBe(baseline);
 
         MemoryBudget.ResetForTests();
-        using var restored = source.Resize(37, 23, Resampler.Bicubic);
+        using var restored = source.Pipe().Resize(37, 23, Resampler.Bicubic).ToImage();
         restored.WritablePixels.ToArray().ShouldBe(baseline);
     }
 }

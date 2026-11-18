@@ -29,7 +29,7 @@ public class SampleOptionsContractTests
         using var image = Image.Create(Width, Height, format);
         var expected = Fill(image, format);
 
-        using var warped = image.WarpWithOptions(Width, Height, Identity, Resampler.Bilinear, default);
+        using var warped = image.Pipe().WarpWithOptions(Width, Height, Identity, Resampler.Bilinear, default).ToImage();
 
         warped.WritablePixels.ToArray().ShouldBe(expected);
     }
@@ -45,8 +45,8 @@ public class SampleOptionsContractTests
         using var image = Image.Create(Width, Height, WorkingFormat.Rgba8);
         Fill(image, WorkingFormat.Rgba8);
 
-        using var warped = image.WarpWithOptions(Width, Height, Identity, resampler,
-            new SampleOptions { Edge = EdgeMode.Background });
+        using var warped = image.Pipe().WarpWithOptions(Width, Height, Identity, resampler,
+            new SampleOptions { Edge = EdgeMode.Background }).ToImage();
 
         warped.WritablePixels.Length.ShouldBe(Width * Height * 4);
         // Identity must not depend on which reconstruction kernel was selected.
@@ -68,9 +68,9 @@ public class SampleOptionsContractTests
         pixels[7] = 255;
         PixelWarp midpoint = (float _, float y, out float sx, out float sy) => { sx = 1f; sy = y; };
 
-        using var encoded = image.WarpWithOptions(1, 1, midpoint, Resampler.Bilinear, default);
-        using var linear = image.WarpWithOptions(1, 1, midpoint, Resampler.Bilinear,
-            new SampleOptions { Domain = SampleDomain.LinearLight });
+        using var encoded = image.Pipe().WarpWithOptions(1, 1, midpoint, Resampler.Bilinear, default).ToImage();
+        using var linear = image.Pipe().WarpWithOptions(1, 1, midpoint, Resampler.Bilinear,
+            new SampleOptions { Domain = SampleDomain.LinearLight }).ToImage();
 
         encoded.WritablePixels[0].ShouldBeInRange((byte)126, (byte)129);
         (linear.WritablePixels[0] > encoded.WritablePixels[0]).ShouldBeTrue(
@@ -88,9 +88,9 @@ public class SampleOptionsContractTests
         pixels[7] = 0;
         PixelWarp midpoint = (float _, float y, out float sx, out float sy) => { sx = 1f; sy = y; };
 
-        using var straight = image.WarpWithOptions(1, 1, midpoint, Resampler.Bilinear, default);
-        using var premultiplied = image.WarpWithOptions(1, 1, midpoint, Resampler.Bilinear,
-            new SampleOptions { Alpha = AlphaMode.Premultiplied });
+        using var straight = image.Pipe().WarpWithOptions(1, 1, midpoint, Resampler.Bilinear, default).ToImage();
+        using var premultiplied = image.Pipe().WarpWithOptions(1, 1, midpoint, Resampler.Bilinear,
+            new SampleOptions { Alpha = AlphaMode.Premultiplied }).ToImage();
 
         straight.WritablePixels[0].ShouldBeInRange((byte)99, (byte)101);
         (premultiplied.WritablePixels[0] > straight.WritablePixels[0]).ShouldBeTrue(
@@ -107,14 +107,14 @@ public class SampleOptionsContractTests
         floats[2] = 0.5f;
         floats[3] = 1f;
 
-        using (var clamped = image.WarpWithOptions(1, 1, Identity, Resampler.Bilinear,
-            new SampleOptions { OutOfGamut = OutOfGamutPolicy.Clamp }))
+        using (var clamped = image.Pipe().WarpWithOptions(1, 1, Identity, Resampler.Bilinear,
+            new SampleOptions { OutOfGamut = OutOfGamutPolicy.Clamp }).ToImage())
         {
             MemoryMarshal.Cast<byte, float>(clamped.WritablePixels)[0].ShouldBe(1f);
         }
 
-        Should.Throw<InvalidDataException>(() => image.WarpWithOptions(1, 1, Identity,
-            Resampler.Bilinear, new SampleOptions { OutOfGamut = OutOfGamutPolicy.Throw }));
+        Should.Throw<InvalidDataException>(() => image.Pipe().WarpWithOptions(1, 1, Identity,
+            Resampler.Bilinear, new SampleOptions { OutOfGamut = OutOfGamutPolicy.Throw }).ToImage());
     }
 
     [Fact]

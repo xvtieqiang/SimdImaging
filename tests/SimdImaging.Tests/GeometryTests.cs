@@ -35,7 +35,7 @@ public class GeometryTests
     public void Crop_ReturnsTheRequestedRegion()
     {
         using var source = Pattern(8, 6);
-        using var cropped = source.Crop(new PixelRect(2, 1, 3, 4));
+        using var cropped = source.Pipe().Crop(new PixelRect(2, 1, 3, 4)).ToImage();
 
         cropped.Width.ShouldBe(3);
         cropped.Height.ShouldBe(4);
@@ -47,7 +47,7 @@ public class GeometryTests
     public void FlipHorizontal_TwiceIsIdentity()
     {
         using var source = Pattern(7, 5);
-        using var twice = source.FlipHorizontal().FlipHorizontal();
+        using var twice = source.Pipe().FlipHorizontal().ToImage().Pipe().FlipHorizontal().ToImage();
         twice.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
 
@@ -55,7 +55,7 @@ public class GeometryTests
     public void Rotate90_FourTimesIsIdentity()
     {
         using var source = Pattern(7, 5);
-        using var rotated = source.Rotate90().Rotate90().Rotate90().Rotate90();
+        using var rotated = source.Pipe().Rotate90().Rotate90().Rotate90().Rotate90().ToImage();
         rotated.Width.ShouldBe(7);
         rotated.Height.ShouldBe(5);
         rotated.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
@@ -67,7 +67,7 @@ public class GeometryTests
     public void Rotate180_MatchesTheScalarReference(int width, int height)
     {
         using var source = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
-        using var rotated = source.Rotate180();
+        using var rotated = source.Pipe().Rotate180().ToImage();
 
         var from = source.WritablePixels;
         var to = rotated.WritablePixels;
@@ -80,7 +80,7 @@ public class GeometryTests
                 to[targetOffset + c].ShouldBe(from[sourceOffset + c]);
         }
 
-        using var twice = rotated.Rotate180();
+        using var twice = rotated.Pipe().Rotate180().ToImage();
         twice.WritablePixels.ToArray().ShouldBe(from.ToArray());
     }
 
@@ -88,7 +88,7 @@ public class GeometryTests
     public void Rotate180_WorksOnSixteenBit()
     {
         using var source = TestImages.Gradient(33, 17, WorkingFormat.Rgba16);
-        using var twice = source.Rotate180().Rotate180();
+        using var twice = source.Pipe().Rotate180().ToImage().Pipe().Rotate180().ToImage();
         twice.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
 
@@ -96,7 +96,7 @@ public class GeometryTests
     public void Rotate90_ClockwiseMovesTopLeftToTopRight()
     {
         using var source = Pattern(3, 2);
-        using var rotated = source.Rotate90();
+        using var rotated = source.Pipe().Rotate90().ToImage();
 
         rotated.Width.ShouldBe(2);
         rotated.Height.ShouldBe(3);
@@ -122,7 +122,7 @@ public class GeometryTests
             source.WritablePixels[i + 3] = 255;
         }
 
-        using var resized = source.Resize(5, 3, resampler);
+        using var resized = source.Pipe().Resize(5, 3, resampler).ToImage();
 
         var span = resized.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -149,7 +149,7 @@ public class GeometryTests
             }
         }
 
-        using var resized = source.Resize(4, 4, Resampler.Box);
+        using var resized = source.Pipe().Resize(4, 4, Resampler.Box).ToImage();
 
         var corner = PixelAt(resized, 0, 0);
         corner[3].ShouldBe((byte)0);
@@ -170,7 +170,7 @@ public class GeometryTests
         overlay.WritablePixels[0] = 255;             // 50% red
         overlay.WritablePixels[3] = 128;
 
-        using var composed = background.Composite(overlay, 0, 0);
+        using var composed = background.Pipe().Composite(overlay, 0, 0).ToImage();
         var pixel = PixelAt(composed, 0, 0);
 
         ((int)pixel[0]).ShouldBeInRange(127, 129);
@@ -187,7 +187,7 @@ public class GeometryTests
         for (var i = 3; i < span.Length; i += 4)
             span[i] = (byte)(128 + i * 7 % 128);
 
-        using var roundTripped = source.Premultiply().Unpremultiply();
+        using var roundTripped = source.Pipe().Premultiply().Unpremultiply().ToImage();
 
         var before = source.WritablePixels;
         var after = roundTripped.WritablePixels;
@@ -199,7 +199,7 @@ public class GeometryTests
     public void Pad_FillsTheBorderAndKeepsTheCentre()
     {
         using var source = Pattern(2, 2);
-        using var padded = source.Pad(1, RgbaColor.Black);
+        using var padded = source.Pipe().Pad(1, 1, 1, 1, RgbaColor.Black).ToImage();
 
         padded.Width.ShouldBe(4);
         padded.Height.ShouldBe(4);
@@ -214,6 +214,6 @@ public class GeometryTests
         using var background = Pattern(4, 4);
         using var overlay = Pattern(3, 3);
 
-        Should.Throw<ArgumentException>(() => background.Composite(overlay, 2, 2));
+        Should.Throw<ArgumentException>(() => background.Pipe().Composite(overlay, 2, 2).ToImage());
     }
 }

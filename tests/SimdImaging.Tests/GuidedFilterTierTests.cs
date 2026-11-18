@@ -15,7 +15,7 @@ public class GuidedFilterTierTests
     public void CrossGuided_VectorAndScalarAgreeExactly(int width, int height, int radius)
     {
         using var source = Pattern(width, height);
-        using var guide = source.GaussianBlur(1f);
+        using var guide = source.Pipe().GaussianBlur(1f).ToImage();
 
         var vector = WithScalar(false, () => Cross(source, guide, radius));
         var scalar = WithScalar(true, () => Cross(source, guide, radius));
@@ -43,7 +43,7 @@ public class GuidedFilterTierTests
         using var source = Image.Create(4096, 3, WorkingFormat.Rgba8);
         source.WritablePixels.Fill(255);
 
-        using var filtered = source.GuidedFilter(4, 1e-4f);
+        using var filtered = source.Pipe().GuidedFilter(4, 1e-4f).ToImage();
         foreach (var value in filtered.WritablePixels)
             value.ShouldBe((byte)255);
     }
@@ -69,13 +69,13 @@ public class GuidedFilterTierTests
 
     private static byte[] Cross(Image source, Image guide, int radius)
     {
-        using var result = source.GuidedFilter(guide, radius, 1e-4f);
+        using var result = source.Pipe().GuidedFilter(guide, radius, 1e-4f).ToImage();
         return result.WritablePixels.ToArray();
     }
 
     private static byte[] Self(Image source)
     {
-        using var result = source.GuidedFilter(3, 1e-4f);
+        using var result = source.Pipe().GuidedFilter(3, 1e-4f).ToImage();
         return result.WritablePixels.ToArray();
     }
 

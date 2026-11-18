@@ -35,8 +35,8 @@ public class ConvolveTests
     {
         using var image = Pattern();
 
-        using var fast = image.Convolve3x3(Kernel);
-        using var general = image.Convolve(Kernel, 1, BorderMode.Clamp);
+        using var fast = image.Pipe().Convolve3x3(Kernel).ToImage();
+        using var general = image.Pipe().Convolve(Kernel, 1, BorderMode.Clamp).ToImage();
 
         general.WritablePixels.ToArray().ShouldBe(fast.WritablePixels.ToArray());
     }
@@ -51,7 +51,7 @@ public class ConvolveTests
             span[i] = (byte)(i % 251);
 
         var before = span.ToArray();
-        using var blurred = image.Convolve(Kernel, 1);
+        using var blurred = image.Pipe().Convolve(Kernel, 1).ToImage();
 
         var after = blurred.WritablePixels;
         for (var i = 3; i < after.Length; i += 4)
@@ -64,8 +64,8 @@ public class ConvolveTests
     {
         using var image = Pattern();
 
-        using var fast = image.Median3x3();
-        using var general = image.Median(1);
+        using var fast = image.Pipe().Median3x3().ToImage();
+        using var general = image.Pipe().Median(1).ToImage();
 
         general.WritablePixels.ToArray().ShouldBe(fast.WritablePixels.ToArray());
     }
@@ -96,10 +96,10 @@ public class ConvolveTests
 
         var centre = ((7 * 15) + 7) * 4;
 
-        using var small = image.Median(1);
+        using var small = image.Pipe().Median(1).ToImage();
         small.WritablePixels[centre].ShouldBeGreaterThan((byte)60, "a 3×3 window must keep a five-pixel cross");
 
-        using var large = image.Median(2);
+        using var large = image.Pipe().Median(2).ToImage();
         large.WritablePixels[centre].ShouldBe((byte)60, "a 5×5 window must remove it");
     }
 
@@ -118,7 +118,7 @@ public class ConvolveTests
         for (var i = 0; i < span.Length; i++)
             span[i] = (byte)random.Next(256);
 
-        using var fast = image.Median(radius);
+        using var fast = image.Pipe().Median(radius).ToImage();
 
         // Naive reference: copy the window, sort, take the middle; edges replicate.
         var reference = new byte[span.Length];
@@ -160,7 +160,7 @@ public class ConvolveTests
     public void BandedMedian_MatchesWholeImage(int radius, int bandRows)
     {
         using var image = Pattern();
-        using var whole = image.Median(radius);
+        using var whole = image.Pipe().Median(radius).ToImage();
 
         var plan = new ProcessingPlan { BandRows = bandRows }.Add(PlanOps.Median(radius));
         using var banded = plan.ExecuteWithOptions(image[0].Pixels.View,
@@ -263,7 +263,7 @@ public class ConvolveTests
     public void MedianAboveRadius8_IsRefused()
     {
         using var image = Pattern();
-        Should.Throw<ArgumentOutOfRangeException>(() => image.Median(9));
+        Should.Throw<ArgumentOutOfRangeException>(() => image.Pipe().Median(9).ToImage());
     }
 
     /// <summary>
@@ -293,7 +293,7 @@ public class ConvolveTests
 
         int Left(BorderMode border)
         {
-            using var result = image.Convolve(box, 1, border);
+            using var result = image.Pipe().Convolve(box, 1, border).ToImage();
             return result.WritablePixels[((4 * 9) + 0) * 4];
         }
 

@@ -68,7 +68,7 @@ public class FloodPerspectiveTests
         using var source = Solid(5, 4, 77);
         float[] identity = [1, 0, 0, 0, 1, 0, 0, 0];
 
-        using var result = source.Perspective(identity, 5, 4);
+        using var result = source.Pipe().Perspective(identity, 5, 4).ToImage();
 
         result.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -81,7 +81,7 @@ public class FloodPerspectiveTests
         source.WritablePixels[3] = 255;
 
         float[] shiftRight = [1, 0, 2, 0, 1, 0, 0, 0];
-        using var result = source.Perspective(shiftRight, 4, 1);
+        using var result = source.Pipe().Perspective(shiftRight, 4, 1).ToImage();
 
         At(result, 2, 0).ShouldBe((byte)255);
         At(result, 0, 0).ShouldBe((byte)0);
@@ -91,8 +91,8 @@ public class FloodPerspectiveTests
     public void Perspective_RejectsBadInput()
     {
         using var source = Solid(3, 3, 10);
-        Should.Throw<ArgumentException>(() => source.Perspective(new float[7], 3, 3));
-        Should.Throw<ArgumentException>(() => source.Perspective(new float[8], 3, 3));   // all zeros = singular
+        Should.Throw<ArgumentException>(() => source.Pipe().Perspective(new float[7], 3, 3).ToImage());
+        Should.Throw<ArgumentException>(() => source.Pipe().Perspective(new float[8], 3, 3).ToImage());   // all zeros = singular
     }
 
     [Fact]
@@ -119,8 +119,8 @@ public class FloodPerspectiveTests
             new RgbaColor(255, 255, 255, 255),
         });
 
-        using var plain = source.MapToPalette(blackAndWhite);
-        using var dithered = source.DitherToPalette(blackAndWhite);
+        using var plain = source.Pipe().MapToPalette(blackAndWhite).ToImage();
+        using var dithered = source.Pipe().DitherToPalette(blackAndWhite).ToImage();
 
         var plainValues = new HashSet<byte>();
         for (var x = 0; x < 8; x++)

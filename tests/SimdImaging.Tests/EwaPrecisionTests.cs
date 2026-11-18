@@ -37,8 +37,8 @@ public class EwaPrecisionTests
 
         // A translation of -1 steers the destination centre (areal 0.5) onto the middle pixel
         // (areal 1.5), where the elliptical window is symmetric around it.
-        using var result = source.AffineWithOptions(AffineMatrix.Translation(-1f, 0f), 1, 1,
-            Resampler.Bilinear, new SampleOptions { AaMode = SampleAaMode.Elliptical });
+        using var result = source.Pipe().AffineWithOptions(AffineMatrix.Translation(-1f, 0f), 1, 1,
+            Resampler.Bilinear, new SampleOptions { AaMode = SampleAaMode.Elliptical }).ToImage();
 
         result.WritablePixels.Slice(0, 4).ToArray().ShouldBe(new byte[] { 128, 128, 128, 255 });
     }
@@ -63,9 +63,9 @@ public class EwaPrecisionTests
         source.WritablePixels[6] = 255;
         source.WritablePixels[7] = 255;
 
-        using var result = source.AffineWithOptions(AffineMatrix.Translation(0.5f - centre, 0f), 1, 1,
+        using var result = source.Pipe().AffineWithOptions(AffineMatrix.Translation(0.5f - centre, 0f), 1, 1,
             Resampler.Bilinear,
-            new SampleOptions { AaMode = SampleAaMode.Elliptical, Domain = SampleDomain.LinearLight });
+            new SampleOptions { AaMode = SampleAaMode.Elliptical, Domain = SampleDomain.LinearLight }).ToImage();
 
         var expected = IndependentEllipticalByte(centre);
         result.WritablePixels[0].ShouldBe(expected,
@@ -95,9 +95,9 @@ public class EwaPrecisionTests
         }
 
         var forward = AffineMatrix.Scale(0.25f, 0.25f);
-        using var ewa = source.AffineWithOptions(forward, 4, 4, Resampler.Bilinear,
-            new SampleOptions { AaMode = SampleAaMode.Elliptical });
-        using var plain = source.Affine(forward, 4, 4);
+        using var ewa = source.Pipe().AffineWithOptions(forward, 4, 4, Resampler.Bilinear,
+            new SampleOptions { AaMode = SampleAaMode.Elliptical }).ToImage();
+        using var plain = source.Pipe().Affine(forward, 4, 4).ToImage();
 
         var ewaEnergy = 0;
         for (var y = 0; y < 4; y++)
@@ -205,9 +205,9 @@ public class EwaPrecisionTests
         using var source = Image.Create(4, 4, WorkingFormat.Rgba8);
         Fill(source);
 
-        Should.Throw<NotSupportedException>(() => source.WarpWithOptions(4, 4,
+        Should.Throw<NotSupportedException>(() => source.Pipe().WarpWithOptions(4, 4,
             (float x, float y, out float sx, out float sy) => { sx = x; sy = y; },
-            Resampler.Bilinear, new SampleOptions { AaMode = SampleAaMode.Elliptical }));
+            Resampler.Bilinear, new SampleOptions { AaMode = SampleAaMode.Elliptical }).ToImage());
     }
 
     [Fact]
@@ -219,8 +219,8 @@ public class EwaPrecisionTests
         Fill(source);
 
         var homography = new float[] { 1f, 0f, 0f, 0f, 1f, 0f, 0.6f, 0f };
-        using var warped = source.PerspectiveWithOptions(homography, 8, 5, Resampler.Bilinear,
-            new SampleOptions { AaMode = SampleAaMode.Elliptical });
+        using var warped = source.Pipe().PerspectiveWithOptions(homography, 8, 5, Resampler.Bilinear,
+            new SampleOptions { AaMode = SampleAaMode.Elliptical }).ToImage();
 
         warped.WritablePixels.Length.ShouldBe(8 * 5 * 16);
         var floats = MemoryMarshal.Cast<byte, float>(warped.WritablePixels);
@@ -238,8 +238,8 @@ public class EwaPrecisionTests
         floats[2] = 0.5f;
         floats[3] = 1f;
 
-        using var result = source.AffineWithOptions(AffineMatrix.Identity, 1, 1, Resampler.Bilinear,
-            new SampleOptions { AaMode = SampleAaMode.Elliptical, Domain = SampleDomain.LinearLight });
+        using var result = source.Pipe().AffineWithOptions(AffineMatrix.Identity, 1, 1, Resampler.Bilinear,
+            new SampleOptions { AaMode = SampleAaMode.Elliptical, Domain = SampleDomain.LinearLight }).ToImage();
 
         var outFloats = MemoryMarshal.Cast<byte, float>(result.WritablePixels);
         // The footprint is a single pixel (1×1 source, identity): the value must survive the
@@ -268,9 +268,9 @@ public class EwaPrecisionTests
         Convert.FromHexString(root.GetProperty("input").GetProperty("bytes").GetString()!)
             .CopyTo(source.WritablePixels);
 
-        using var result = source.AffineWithOptions(AffineMatrix.Scale(forwardScale, forwardScale),
+        using var result = source.Pipe().AffineWithOptions(AffineMatrix.Scale(forwardScale, forwardScale),
             1, 1, Resampler.Bilinear,
-            new SampleOptions { AaMode = SampleAaMode.Elliptical });
+            new SampleOptions { AaMode = SampleAaMode.Elliptical }).ToImage();
 
         result.WritablePixels.ToArray().ShouldBe(expectedBytes, caseId);
     }

@@ -44,17 +44,17 @@ internal static class Fusion
             using var source = Fixture.Ours(data, w, h);
 
             var rows = new List<string[]>();
-            rows.Add(Measure(source, "点算子 ×1", PointPlan(1), pool => source.Apply(PointPlan(1), pool), pool => source.Brightness(0.05f, pool)));
+            rows.Add(Measure(source, "点算子 ×1", PointPlan(1), pool => source.Apply(PointPlan(1), pool), pool => source.Pipe().Brightness(0.05f).ToImage()));
             rows.Add(Measure(source, "点算子 ×3", PointPlan(3), pool => source.Apply(PointPlan(3), pool),
-                pool => { using var a = source.Brightness(0.05f, pool); using var b = a.Contrast(1.1f, pool); return b.Invert(pool); }));
+                pool => { using var a = source.Pipe().Brightness(0.05f).ToImage(); using var b = a.Pipe().Contrast(1.1f).ToImage(); return b.Pipe(pool).Invert().ToImage(); }));
             rows.Add(Measure(source, "点算子 ×5", PointPlan(5), pool => source.Apply(PointPlan(5), pool),
                 pool =>
                 {
-                    using var a = source.Brightness(0.05f, pool);
-                    using var b = a.Contrast(1.1f, pool);
-                    using var c = b.Invert(pool);
-                    using var d = c.Brightness(0.05f, pool);
-                    return d.Contrast(1.1f, pool);
+                    using var a = source.Pipe().Brightness(0.05f).ToImage();
+                    using var b = a.Pipe().Contrast(1.1f).ToImage();
+                    using var c = b.Pipe(pool).Invert().ToImage();
+                    using var d = c.Pipe().Brightness(0.05f).ToImage();
+                    return d.Pipe(pool).Contrast(1.1f).ToImage();
                 }));
 
             foreach (var sigma in new[] { 1f, 3f, 8f })
@@ -62,11 +62,49 @@ internal static class Fusion
                 var plan = BlurPlan(sigma);
                 rows.Add(Measure(source, $"模糊 σ={sigma} + 2 点", plan, pool => source.Apply(plan, pool), pool =>
                 {
-                    using var a = source.GaussianBlur(sigma, pool);
-                    using var b = a.Brightness(0.05f, pool);
-                    return b.Contrast(1.1f, pool);
+                    using var a = source.Pipe().GaussianBlur(sigma).ToImage();
+                    using var b = a.Pipe().Brightness(0.05f).ToImage();
+                    return b.Pipe().Contrast(1.1f).ToImage();
                 }));
             }
+
+            // The point chains above are the easy case: one pass, no halo. These add a convolution, a 3x3 family, a
+            // reversed order, and a deep chain, because a rule that only covers point steps would be a rule for the
+            // benchmark rather than for the library.
+            rows.Add(Measure(source, "点 ×2", new ProcessingPlan().Add(PlanOps.Brightness(0.05f)).Add(PlanOps.Contrast(1.1f)),
+                pool => source.Apply(new ProcessingPlan().Add(PlanOps.Brightness(0.05f)).Add(PlanOps.Contrast(1.1f)), pool),
+                pool => { using var a = source.Pipe().Brightness(0.05f).ToImage(); return a.Pipe(pool).Contrast(1.1f).ToImage(); }));
+
+            rows.Add(Measure(source, "3×3 ×2", new ProcessingPlan().Add(PlanOps.Emboss(0.6f)).Add(PlanOps.Sobel()),
+                pool => source.Apply(new ProcessingPlan().Add(PlanOps.Emboss(0.6f)).Add(PlanOps.Sobel()), pool),
+                pool => { using var a = source.Pipe().Emboss(0.6f).ToImage(); return a.Pipe(pool).Sobel().ToImage(); }));
+
+            rows.Add(Measure(source, "3×3 ×3",
+                new ProcessingPlan().Add(PlanOps.Sharpen(0.6f)).Add(PlanOps.Emboss(0.6f)).Add(PlanOps.Sobel()),
+                pool => source.Apply(new ProcessingPlan().Add(PlanOps.Sharpen(0.6f)).Add(PlanOps.Emboss(0.6f)).Add(PlanOps.Sobel()), pool),
+                pool =>
+                {
+                    using var a = source.Pipe().Sharpen(0.6f).ToImage();
+                    using var b = a.Pipe().Emboss(0.6f).ToImage();
+                    return b.Pipe(pool).Sobel().ToImage();
+                }));
+
+            rows.Add(Measure(source, "点 + 模糊 σ=3", new ProcessingPlan().Add(PlanOps.Brightness(0.05f)).Add(PlanOps.GaussianBlur(3f)),
+                pool => source.Apply(new ProcessingPlan().Add(PlanOps.Brightness(0.05f)).Add(PlanOps.GaussianBlur(3f)), pool),
+                pool => { using var a = source.Pipe().Brightness(0.05f).ToImage(); return a.Pipe(pool).GaussianBlur(3f).ToImage(); }));
+
+            rows.Add(Measure(source, "模糊 σ=3 + 3 点",
+                new ProcessingPlan().Add(PlanOps.GaussianBlur(3f)).Add(PlanOps.Brightness(0.05f))
+                    .Add(PlanOps.Contrast(1.1f)).Add(PlanOps.Invert()),
+                pool => source.Apply(new ProcessingPlan().Add(PlanOps.GaussianBlur(3f)).Add(PlanOps.Brightness(0.05f))
+                    .Add(PlanOps.Contrast(1.1f)).Add(PlanOps.Invert()), pool),
+                pool =>
+                {
+                    using var a = source.Pipe().GaussianBlur(3f).ToImage();
+                    using var b = a.Pipe().Brightness(0.05f).ToImage();
+                    using var c = b.Pipe().Contrast(1.1f).ToImage();
+                    return c.Pipe(pool).Invert().ToImage();
+                }));
 
             report.Heading(3, $"{w}×{h}");
             report.Table(

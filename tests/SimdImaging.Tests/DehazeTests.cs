@@ -22,7 +22,7 @@ public class DehazeTests
         using var scene = Scene();
         using var hazy = Veil(scene, transmission, 0.85f);
 
-        using var recovered = hazy.Dehaze(patchRadius: 3, omega: 1f, tMin: 0.1f, refineRadius: 0);
+        using var recovered = hazy.Pipe().Dehaze(patchRadius: 3, omega: 1f, tMin: 0.1f, refineRadius: 0).ToImage();
 
         // The recovered contrast is amplified by 1/t, so the prior's own bias is amplified with it: a thicker
         // veil is allowed a proportionally larger error rather than being held to the thin case.
@@ -35,7 +35,7 @@ public class DehazeTests
     public void ClearImage_IsLeftAlone()
     {
         using var scene = Scene();
-        using var recovered = scene.Dehaze(patchRadius: 3, omega: 0.95f, tMin: 0.1f, refineRadius: 0);
+        using var recovered = scene.Pipe().Dehaze(patchRadius: 3, omega: 0.95f, tMin: 0.1f, refineRadius: 0).ToImage();
 
         var error = MeanAbsoluteError(recovered, scene);
         error.ShouldBeLessThan(0.03, $"mean absolute error was {error:F4}");
@@ -48,7 +48,7 @@ public class DehazeTests
         using var scene = Scene();
         using var hazy = Veil(scene, 0.5f, 0.85f);
 
-        using var recovered = hazy.Dehaze(patchRadius: 3, omega: 1f, tMin: 0.1f, refineRadius: 6);
+        using var recovered = hazy.Pipe().Dehaze(patchRadius: 3, omega: 1f, tMin: 0.1f, refineRadius: 6).ToImage();
 
         var error = MeanAbsoluteError(recovered, scene);
         error.ShouldBeLessThan(0.05, $"mean absolute error was {error:F4}");
@@ -60,8 +60,8 @@ public class DehazeTests
     {
         using var hazy = Veil(Scene(), 0.5f, 0.85f);
 
-        using var first = hazy.Dehaze();
-        using var second = hazy.Dehaze();
+        using var first = hazy.Pipe().Dehaze().ToImage();
+        using var second = hazy.Pipe().Dehaze().ToImage();
 
         first.WritablePixels.ToArray().ShouldBe(second.WritablePixels.ToArray());
     }
@@ -75,7 +75,7 @@ public class DehazeTests
         for (var i = 3; i < span.Length; i += 4)
             span[i] = (byte)(i % 251);
 
-        using var recovered = scene.Dehaze();
+        using var recovered = scene.Pipe().Dehaze().ToImage();
 
         var before = scene.WritablePixels.ToArray();
         var after = recovered.WritablePixels.ToArray();
@@ -90,7 +90,7 @@ public class DehazeTests
         using var hazy = Veil(Scene(), 0.5f, 0.85f);
 
         using var piped = hazy.Pipe().Dehaze(3, 0.95f, 0.1f, 4).ToImage();
-        using var direct = hazy.Dehaze(3, 0.95f, 0.1f, 4);
+        using var direct = hazy.Pipe().Dehaze(3, 0.95f, 0.1f, 4).ToImage();
 
         piped.WritablePixels.ToArray().ShouldBe(direct.WritablePixels.ToArray());
     }
@@ -105,7 +105,7 @@ public class DehazeTests
         using var scene = SkyScene();
         var before = MeanLuma(scene);
 
-        using var recovered = scene.Dehaze(patchRadius: 7, omega: 0.95f, tMin: 0.1f, refineRadius: 20);
+        using var recovered = scene.Pipe().Dehaze(patchRadius: 7, omega: 0.95f, tMin: 0.1f, refineRadius: 20).ToImage();
 
         // The sky occupies the top half. Its mean must stay within a few levels of the input — with the sky guard
         // removed this rises by roughly a third, and the gradient in it is multiplied by ten.

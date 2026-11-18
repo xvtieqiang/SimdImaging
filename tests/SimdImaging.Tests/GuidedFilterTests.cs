@@ -144,8 +144,8 @@ public class GuidedFilterTests
         for (var i = 0; i < pixels.Length; i++)
             pixels[i] = (byte)((i * 37 + 11) & 0xFF);
 
-        using var self = image.GuidedFilter(3, 1e-4f);
-        using var cross = image.GuidedFilter(image, 3, 1e-4f);
+        using var self = image.Pipe().GuidedFilter(3, 1e-4f).ToImage();
+        using var cross = image.Pipe().GuidedFilter(image, 3, 1e-4f).ToImage();
 
         cross.WritablePixels.ToArray().ShouldBe(self.WritablePixels.ToArray());
     }
@@ -165,7 +165,7 @@ public class GuidedFilterTests
     {
         using var source = Image.Create(4, 4, WorkingFormat.Rgba8);
 
-        Should.Throw<ArgumentNullException>(() => source.GuidedFilter((Image)null!));
+        Should.Throw<ArgumentNullException>(() => source.Pipe().GuidedFilter((Image)null!).ToImage());
     }
 
     [Fact]
@@ -194,8 +194,8 @@ public class GuidedFilterTests
         for (var i = 0; i < flatPixels.Length; i++)
             flatPixels[i] = 128;
 
-        using var blurred = source.GuidedFilter(flat, 4, 1e-4f);
-        using var kept = source.GuidedFilter(source, 4, 1e-4f);
+        using var blurred = source.Pipe().GuidedFilter(flat, 4, 1e-4f).ToImage();
+        using var kept = source.Pipe().GuidedFilter(source, 4, 1e-4f).ToImage();
 
         var blurredPixels = blurred.WritablePixels;
         var keptPixels = kept.WritablePixels;

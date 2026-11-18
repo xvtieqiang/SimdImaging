@@ -80,16 +80,16 @@ public class RowBandTests
 
             // 4000×200 = 800 K pixels but only 200 rows: the old height-only rule left this on one thread.
             using var wide = Image.Create(4000, 200, WorkingFormat.Rgba8);
-            using var wideResult = wide.Invert();
+            using var wideResult = wide.Pipe().Invert().ToImage();
             RowParallel.LastWorkerCount.ShouldBeGreaterThan(1, "wide short images are enough work to parallelise");
             var parallelBytes = wideResult.WritablePixels.ToArray();
 
             using var small = Image.Create(64, 64, WorkingFormat.Rgba8);
-            using var smallResult = small.Invert();
+            using var smallResult = small.Pipe().Invert().ToImage();
             RowParallel.LastWorkerCount.ShouldBe(1, "tiny images must not pay for thread setup");
 
             RowParallel.DegreeOverride = 1;
-            using var singleResult = wide.Invert();
+            using var singleResult = wide.Pipe().Invert().ToImage();
             singleResult.WritablePixels.ToArray().AsSpan().SequenceEqual(parallelBytes)
                 .ShouldBeTrue("wide short image must be byte-identical at any worker count");
         }
@@ -113,11 +113,11 @@ public class RowBandTests
         // The resize targets are tall enough that the 512-row cap produces more than one band.
         var cases = new (string Name, Func<Image, Image> Run)[]
         {
-            ("GaussianBlur", i => i.GaussianBlur(3f)),
-            ("BoxBlur", i => i.BoxBlur(3)),
-            ("Resize bicubic", i => i.Resize(129, 1025, Resampler.Bicubic)),
-            ("Resize Lanczos3", i => i.Resize(129, 1025, Resampler.Lanczos3)),
-            ("Rotate90", i => i.Rotate90()),
+            ("GaussianBlur", i => i.Pipe().GaussianBlur(3f).ToImage()),
+            ("BoxBlur", i => i.Pipe().BoxBlur(3).ToImage()),
+            ("Resize bicubic", i => i.Pipe().Resize(129, 1025, Resampler.Bicubic).ToImage()),
+            ("Resize Lanczos3", i => i.Pipe().Resize(129, 1025, Resampler.Lanczos3).ToImage()),
+            ("Rotate90", i => i.Pipe().Rotate90().ToImage()),
         };
 
         try

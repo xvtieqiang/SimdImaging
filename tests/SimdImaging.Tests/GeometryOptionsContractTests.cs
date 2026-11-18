@@ -27,9 +27,9 @@ public class GeometryOptionsContractTests
     {
         using var source = Gradient(8, 5, format);
 
-        using var legacy = source.Affine(AffineMatrix.Translation(0.37f, 0.71f), 10, 6);
-        using var options = source.AffineWithOptions(AffineMatrix.Translation(0.37f, 0.71f), 10, 6,
-            Resampler.Bilinear, default);
+        using var legacy = source.Pipe().Affine(AffineMatrix.Translation(0.37f, 0.71f), 10, 6).ToImage();
+        using var options = source.Pipe().AffineWithOptions(AffineMatrix.Translation(0.37f, 0.71f), 10, 6,
+            Resampler.Bilinear, default).ToImage();
 
         legacy.WritablePixels.ToArray().ShouldBe(options.WritablePixels.ToArray(),
             "the default contract must match the frozen legacy path on quantised formats");
@@ -40,8 +40,8 @@ public class GeometryOptionsContractTests
     {
         using var source = Gradient(9, 7, WorkingFormat.Rgba8);
 
-        using var legacy = source.Resize(4, 3, Resampler.Lanczos3);
-        using var options = source.ResizeWithOptions(4, 3, Resampler.Lanczos3, default);
+        using var legacy = source.Pipe().Resize(4, 3, Resampler.Lanczos3).ToImage();
+        using var options = source.Pipe().ResizeWithOptions(4, 3, Resampler.Lanczos3, default).ToImage();
 
         legacy.WritablePixels.ToArray().ShouldBe(options.WritablePixels.ToArray());
     }
@@ -55,8 +55,8 @@ public class GeometryOptionsContractTests
 
         // Edge stays Clamp, yet a 45° rotation still fills the corners with the background colour:
         // the centre-level rule is Mapping geometry, not an edge mode.
-        using var rotated = source.RotateWithOptions(45f, Resampler.Bilinear,
-            new SampleOptions { Edge = EdgeMode.Clamp }, new RgbaColor(200, 40, 60, 255));
+        using var rotated = source.Pipe().RotateWithOptions(45f, Resampler.Bilinear,
+            new SampleOptions { Edge = EdgeMode.Clamp }, new RgbaColor(200, 40, 60, 255)).ToImage();
 
         rotated.Width.ShouldBeGreaterThan(11);
         rotated.WritablePixels.Slice(0, 4).ToArray().ShouldBe(new byte[] { 200, 40, 60, 255 });
@@ -70,8 +70,8 @@ public class GeometryOptionsContractTests
         // w' = 1 - 0.6·px (from the INVERSE homography) turns negative past px ≈ 1.67: the right half
         // is background even with Edge = Clamp, because a point behind the camera is not an edge case.
         var homography = new float[] { 1f, 0f, 0f, 0f, 1f, 0f, 0.6f, 0f };
-        using var warped = source.PerspectiveWithOptions(homography, 8, 5, Resampler.Bilinear,
-            new SampleOptions { Edge = EdgeMode.Clamp }, new RgbaColor(9, 8, 7, 255));
+        using var warped = source.Pipe().PerspectiveWithOptions(homography, 8, 5, Resampler.Bilinear,
+            new SampleOptions { Edge = EdgeMode.Clamp }, new RgbaColor(9, 8, 7, 255)).ToImage();
 
         var pixels = warped.WritablePixels;
         // x=0 maps to source 0.71 (inside); x=1 maps to source 15 (outside the box → background);
@@ -94,10 +94,10 @@ public class GeometryOptionsContractTests
         source.WritablePixels[2] = 255;
         source.WritablePixels[3] = 255;
 
-        using var clamped = source.ResizeWithOptions(2, 2, Resampler.Bilinear,
-            new SampleOptions { Edge = EdgeMode.Clamp });
-        using var background = source.ResizeWithOptions(2, 2, Resampler.Bilinear,
-            new SampleOptions { Edge = EdgeMode.Background }, new RgbaColor(0, 0, 0, 255));
+        using var clamped = source.Pipe().ResizeWithOptions(2, 2, Resampler.Bilinear,
+            new SampleOptions { Edge = EdgeMode.Clamp }).ToImage();
+        using var background = source.Pipe().ResizeWithOptions(2, 2, Resampler.Bilinear,
+            new SampleOptions { Edge = EdgeMode.Background }, new RgbaColor(0, 0, 0, 255)).ToImage();
 
         clamped.WritablePixels.ToArray().ShouldBe(new byte[] { 255, 255, 255, 255, 255, 255, 255, 255,
             255, 255, 255, 255, 255, 255, 255, 255 });
@@ -126,9 +126,9 @@ public class GeometryOptionsContractTests
         // Forward translation by -0.5: the destination centre (areal 0.5) maps back to source areal
         // 1.0 — the exact midpoint between the 0 and 255 pixels.
         var forward = AffineMatrix.Translation(-0.5f, 0f);
-        using var encoded = image.AffineWithOptions(forward, 1, 1, Resampler.Bilinear, default);
-        using var linear = image.AffineWithOptions(forward, 1, 1, Resampler.Bilinear,
-            new SampleOptions { Domain = SampleDomain.LinearLight });
+        using var encoded = image.Pipe().AffineWithOptions(forward, 1, 1, Resampler.Bilinear, default).ToImage();
+        using var linear = image.Pipe().AffineWithOptions(forward, 1, 1, Resampler.Bilinear,
+            new SampleOptions { Domain = SampleDomain.LinearLight }).ToImage();
 
         (linear.WritablePixels[0] > encoded.WritablePixels[0]).ShouldBeTrue(
             "linear-light interpolation of 0 and 255 must be brighter than the encoded-domain midpoint");
@@ -152,10 +152,10 @@ public class GeometryOptionsContractTests
         image.WritablePixels[7] = 0;
         var field = new RgbaColor(0, 250, 250, 0); // transparent green background
 
-        using var straight = image.ResizeWithOptions(1, 1, Resampler.Bilinear,
-            new SampleOptions { Edge = EdgeMode.Background }, field);
-        using var premultiplied = image.ResizeWithOptions(1, 1, Resampler.Bilinear,
-            new SampleOptions { Edge = EdgeMode.Background, Alpha = AlphaMode.Premultiplied }, field);
+        using var straight = image.Pipe().ResizeWithOptions(1, 1, Resampler.Bilinear,
+            new SampleOptions { Edge = EdgeMode.Background }, field).ToImage();
+        using var premultiplied = image.Pipe().ResizeWithOptions(1, 1, Resampler.Bilinear,
+            new SampleOptions { Edge = EdgeMode.Background, Alpha = AlphaMode.Premultiplied }, field).ToImage();
 
         straight.WritablePixels[1].ShouldBeGreaterThan(premultiplied.WritablePixels[1],
             "in straight accumulation the transparent field's green reaches the result; " +
@@ -176,14 +176,14 @@ public class GeometryOptionsContractTests
         floats[6] = 0.5f;
         floats[7] = 1f;
 
-        using (var clamped = image.ResizeWithOptions(1, 1, Resampler.Bilinear,
-            new SampleOptions { OutOfGamut = OutOfGamutPolicy.Clamp }))
+        using (var clamped = image.Pipe().ResizeWithOptions(1, 1, Resampler.Bilinear,
+            new SampleOptions { OutOfGamut = OutOfGamutPolicy.Clamp }).ToImage())
         {
             MemoryMarshal.Cast<byte, float>(clamped.WritablePixels)[0].ShouldBe(1f);
         }
 
-        Should.Throw<InvalidDataException>(() => image.ResizeWithOptions(1, 1, Resampler.Bilinear,
-            new SampleOptions { OutOfGamut = OutOfGamutPolicy.Throw }));
+        Should.Throw<InvalidDataException>(() => image.Pipe().ResizeWithOptions(1, 1, Resampler.Bilinear,
+            new SampleOptions { OutOfGamut = OutOfGamutPolicy.Throw }).ToImage());
     }
 
     [Fact]
@@ -195,9 +195,9 @@ public class GeometryOptionsContractTests
         MemoryMarshal.Cast<byte, float>(image.WritablePixels)[2] = 0.5f;
         MemoryMarshal.Cast<byte, float>(image.WritablePixels)[3] = 1f;
 
-        Should.Throw<InvalidDataException>(() => image.PerspectiveWithOptions(
+        Should.Throw<InvalidDataException>(() => image.Pipe().PerspectiveWithOptions(
             new float[] { 1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f }, 1, 1, Resampler.Bilinear,
-            new SampleOptions { OutOfGamut = OutOfGamutPolicy.Throw }));
+            new SampleOptions { OutOfGamut = OutOfGamutPolicy.Throw }).ToImage());
     }
 
     // ------------------------------------------------------- failures stay loud
@@ -209,9 +209,9 @@ public class GeometryOptionsContractTests
         var singular = new AffineMatrix(1f, 2f, 0f, 2f, 4f, 0f);
 
         Should.Throw<ArgumentException>(() =>
-            source.AffineWithOptions(singular, 3, 3, Resampler.Bilinear, default));
+            source.Pipe().AffineWithOptions(singular, 3, 3, Resampler.Bilinear, default).ToImage());
         Should.Throw<ArgumentException>(() =>
-            source.PerspectiveWithOptions(new float[] { 1f, 0f }, 3, 3, Resampler.Bilinear, default));
+            source.Pipe().PerspectiveWithOptions(new float[] { 1f, 0f }, 3, 3, Resampler.Bilinear, default).ToImage());
     }
 
     // ------------------------------------------------------- executed reference vectors
@@ -236,15 +236,15 @@ public class GeometryOptionsContractTests
         {
             // The midpoint vector maps the destination centre (areal 0.5) onto source areal 1.0,
             // the exact junction of the two pixels: (0 + 255) / 2 in the encoded domain.
-            "WarpWithOptions" when caseId == "sample-options-encoded-midpoint" => source.WarpWithOptions(
+            "WarpWithOptions" when caseId == "sample-options-encoded-midpoint" => source.Pipe().WarpWithOptions(
                 root.GetProperty("params").GetProperty("expectedWidth").GetInt32(),
                 root.GetProperty("params").GetProperty("expectedHeight").GetInt32(),
                 (float x, float y, out float sx, out float sy) =>
                 {
                     sx = x + 0.5f;
                     sy = y;
-                }, Resampler.Bilinear, default),
-            "WarpWithOptions" => source.WarpWithOptions(
+                }, Resampler.Bilinear, default).ToImage(),
+            "WarpWithOptions" => source.Pipe().WarpWithOptions(
                 root.GetProperty("params").GetProperty("expectedWidth").GetInt32(),
                 root.GetProperty("params").GetProperty("expectedHeight").GetInt32(),
                 (float x, float y, out float sx, out float sy) =>
@@ -252,12 +252,12 @@ public class GeometryOptionsContractTests
                     // sx = x + 0.37, sy = y — the 0.37-phase map the vector documents.
                     sx = x + 0.37f;
                     sy = y;
-                }, Resampler.Bilinear, default),
-            "ResizeWithOptions" => source.ResizeWithOptions(
+                }, Resampler.Bilinear, default).ToImage(),
+            "ResizeWithOptions" => source.Pipe().ResizeWithOptions(
                 root.GetProperty("params").GetProperty("expectedWidth").GetInt32(),
                 root.GetProperty("params").GetProperty("expectedHeight").GetInt32(),
                 Resampler.Bilinear,
-                new SampleOptions { Edge = EdgeMode.Background }, new RgbaColor(0, 0, 0, 255)),
+                new SampleOptions { Edge = EdgeMode.Background }, new RgbaColor(0, 0, 0, 255)).ToImage(),
             var op => throw new InvalidOperationException($"vector {caseId} uses unknown op {op}"),
         };
 

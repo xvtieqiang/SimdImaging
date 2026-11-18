@@ -78,7 +78,7 @@ public class NearestResizeTests
         using var image = SimdImaging.Image.Create(sourceWidth, Height, WorkingFormat.Rgba8);
         source.AsSpan().CopyTo(image.WritablePixels);
 
-        using var resized = image.Resize(destinationWidth, Height, Resampler.Nearest);
+        using var resized = image.Pipe().Resize(destinationWidth, Height, Resampler.Nearest).ToImage();
         var actual = resized.WritablePixels;
 
         for (var y = 0; y < Height; y++)

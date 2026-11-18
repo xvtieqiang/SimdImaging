@@ -69,9 +69,9 @@ internal static class Batch
         // fusion is costing more than the passes it saves, and that is worth knowing before blaming the ops.
         Func<OurImage, OurImage> unfused = i =>
         {
-            using var blurred = i.GaussianBlur(1f);
-            using var bright = blurred.Brightness(0.05f);
-            return bright.Contrast(1.1f);
+            using var blurred = i.Pipe().GaussianBlur(1f).ToImage();
+            using var bright = blurred.Pipe().Brightness(0.05f).ToImage();
+            return bright.Pipe().Contrast(1.1f).ToImage();
         };
 
         var rows = new List<string[]>();

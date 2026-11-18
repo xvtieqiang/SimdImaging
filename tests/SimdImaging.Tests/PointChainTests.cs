@@ -36,7 +36,7 @@ public class PointChainTests
     public void SingleStep_MatchesTheOperator()
     {
         using var image = Pattern();
-        using var sequential = image.Contrast(1.2f);
+        using var sequential = image.Pipe().Contrast(1.2f).ToImage();
         using var collapsed = FilterOps.PointChain(image[0].Pixels.View, [PointOps.ContrastRow(1.2f)]);
         RowsMatch(sequential, collapsed, image.Width);
     }
@@ -45,7 +45,7 @@ public class PointChainTests
     public void TwoStepChain_MatchesTheSequentialOperators()
     {
         using var image = Pattern();
-        using var sequential = image.Contrast(1.2f).Invert();
+        using var sequential = image.Pipe().Contrast(1.2f).ToImage().Pipe().Invert().ToImage();
 
         using var collapsed = FilterOps.PointChain(image[0].Pixels.View,
             [PointOps.ContrastRow(1.2f), PointOps.InvertRow()]);
@@ -58,7 +58,7 @@ public class PointChainTests
     public void FiveStepChain_MatchesTheSequentialOperators()
     {
         using var image = Pattern();
-        using var sequential = image.Contrast(1.2f).Invert().Contrast(0.9f).Brightness(0.05f).Invert();
+        using var sequential = image.Pipe().Contrast(1.2f).Invert().Contrast(0.9f).Brightness(0.05f).Invert().ToImage();
 
         using var collapsed = FilterOps.PointChain(image[0].Pixels.View,
         [
@@ -112,12 +112,12 @@ public class PointChainTests
 
         using var perCall = FilterOps.PointChain(first[0].Pixels.View,
             [PointOps.ContrastRow(1.2f), PointOps.InvertRow()]);
-        using var reused = first.PointChain(table);
+        using var reused = first.Pipe().PointChain(table).ToImage();
 
         RowsMatch(reused, perCall, first.Width);
 
         // The same table on a different image, to prove it carries no per-call state.
-        using var other = second.PointChain(table);
+        using var other = second.Pipe().PointChain(table).ToImage();
         using var otherPerCall = FilterOps.PointChain(second[0].Pixels.View,
             [PointOps.ContrastRow(1.2f), PointOps.InvertRow()]);
 

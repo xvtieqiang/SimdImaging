@@ -40,13 +40,13 @@ public class PointLut16Tests
     {
         using var result = op switch
         {
-            "invert" => source.Invert(),
-            "brightness" => source.Brightness(0.15f),
-            "gamma" => source.Gamma(1.8f),
-            "contrast" => source.Contrast(1.3f),
+            "invert" => source.Pipe().Invert().ToImage(),
+            "brightness" => source.Pipe().Brightness(0.15f).ToImage(),
+            "gamma" => source.Pipe().Gamma(1.8f).ToImage(),
+            "contrast" => source.Pipe().Contrast(1.3f).ToImage(),
             // Both mix channels; if either were routed through a per-channel table this comparison fails.
-            "sepia" => source.Sepia(),
-            "grayscale" => source.Grayscale(),
+            "sepia" => source.Pipe().Sepia().ToImage(),
+            "grayscale" => source.Pipe().Grayscale().ToImage(),
             _ => throw new ArgumentOutOfRangeException(nameof(op)),
         };
 

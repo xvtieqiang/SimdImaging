@@ -36,7 +36,7 @@ public class MorphologyTests
             for (var x = 2; x < 5; x++)
                 Set(source, x, y, 255);
 
-        using var eroded = source.Erode3x3();
+        using var eroded = source.Pipe().Erode3x3().ToImage();
 
         At(eroded, 3, 3).ShouldBe((byte)255);
         At(eroded, 2, 2).ShouldBe((byte)0);
@@ -49,7 +49,7 @@ public class MorphologyTests
         using var source = Solid(7, 7, 0);
         Set(source, 3, 3, 255);
 
-        using var dilated = source.Dilate3x3();
+        using var dilated = source.Pipe().Dilate3x3().ToImage();
 
         for (var y = 2; y <= 4; y++)
             for (var x = 2; x <= 4; x++)
@@ -64,7 +64,7 @@ public class MorphologyTests
         using var source = Solid(9, 9, 0);
         Set(source, 4, 4, 255);
 
-        using var opened = source.Open3x3();
+        using var opened = source.Pipe().Open3x3().ToImage();
 
         var span = opened.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -77,7 +77,7 @@ public class MorphologyTests
         using var source = Solid(9, 9, 255);
         Set(source, 4, 4, 0);
 
-        using var closed = source.Close3x3();
+        using var closed = source.Pipe().Close3x3().ToImage();
 
         At(closed, 4, 4).ShouldBe((byte)255);
     }
@@ -88,7 +88,7 @@ public class MorphologyTests
     public void Morphology_KeepsAConstantImageConstant(bool erode)
     {
         using var source = Solid(6, 5, 66);
-        using var result = erode ? source.Erode3x3() : source.Dilate3x3();
+        using var result = erode ? source.Pipe().Erode3x3().ToImage() : source.Pipe().Dilate3x3().ToImage();
 
         var span = result.WritablePixels;
         for (var i = 0; i < span.Length; i += 4)
@@ -106,7 +106,7 @@ public class MorphologyTests
             for (var x = 2; x < 5; x++)
                 Set(source, x, y, 128, alpha: 255);
 
-        using var eroded = source.Erode3x3();
+        using var eroded = source.Pipe().Erode3x3().ToImage();
 
         eroded.WritablePixels[(3 * 7 + 3) * 4 + 3].ShouldBe((byte)255);
         eroded.WritablePixels[(2 * 7 + 2) * 4 + 3].ShouldBe((byte)0);

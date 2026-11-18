@@ -51,8 +51,8 @@ public class SeamCarvingTierTests
         {
             SeamCarving.ForceScalarVector = forceScalar;
             using var carved = axis == SeamAxis.Vertical
-                ? source.RemoveSeams(axis, count)
-                : source.RemoveSeams(axis, count);
+                ? source.Pipe().RemoveSeams(axis, count).ToImage()
+                : source.Pipe().RemoveSeams(axis, count).ToImage();
             return carved.WritablePixels.ToArray();
         }
         finally

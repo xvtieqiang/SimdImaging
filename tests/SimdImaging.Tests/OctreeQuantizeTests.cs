@@ -51,7 +51,7 @@ public class OctreeQuantizeTests
         var palette = source.BuildPalette(16, Quantizer.Octree);
         palette.Count.ShouldBeLessThanOrEqualTo(16);
 
-        using var quantized = source.Quantize(16, Quantizer.Octree);
+        using var quantized = source.Pipe().Quantize(16, Quantizer.Octree).ToImage();
         DistinctColours(quantized).Count.ShouldBeLessThanOrEqualTo(16);
     }
 
@@ -75,8 +75,8 @@ public class OctreeQuantizeTests
     public void Octree_IsDeterministic()
     {
         using var source = TwoColours(32, 32);
-        using var first = source.Quantize(5, Quantizer.Octree);
-        using var second = source.Quantize(5, Quantizer.Octree);
+        using var first = source.Pipe().Quantize(5, Quantizer.Octree).ToImage();
+        using var second = source.Pipe().Quantize(5, Quantizer.Octree).ToImage();
 
         second.WritablePixels.ToArray().ShouldBe(first.WritablePixels.ToArray());
     }
@@ -105,7 +105,7 @@ public class OctreeQuantizeTests
     public void ReduceColors_WithDitherStaysOnThePalette()
     {
         using var source = Gradient(64, 16);
-        using var reduced = source.ReduceColors(8, Quantizer.Octree);
+        using var reduced = source.Pipe().ReduceColors(8, Quantizer.Octree).ToImage();
 
         var allowed = new HashSet<(byte, byte, byte)>();
         foreach (var colour in source.BuildPalette(8, Quantizer.Octree).Colors)
@@ -120,8 +120,8 @@ public class OctreeQuantizeTests
     {
         using var source = Gradient(32, 8);
         var palette = source.BuildPalette(6, Quantizer.Octree);
-        using var mapped = source.MapToPalette(palette);
-        using var reduced = source.ReduceColors(6, Quantizer.Octree, DitherKernel.None);
+        using var mapped = source.Pipe().MapToPalette(palette).ToImage();
+        using var reduced = source.Pipe().ReduceColors(6, Quantizer.Octree, DitherKernel.None).ToImage();
 
         reduced.WritablePixels.ToArray().ShouldBe(mapped.WritablePixels.ToArray());
     }
@@ -130,7 +130,7 @@ public class OctreeQuantizeTests
     public void ReduceColors_RejectsNegativeError()
     {
         using var source = TwoColours(4, 4);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.ReduceColors(4, maxError: -1f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().ReduceColors(4, maxError: -1f).ToImage());
     }
 
     private static Image Gradient(int width, int height)

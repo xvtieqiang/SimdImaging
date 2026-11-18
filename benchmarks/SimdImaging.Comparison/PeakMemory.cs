@@ -1,3 +1,5 @@
+using SimdImaging.Abstractions;
+using SimdImaging.Processing;
 using System.Diagnostics;
 using System.Globalization;
 
@@ -33,6 +35,146 @@ internal static class PeakMemory
         }
 
         report.Table(["场景", "我方峰值 MiB", "对手峰值 MiB", "对手÷我方"], rows);
+
+        report.Heading(3, "C3.1 融合：峰值与总分配量，同一条链两遍");
+        report.Line("> **两个数说的是两件事，不能互相替代。**");
+        report.Line("> **峰值**＝进程在某一瞬间真正占着的内存，回答「跑这张图要多大的机器」。");
+        report.Line("> **总分配量**＝这次调用累计向 GC 要过多少内存，回答「GC 要为此做多少活」；它还回去的不算占着，");
+        report.Line("> 但每一次要都要付分配和回收的代价，所以它和耗时同向。");
+        report.Line("> 同一个子进程里两遍都记：`ForceFusion=true` 与 `AllowFusion=false`，三次取中位。");
+        report.Line();
+
+        foreach (var (cw, ch) in new[] { (1920, 1080), (3840, 2160), (7680, 4320) })
+        {
+            var chainRows = new List<string[]>();
+            foreach (var (name, _) in ChainPeaks.Cases())
+            {
+                var fused = MedianOf(MeasureChain("fused", name, cw, ch));
+                var stepwise = MedianOf(MeasureChain("stepwise", name, cw, ch));
+                chainRows.Add([
+                    name,
+                    MiB(fused.Peak),
+                    MiB(stepwise.Peak),
+                    fused.Peak == 0 ? "—" : (stepwise.Peak / (double)fused.Peak).ToString("F2", CultureInfo.InvariantCulture) + "×",
+                    MiB(fused.Allocated),
+                    MiB(stepwise.Allocated),
+                    fused.Allocated == 0 ? "—" : (stepwise.Allocated / (double)fused.Allocated).ToString("F2", CultureInfo.InvariantCulture) + "×",
+                ]);
+            }
+
+            report.Heading(4, $"{cw}×{ch}");
+            report.Table(
+                ["链", "融合峰值", "逐步峰值", "逐步÷融合", "融合总分配", "逐步总分配", "逐步÷融合"],
+                chainRows);
+        }
+    }
+
+    private static string MiB(long bytes) => (bytes / 1048576.0).ToString("F1", CultureInfo.InvariantCulture);
+
+    private static (long Peak, long Allocated) MedianOf(List<(long Peak, long Allocated)> values)
+    {
+        values.Sort((a, b) => a.Peak.CompareTo(b.Peak));
+        return values[values.Count / 2];
+    }
+
+    private static List<(long Peak, long Allocated)> MeasureChain(string side, string chainId, int width, int height,
+        int repeats = 3)
+    {
+        var values = new List<(long, long)>();
+        var self = typeof(PeakMemory).Assembly.Location;
+        for (var i = 0; i < repeats; i++)
+        {
+            var psi = new ProcessStartInfo(Environment.ProcessPath!)
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            if (!Path.GetFileName(Environment.ProcessPath!)
+                    .StartsWith("SimdImaging.Comparison", StringComparison.Ordinal))
+                psi.ArgumentList.Add(self);
+            psi.ArgumentList.Add("chainpeak-child");
+            psi.ArgumentList.Add(side);
+            psi.ArgumentList.Add(chainId);
+            psi.ArgumentList.Add(width.ToString(CultureInfo.InvariantCulture));
+            psi.ArgumentList.Add(height.ToString(CultureInfo.InvariantCulture));
+
+            using var process = Process.Start(psi)!;
+            var output = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit();
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException($"chainpeak child failed ({side} {chainId}): {output}");
+            var parts = output.Split('\n').Last().Trim().Split(' ');
+            values.Add((long.Parse(parts[0], CultureInfo.InvariantCulture), long.Parse(parts[1], CultureInfo.InvariantCulture)));
+        }
+
+        return values;
+    }
+
+    /// <summary>The chain under test, run in a fresh process with fusion forced on or off.</summary>
+    public static void ChainChild(string[] args)
+    {
+        var side = args[1];
+        var chainId = args[2];
+        var width = int.Parse(args[3], CultureInfo.InvariantCulture);
+        var height = int.Parse(args[4], CultureInfo.InvariantCulture);
+
+        var catalogue = Environment.GetEnvironmentVariable("SIMDIMAGING_SINGLES") == "1"
+            ? ChainPeaks.Singles()
+            : ChainPeaks.Cases();
+        var basePlan = catalogue.First(x => x.Name == chainId).Plan;
+        var plan = int.TryParse(Environment.GetEnvironmentVariable("SIMDIMAGING_PLAN_BAND_ROWS"), out var planBandRows)
+            && planBandRows > 0
+                ? basePlan.WithBandRows(planBandRows)
+                : basePlan;
+        var data = Fixture.Make(width, height);
+        using var image = Fixture.Ours(data, width, height);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+        var baseline = process.WorkingSet64;
+        long peak = baseline;
+        var gate = new object();
+        using var cancel = new CancellationTokenSource();
+        var sampler = Task.Run(() =>
+        {
+            while (!cancel.IsCancellationRequested)
+            {
+                process.Refresh();
+                var current = process.WorkingSet64;
+                lock (gate)
+                    if (current > peak) peak = current;
+                Thread.Sleep(1);
+            }
+        });
+
+        var degree = int.TryParse(Environment.GetEnvironmentVariable("SIMDIMAGING_DEGREE"), out var d) && d > 0 ? d : 0;
+        var options = side == "fused"
+            ? new ExecuteOptions { ForceFusion = true, MaxDegreeOfParallelism = degree }
+            : new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = degree };
+        var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
+        using var result = image.ApplyWithOptions(plan, options);
+        var allocated = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
+
+        cancel.Cancel();
+        sampler.Wait();
+        long rise;
+        lock (gate) rise = peak - baseline;
+        GC.KeepAlive(result);
+
+        // What is still resident once the operation is over and the caches are given the chance to drop: the
+        // difference between "this call needed it" and "this process is still holding it".
+        result.Dispose();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        process.Refresh();
+        var residual = process.WorkingSet64 - baseline;
+
+        Console.WriteLine(
+            $"{rise.ToString(CultureInfo.InvariantCulture)} {allocated.ToString(CultureInfo.InvariantCulture)} {residual.ToString(CultureInfo.InvariantCulture)}");
     }
 
     private static List<long> Measure(string side, string caseId, int width, int height, int repeats = 3)
@@ -62,7 +204,7 @@ internal static class PeakMemory
             process.WaitForExit();
             if (process.ExitCode != 0)
                 throw new InvalidOperationException($"peakmem child failed ({side} {caseId}): {output}");
-            values.Add(long.Parse(output.Split('\n').Last().Trim(), CultureInfo.InvariantCulture));
+            values.Add(long.Parse(output.Split('\n').Last().Trim().Split(' ')[0], CultureInfo.InvariantCulture));
         }
 
         return values;
@@ -80,6 +222,10 @@ internal static class PeakMemory
         // the parent's invocation shape.
         if (int.TryParse(Environment.GetEnvironmentVariable("SIMDIMAGING_BAND_ROWS"), out var bandRows) && bandRows > 0)
             Processing.FilterOps.BandRowsOverride = bandRows;
+
+        if (int.TryParse(Environment.GetEnvironmentVariable("SIMDIMAGING_RESIZE_BUDGET"), out var resizeBudget)
+            && resizeBudget > 0)
+            Processing.Geometry.Resample.ScratchBudgetBytes = resizeBudget;
 
         var data = Fixture.Make(width, height);
         using var ours = Fixture.Ours(data, width, height);
@@ -107,7 +253,9 @@ internal static class PeakMemory
             }
         });
 
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         object? result = side == "ours" ? c.Ours(ours) : c.Theirs(theirs);
+        clock.Stop();
         cancel.Cancel();
         sampler.Wait();
         long rise;
@@ -115,7 +263,7 @@ internal static class PeakMemory
         GC.KeepAlive(result);
         (result as IDisposable)?.Dispose();
 
-        Console.WriteLine(rise.ToString(CultureInfo.InvariantCulture));
+        Console.WriteLine($"{rise.ToString(CultureInfo.InvariantCulture)} {clock.Elapsed.TotalMilliseconds.ToString("F1", CultureInfo.InvariantCulture)}");
     }
 
     private static long Median(List<long> values)

@@ -23,7 +23,7 @@ public class Convolve2DTests
         using var image = SimdImaging.Image.Create(width, height, WorkingFormat.Rgba8);
         source.AsSpan().CopyTo(image.WritablePixels);
 
-        using var sharpened = image.GaussianSharpen(amount, sigma);
+        using var sharpened = image.Pipe().GaussianSharpen(amount, sigma).ToImage();
         Assert.Equal(expected, sharpened.WritablePixels.ToArray());
     }
 

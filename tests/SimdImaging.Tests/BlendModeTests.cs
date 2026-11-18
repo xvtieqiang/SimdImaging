@@ -19,7 +19,7 @@ public class BlendModeTests
     {
         using var baseImage = Pixel(background[0], background[1], background[2], background[3]);
         using var top = Pixel(overlay[0], overlay[1], overlay[2], overlay[3]);
-        using var result = baseImage.Blend(top, 0, 0, mode);
+        using var result = baseImage.Pipe().Blend(top, 0, 0, mode).ToImage();
         return result.WritablePixels[..4].ToArray();
     }
 
@@ -74,8 +74,8 @@ public class BlendModeTests
         backdrop.WritablePixels.Fill(40);
         using var overlay = Pixel(200, 30, 90, 128);
 
-        using var blended = backdrop.Blend(overlay, 1, 1, BlendMode.Normal);
-        using var composited = backdrop.Composite(overlay, 1, 1, PorterDuff.SourceOver);
+        using var blended = backdrop.Pipe().Blend(overlay, 1, 1, BlendMode.Normal).ToImage();
+        using var composited = backdrop.Pipe().Composite(overlay, 1, 1, PorterDuff.SourceOver).ToImage();
 
         blended.WritablePixels.ToArray().ShouldBe(composited.WritablePixels.ToArray());
     }

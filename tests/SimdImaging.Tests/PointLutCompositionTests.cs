@@ -44,8 +44,10 @@ public class PointLutCompositionTests
             .AddPointLut("contrast", TableOf(ramp, view => PointOps.Contrast(view, 0.8f)))
             .AddPointLut("gamma", TableOf(ramp, view => PointOps.Gamma(view, 2.2f)));
 
+        // Three tables folding into one pass is what fusion does; the heuristic routes a short point chain
+        // stepwise, so the folding is asked for here.
         using var fused = plan.ExecuteWithOptions(ramp.View,
-            new ExecuteOptions { Diagnostics = true }, out var report);
+            new ExecuteOptions { Diagnostics = true, ForceFusion = true }, out var report);
 
         fused.View.Span.ToArray().ShouldBe(expected);
         report!.SegmentCount.ShouldBe(1);

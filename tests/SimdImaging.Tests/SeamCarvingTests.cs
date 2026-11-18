@@ -18,7 +18,7 @@ public class SeamCarvingTests
     public void RemovingSeams_ShrinksByExactlyThatManyColumns(int count)
     {
         using var image = Bars(40, 24);
-        using var result = image.RemoveSeams(SeamAxis.Vertical, count);
+        using var result = image.Pipe().RemoveSeams(SeamAxis.Vertical, count).ToImage();
 
         result.Width.ShouldBe(40 - count);
         result.Height.ShouldBe(24);
@@ -28,7 +28,7 @@ public class SeamCarvingTests
     public void RemovingRows_UsesTheSameRuleOnTheOtherAxis()
     {
         using var image = Bars(24, 30);
-        using var result = image.RemoveSeams(SeamAxis.Horizontal, 5);
+        using var result = image.Pipe().RemoveSeams(SeamAxis.Horizontal, 5).ToImage();
 
         result.Width.ShouldBe(24);
         result.Height.ShouldBe(25);
@@ -44,7 +44,7 @@ public class SeamCarvingTests
     public void AFieldOfTies_RemovesTheLeftmostColumn()
     {
         using var image = Ties(12, 5, WorkingFormat.Rgba8);
-        using var result = image.RemoveSeams(SeamAxis.Vertical, 1);
+        using var result = image.Pipe().RemoveSeams(SeamAxis.Vertical, 1).ToImage();
 
         var before = image.WritablePixels;
         var after = result.WritablePixels;
@@ -57,7 +57,7 @@ public class SeamCarvingTests
     public void AHighEnergySquareKeepsItsWidth()
     {
         using var image = Square(40, 20);
-        using var result = image.RemoveSeams(SeamAxis.Vertical, 5);
+        using var result = image.Pipe().RemoveSeams(SeamAxis.Vertical, 5).ToImage();
 
         BrightRun(image, 10).ShouldBe(10);
         BrightRun(result, 10).ShouldBe(10, "five seams must come out of the background, not the subject");
@@ -67,10 +67,10 @@ public class SeamCarvingTests
     public void HorizontalSeamsMatchTheTransposeOfVerticalOnes()
     {
         using var image = Bars(21, 17);
-        using var horizontal = image.RemoveSeams(SeamAxis.Horizontal, 3);
-        using var turned = image.Transpose();
-        using var carved = turned.RemoveSeams(SeamAxis.Vertical, 3);
-        using var transposed = carved.Transpose();
+        using var horizontal = image.Pipe().RemoveSeams(SeamAxis.Horizontal, 3).ToImage();
+        using var turned = image.Pipe().Transpose().ToImage();
+        using var carved = turned.Pipe().RemoveSeams(SeamAxis.Vertical, 3).ToImage();
+        using var transposed = carved.Pipe().Transpose().ToImage();
 
         horizontal.WritablePixels.ToArray().ShouldBe(transposed.WritablePixels.ToArray());
     }
@@ -79,10 +79,10 @@ public class SeamCarvingTests
     public void InsertingThenRemoving_ReturnsTheSize()
     {
         using var image = Bars(30, 22);
-        using var grown = image.InsertSeams(SeamAxis.Vertical, 4);
+        using var grown = image.Pipe().InsertSeams(SeamAxis.Vertical, 4).ToImage();
         grown.Width.ShouldBe(34);
 
-        using var back = grown.RemoveSeams(SeamAxis.Vertical, 4);
+        using var back = grown.Pipe().RemoveSeams(SeamAxis.Vertical, 4).ToImage();
         back.Width.ShouldBe(30);
         back.Height.ShouldBe(22);
     }
@@ -91,8 +91,8 @@ public class SeamCarvingTests
     public void InsertionOnAFlatImage_IsInvariant()
     {
         using var image = Solid(14, 9, 73);
-        using var grown = image.InsertSeams(SeamAxis.Vertical, 3);
-        using var back = grown.RemoveSeams(SeamAxis.Vertical, 3);
+        using var grown = image.Pipe().InsertSeams(SeamAxis.Vertical, 3).ToImage();
+        using var back = grown.Pipe().RemoveSeams(SeamAxis.Vertical, 3).ToImage();
 
         grown.Width.ShouldBe(17);
         back.WritablePixels.ToArray().ShouldBe(image.WritablePixels.ToArray());
@@ -102,11 +102,11 @@ public class SeamCarvingTests
     public void CarveTo_ReachesTheTargetOnBothAxes()
     {
         using var image = Bars(30, 24);
-        using var smaller = image.SeamCarve(24, 18);
+        using var smaller = image.Pipe().SeamCarve(24, 18).ToImage();
         smaller.Width.ShouldBe(24);
         smaller.Height.ShouldBe(18);
 
-        using var bigger = image.SeamCarve(33, 27);
+        using var bigger = image.Pipe().SeamCarve(33, 27).ToImage();
         bigger.Width.ShouldBe(33);
         bigger.Height.ShouldBe(27);
     }
@@ -118,7 +118,7 @@ public class SeamCarvingTests
     public void OtherFormats_KeepTheirBytes(WorkingFormat format)
     {
         using var image = Ties(20, 15, format);
-        using var result = image.RemoveSeams(SeamAxis.Vertical, 3);
+        using var result = image.Pipe().RemoveSeams(SeamAxis.Vertical, 3).ToImage();
 
         result.Width.ShouldBe(17);
         result.WritablePixels.ToArray().ShouldBe(KeptColumns(image, 3, result.Width));
@@ -128,8 +128,8 @@ public class SeamCarvingTests
     public void RunningTwiceGivesTheSameBytes()
     {
         using var image = Bars(23, 19);
-        using var first = image.RemoveSeams(SeamAxis.Vertical, 4);
-        using var second = image.RemoveSeams(SeamAxis.Vertical, 4);
+        using var first = image.Pipe().RemoveSeams(SeamAxis.Vertical, 4).ToImage();
+        using var second = image.Pipe().RemoveSeams(SeamAxis.Vertical, 4).ToImage();
 
         first.WritablePixels.ToArray().ShouldBe(second.WritablePixels.ToArray());
     }
@@ -139,11 +139,11 @@ public class SeamCarvingTests
     {
         using var image = Bars(9, 6);
 
-        Should.Throw<ArgumentOutOfRangeException>(() => image.RemoveSeams(SeamAxis.Vertical, 9));
-        Should.Throw<ArgumentOutOfRangeException>(() => image.RemoveSeams(SeamAxis.Vertical, -1));
-        Should.Throw<ArgumentOutOfRangeException>(() => image.RemoveSeams(SeamAxis.Horizontal, 6));
-        Should.Throw<ArgumentOutOfRangeException>(() => image.SeamCarve(0, 5));
-        Should.Throw<ArgumentOutOfRangeException>(() => image.SeamCarve(5, 0));
+        Should.Throw<ArgumentOutOfRangeException>(() => image.Pipe().RemoveSeams(SeamAxis.Vertical, 9).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => image.Pipe().RemoveSeams(SeamAxis.Vertical, -1).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => image.Pipe().RemoveSeams(SeamAxis.Horizontal, 6).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => image.Pipe().SeamCarve(0, 5).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => image.Pipe().SeamCarve(5, 0).ToImage());
     }
 
     // ------------------------------------------------------------------ helpers

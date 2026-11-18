@@ -23,7 +23,7 @@ public class CanvasTests
         using var source = Filled(10, 8, RgbaColor.Black);
         source.FillRect(new PixelRect(2, 1, 6, 4), RgbaColor.White);
 
-        using var trimmed = source.Trim();
+        using var trimmed = source.Pipe().Trim().ToImage();
 
         trimmed.Width.ShouldBe(6);
         trimmed.Height.ShouldBe(4);
@@ -35,7 +35,7 @@ public class CanvasTests
     public void Trim_UniformImageBecomesOnePixel()
     {
         using var source = Filled(9, 7, new RgbaColor(12, 34, 56, 255));
-        using var trimmed = source.Trim();
+        using var trimmed = source.Pipe().Trim().ToImage();
 
         trimmed.Width.ShouldBe(1);
         trimmed.Height.ShouldBe(1);
@@ -47,11 +47,11 @@ public class CanvasTests
         using var source = Filled(8, 8, new RgbaColor(100, 100, 100, 255));
         source.FillRect(new PixelRect(2, 2, 4, 4), new RgbaColor(103, 103, 103, 255));
 
-        using var exact = source.Trim();
+        using var exact = source.Pipe().Trim().ToImage();
         exact.Width.ShouldBe(4);
 
         // 3/255 ≈ 0.012, inside a 0.02 tolerance.
-        using var loose = source.Trim(0.02f);
+        using var loose = source.Pipe().Trim(0.02f).ToImage();
         loose.Width.ShouldBe(1);
     }
 
@@ -59,7 +59,7 @@ public class CanvasTests
     public void BoxPad_KeepsTheAspectRatioAndPads()
     {
         using var source = Filled(4, 2, RgbaColor.White);
-        using var resized = source.Resize(8, 8, ResizeMode.BoxPad, Anchor.Centre, Resampler.Nearest, RgbaColor.Black);
+        using var resized = source.Pipe().Resize(8, 8, ResizeMode.BoxPad, Anchor.Centre, Resampler.Nearest, RgbaColor.Black).ToImage();
 
         resized.Width.ShouldBe(8);
         resized.Height.ShouldBe(8);
@@ -75,7 +75,7 @@ public class CanvasTests
         using var source = Filled(4, 2, RgbaColor.White);
         source.FillRect(new PixelRect(0, 0, 1, 2), new RgbaColor(255, 0, 0, 255));
 
-        using var resized = source.Resize(8, 8, ResizeMode.CropPad, Anchor.Centre, Resampler.Nearest, RgbaColor.Black);
+        using var resized = source.Pipe().Resize(8, 8, ResizeMode.CropPad, Anchor.Centre, Resampler.Nearest, RgbaColor.Black).ToImage();
 
         resized.Width.ShouldBe(8);
         resized.Height.ShouldBe(8);
@@ -93,11 +93,11 @@ public class CanvasTests
     {
         using var source = Filled(4, 2, RgbaColor.White);
 
-        using var max = source.Resize(8, 8, ResizeMode.Max);
+        using var max = source.Pipe().Resize(8, 8, ResizeMode.Max).ToImage();
         max.Width.ShouldBe(8);
         max.Height.ShouldBe(4);
 
-        using var min = source.Resize(8, 8, ResizeMode.Min);
+        using var min = source.Pipe().Resize(8, 8, ResizeMode.Min).ToImage();
         min.Width.ShouldBe(16);
         min.Height.ShouldBe(8);
     }
@@ -106,7 +106,7 @@ public class CanvasTests
     public void Stretch_IgnoresTheAspectRatio()
     {
         using var source = Filled(4, 2, RgbaColor.White);
-        using var resized = source.Resize(5, 9, ResizeMode.Stretch);
+        using var resized = source.Pipe().Resize(5, 9, ResizeMode.Stretch).ToImage();
 
         resized.Width.ShouldBe(5);
         resized.Height.ShouldBe(9);
@@ -116,7 +116,7 @@ public class CanvasTests
     public void ResizeCanvas_PadsWithoutScaling()
     {
         using var source = Filled(4, 4, RgbaColor.White);
-        using var padded = source.ResizeCanvas(8, 6, Anchor.Centre, RgbaColor.Black);
+        using var padded = source.Pipe().ResizeCanvas(8, 6, Anchor.Centre, RgbaColor.Black).ToImage();
 
         padded.Width.ShouldBe(8);
         padded.Height.ShouldBe(6);
@@ -132,7 +132,7 @@ public class CanvasTests
         using var source = Filled(4, 4, RgbaColor.White);
         source.FillRect(new PixelRect(0, 0, 1, 4), new RgbaColor(255, 0, 0, 255));
 
-        using var cropped = source.ResizeCanvas(2, 2, Anchor.Centre);
+        using var cropped = source.Pipe().ResizeCanvas(2, 2, Anchor.Centre).ToImage();
 
         cropped.Width.ShouldBe(2);
         cropped.Height.ShouldBe(2);
@@ -153,14 +153,14 @@ public class CanvasTests
         span[4] = span[5] = span[6] = 0;
         span[7] = 255;
 
-        using var tiled = source.Tile(4, 2);
+        using var tiled = source.Pipe().Tile(4, 2).ToImage();
         Red(tiled, 0, 0).ShouldBe((byte)255);
         Red(tiled, 1, 0).ShouldBe((byte)0);
         Red(tiled, 2, 0).ShouldBe((byte)255);
         Red(tiled, 3, 0).ShouldBe((byte)0);
         Red(tiled, 3, 1).ShouldBe((byte)0);
 
-        using var mirrored = source.Tile(4, 1, mirror: true);
+        using var mirrored = source.Pipe().Tile(4, 1, mirror: true).ToImage();
         Red(mirrored, 0, 0).ShouldBe((byte)255);
         Red(mirrored, 1, 0).ShouldBe((byte)0);
         Red(mirrored, 2, 0).ShouldBe((byte)0);
@@ -171,7 +171,7 @@ public class CanvasTests
     public void Tile_ReachesTheRequestedSizeWithOddSource()
     {
         using var source = Filled(3, 3, RgbaColor.White);
-        using var tiled = source.Tile(7, 5);
+        using var tiled = source.Pipe().Tile(7, 5).ToImage();
 
         tiled.Width.ShouldBe(7);
         tiled.Height.ShouldBe(5);
@@ -182,7 +182,7 @@ public class CanvasTests
     public void RoundCorners_ClipsTheCornersAntialiased()
     {
         using var source = Filled(20, 20, RgbaColor.White);
-        using var rounded = source.RoundCorners(6f);
+        using var rounded = source.Pipe().RoundCorners(6f).ToImage();
 
         AlphaAt(rounded, 10, 10).ShouldBe((byte)255);
         AlphaAt(rounded, 0, 0).ShouldBe((byte)0);
@@ -206,7 +206,7 @@ public class CanvasTests
     public void RoundCorners_AtHalfTheShortSideRoundsTheEndsCompletely()
     {
         using var source = Filled(20, 10, RgbaColor.White);
-        using var rounded = source.RoundCorners(50f);
+        using var rounded = source.Pipe().RoundCorners(50f).ToImage();
 
         // The radius clamps to half the short side, so the two ends become semicircles and the middle stays
         // straight: a stadium, which for a square image is a circle.
@@ -221,10 +221,10 @@ public class CanvasTests
     {
         using var source = Filled(4, 4, RgbaColor.White);
 
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Resize(0, 4, ResizeMode.BoxPad));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.ResizeCanvas(4, 0));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Tile(0, 4));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.RoundCorners(0f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.Trim(-0.1f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Resize(0, 4, ResizeMode.BoxPad).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().ResizeCanvas(4, 0).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Tile(0, 4).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().RoundCorners(0f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().Trim(-0.1f).ToImage());
     }
 }

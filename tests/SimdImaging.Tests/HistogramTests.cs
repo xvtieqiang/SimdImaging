@@ -46,7 +46,7 @@ public class HistogramTests
             values[i] = (byte)i;
 
         using var image = FromValues(values);
-        using var equalized = image.EqualizeHistogram();
+        using var equalized = image.Pipe().EqualizeHistogram().ToImage();
 
         equalized.WritablePixels.ToArray().ShouldBe(image.WritablePixels.ToArray());
     }
@@ -59,7 +59,7 @@ public class HistogramTests
             values[i] = (byte)(10 + i);
 
         using var image = FromValues(values);
-        using var equalized = image.EqualizeHistogram();
+        using var equalized = image.Pipe().EqualizeHistogram().ToImage();
 
         var span = equalized.WritablePixels;
         span[0].ShouldBe((byte)0);
@@ -70,7 +70,7 @@ public class HistogramTests
     public void Equalize_LeavesAFlatImageAlone()
     {
         using var image = FromValues(77, 77, 77, 77);
-        using var equalized = image.EqualizeHistogram();
+        using var equalized = image.Pipe().EqualizeHistogram().ToImage();
 
         equalized.WritablePixels.ToArray().ShouldBe(image.WritablePixels.ToArray());
     }
@@ -83,7 +83,7 @@ public class HistogramTests
         for (var i = 3; i < span.Length; i += 4)
             span[i] = 91;
 
-        using var equalized = image.EqualizeHistogram();
+        using var equalized = image.Pipe().EqualizeHistogram().ToImage();
         var result = equalized.WritablePixels;
         for (var i = 3; i < result.Length; i += 4)
             result[i].ShouldBe((byte)91);

@@ -28,8 +28,8 @@ public class ColorSmallTests
             samples[o + 3] = 1f;
         }
 
-        using var linear = source.Linearize(TransferCurve.Srgb);
-        using var back = linear.Delinearize(TransferCurve.Srgb);
+        using var linear = source.Pipe().Linearize(TransferCurve.Srgb).ToImage();
+        using var back = linear.Pipe().Delinearize(TransferCurve.Srgb).ToImage();
         var result = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(back.WritablePixels);
 
         for (var x = 0; x < 256; x++)
@@ -40,7 +40,7 @@ public class ColorSmallTests
     public void Linearize_MapsMidGreyToLinearLight()
     {
         using var source = Solid(2, 2, new RgbaColor(128, 128, 128, 255));
-        using var linear = source.Linearize(TransferCurve.Srgb);
+        using var linear = source.Pipe().Linearize(TransferCurve.Srgb).ToImage();
 
         // sRGB 128 decodes to 0.2159, which is 55 in an 8-bit linear buffer.
         Red(linear, 0, 0).ShouldBeInRange((byte)54, (byte)56);
@@ -56,7 +56,7 @@ public class ColorSmallTests
         span[4] = span[5] = span[6] = 255;
         span[7] = 255;
 
-        using var linear = source.Linearize(TransferCurve.Pq);
+        using var linear = source.Pipe().Linearize(TransferCurve.Pq).ToImage();
 
         Red(linear, 0, 0).ShouldBe((byte)0);
         Red(linear, 1, 0).ShouldBe((byte)255);
@@ -76,7 +76,7 @@ public class ColorSmallTests
 
         foreach (var curve in Enum.GetValues<TransferCurve>())
         {
-            using var linear = source.Linearize(curve);
+            using var linear = source.Pipe().Linearize(curve).ToImage();
             var previous = 0;
             for (var x = 0; x < 64; x++)
             {
@@ -105,7 +105,7 @@ public class ColorSmallTests
             }
         }
 
-        using var binary = source.AdaptiveThreshold(8, 0.05f);
+        using var binary = source.Pipe().AdaptiveThreshold(8, 0.05f).ToImage();
 
         // Both backgrounds are uniform, so both read as paper; only the dark object flips.
         Red(binary, 10, 20).ShouldBe((byte)255);
@@ -118,7 +118,7 @@ public class ColorSmallTests
     public void AdaptiveThreshold_KeepsAlpha()
     {
         using var source = Solid(8, 8, new RgbaColor(10, 20, 30, 128));
-        using var binary = source.AdaptiveThreshold(2);
+        using var binary = source.Pipe().AdaptiveThreshold(2).ToImage();
 
         var span = binary.WritablePixels;
         for (var i = 3; i < span.Length; i += 4)
@@ -129,8 +129,8 @@ public class ColorSmallTests
     public void AdaptiveThreshold_RejectsIllegalParameters()
     {
         using var source = Solid(4, 4, RgbaColor.White);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.AdaptiveThreshold(0));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.AdaptiveThreshold(2, 1f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().AdaptiveThreshold(0).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().AdaptiveThreshold(2, 1f).ToImage());
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class ColorSmallTests
         using var source = Solid(10, 10, RgbaColor.White);
         source.FillRect(new PixelRect(4, 4, 2, 2), new RgbaColor(200, 40, 40, 255));
 
-        using var replaced = source.ReplaceBackground(RgbaColor.White, new RgbaColor(0, 0, 255, 255), 0.05f, 0.02f);
+        using var replaced = source.Pipe().ReplaceBackground(RgbaColor.White, new RgbaColor(0, 0, 255, 255), 0.05f, 0.02f).ToImage();
 
         var corner = replaced.WritablePixels[0];
         corner.ShouldBe((byte)0);
@@ -159,8 +159,8 @@ public class ColorSmallTests
             span[o + 3] = 255;
         }
 
-        using var replaced = source.ReplaceBackground(
-            new RgbaColor(255, 255, 255, 255), new RgbaColor(0, 0, 0, 255), 0.05f, 0.2f);
+        using var replaced = source.Pipe().ReplaceBackground(
+            new RgbaColor(255, 255, 255, 255), new RgbaColor(0, 0, 0, 255), 0.05f, 0.2f).ToImage();
 
         Red(replaced, 0, 0).ShouldBe((byte)0);
         var middle = Red(replaced, 1, 0);
@@ -172,7 +172,7 @@ public class ColorSmallTests
     public void ColorBlindness_SeverityZeroIsIdentity()
     {
         using var source = Solid(4, 4, new RgbaColor(200, 60, 30, 255));
-        using var simulated = source.ColorBlindness(ColorVisionDeficiency.Deuteranopia, 0f);
+        using var simulated = source.Pipe().ColorBlindness(ColorVisionDeficiency.Deuteranopia, 0f).ToImage();
 
         simulated.WritablePixels.ToArray().ShouldBe(source.WritablePixels.ToArray());
     }
@@ -181,7 +181,7 @@ public class ColorSmallTests
     public void ColorBlindness_DarkensRedForAProtanope()
     {
         using var source = Solid(2, 2, new RgbaColor(255, 0, 0, 255));
-        using var simulated = source.ColorBlindness(ColorVisionDeficiency.Protanopia, 1f);
+        using var simulated = source.Pipe().ColorBlindness(ColorVisionDeficiency.Protanopia, 1f).ToImage();
 
         Red(simulated, 0, 0).ShouldBeLessThan((byte)230);
         simulated.WritablePixels[1].ShouldBeGreaterThan((byte)0);
@@ -191,7 +191,7 @@ public class ColorSmallTests
     public void ColorBlindness_AchromatopsiaProducesGrey()
     {
         using var source = Solid(2, 2, new RgbaColor(200, 60, 30, 255));
-        using var simulated = source.ColorBlindness(ColorVisionDeficiency.Achromatopsia, 1f);
+        using var simulated = source.Pipe().ColorBlindness(ColorVisionDeficiency.Achromatopsia, 1f).ToImage();
 
         var span = simulated.WritablePixels;
         span[0].ShouldBe(span[1]);
@@ -203,8 +203,8 @@ public class ColorSmallTests
     public void ColorBlindness_DaltonisingDiffersFromSimulation()
     {
         using var source = Solid(4, 4, new RgbaColor(255, 0, 0, 255));
-        using var simulated = source.ColorBlindness(ColorVisionDeficiency.Deuteranopia, 1f);
-        using var corrected = source.ColorBlindness(ColorVisionDeficiency.Deuteranopia, 1f, correct: true);
+        using var simulated = source.Pipe().ColorBlindness(ColorVisionDeficiency.Deuteranopia, 1f).ToImage();
+        using var corrected = source.Pipe().ColorBlindness(ColorVisionDeficiency.Deuteranopia, 1f, correct: true).ToImage();
 
         corrected.WritablePixels.ToArray().ShouldNotBe(simulated.WritablePixels.ToArray());
         corrected.WritablePixels[0].ShouldBe((byte)255);
@@ -214,8 +214,8 @@ public class ColorSmallTests
     public void ColorBlindness_RejectsIllegalSeverity()
     {
         using var source = Solid(2, 2, RgbaColor.White);
-        Should.Throw<ArgumentOutOfRangeException>(() => source.ColorBlindness(severity: -0.1f));
-        Should.Throw<ArgumentOutOfRangeException>(() => source.ColorBlindness(severity: 1.5f));
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().ColorBlindness(severity: -0.1f).ToImage());
+        Should.Throw<ArgumentOutOfRangeException>(() => source.Pipe().ColorBlindness(severity: 1.5f).ToImage());
     }
 
     [Fact]

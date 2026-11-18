@@ -74,6 +74,9 @@ internal static class PlanSteps
             }
 
             var lut = table.Value;
+
+            // The executor has already split the image into bands and runs them in parallel, so this uses a bare loop:
+            // a nested RowParallel.For would run inline anyway and would overwrite LastWorkerCount with 1.
             for (var y = rect.Y; y < rect.Y + rect.Height; y++)
             {
                 var from = source.Row(y);
@@ -96,7 +99,8 @@ internal static class PlanSteps
     /// <param name="operator">Runs the operator over a view and returns a new buffer the adapter disposes.</param>
     /// <param name="haloX">Columns of context the operator reads.</param>
     /// <param name="haloY">Rows of context the operator reads.</param>
-    public static OpKernel Neighborhood(Func<PixelView, WorkingBuffer> @operator, int haloX, int haloY)
+    public static OpKernel Neighborhood(Func<PixelView, WorkingBuffer> @operator, int haloX, int haloY,
+        IntoKernel? into = null)
     {
         ArgumentNullException.ThrowIfNull(@operator);
         ArgumentOutOfRangeException.ThrowIfNegative(haloX);
@@ -106,13 +110,29 @@ internal static class PlanSteps
         {
             var window = source.Slice(sourceRect);
 
+            // The answer covers `sourceRect`; the part we want starts where the destination band starts.
+            var offsetY = destinationRect.Y - sourceRect.Y;
+
+            if (into is not null)
+            {
+                // No intermediate and no copy: the operator writes the band it owns straight into the output.
+                RowParallel.EnterNested();
+                try
+                {
+                    into(window, destination, destinationRect.Y, destinationRect.Height, offsetY);
+                }
+                finally
+                {
+                    RowParallel.ExitNested();
+                }
+
+                return;
+            }
+
             RowParallel.EnterNested();
             try
             {
                 using var result = @operator(window);
-
-                // The answer covers `sourceRect`; the part we want starts where the destination band starts.
-                var offsetY = destinationRect.Y - sourceRect.Y;
                 CopyRows(result.View, offsetY, destination, destinationRect.Y, destinationRect.Height);
             }
             finally
@@ -124,7 +144,7 @@ internal static class PlanSteps
 
     /// <summary>Adapts a neighbourhood operator that needs to know where its window sits in the image.</summary>
     /// <remarks>
-    /// A bordered convolution cannot be banded with <see cref="Neighborhood(Func{PixelView,WorkingBuffer},int,int)"/>:
+    /// A bordered convolution cannot be banded with <see cref="Neighborhood(Func{PixelView,WorkingBuffer},int,int,IntoKernel?)"/>:
     /// Mirror and Wrap have to reflect or wrap about the <b>image</b> edge, and the operator only sees its window, so
     /// it would reflect about the band edge and produce a seam. The window's origin and the image size are exactly
     /// what tells the two apart, so they are handed over.

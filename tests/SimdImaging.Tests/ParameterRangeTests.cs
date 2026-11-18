@@ -26,7 +26,7 @@ public class ParameterRangeTests
     public void Sepia_RejectsABlendOutsideItsRange(float blend)
     {
         using var image = Pixels();
-        Should.Throw<ArgumentOutOfRangeException>(() => image.Sepia(blend));
+        Should.Throw<ArgumentOutOfRangeException>(() => image.Pipe().Sepia(blend).ToImage());
     }
 
     [Theory]
@@ -35,7 +35,7 @@ public class ParameterRangeTests
     public void Temperature_RejectsAShiftOutsideItsRange(float shift)
     {
         using var image = Pixels();
-        Should.Throw<ArgumentOutOfRangeException>(() => image.Temperature(shift));
+        Should.Throw<ArgumentOutOfRangeException>(() => image.Pipe().Temperature(shift).ToImage());
     }
 
     /// <summary>The endpoints themselves are legitimate.</summary>
@@ -44,10 +44,10 @@ public class ParameterRangeTests
     {
         using var image = Pixels();
 
-        using var fullSepia = image.Sepia(1f);
-        using var noneSepia = image.Sepia(0f);
-        using var warmest = image.Temperature(1f);
-        using var coolest = image.Temperature(-1f);
+        using var fullSepia = image.Pipe().Sepia(1f).ToImage();
+        using var noneSepia = image.Pipe().Sepia(0f).ToImage();
+        using var warmest = image.Pipe().Temperature(1f).ToImage();
+        using var coolest = image.Pipe().Temperature(-1f).ToImage();
 
         fullSepia.Width.ShouldBe(image.Width);
         noneSepia.WritablePixels.ToArray().ShouldBe(image.WritablePixels.ToArray());
@@ -59,9 +59,9 @@ public class ParameterRangeTests
     {
         using var image = Pixels();
 
-        using var flat = image.Contrast(0f);
-        using var doubled = image.Contrast(2f);
-        using var negative = image.Saturation(-1f);
+        using var flat = image.Pipe().Contrast(0f).ToImage();
+        using var doubled = image.Pipe().Contrast(2f).ToImage();
+        using var negative = image.Pipe().Saturation(-1f).ToImage();
 
         flat.Width.ShouldBe(image.Width);
         doubled.Width.ShouldBe(image.Width);

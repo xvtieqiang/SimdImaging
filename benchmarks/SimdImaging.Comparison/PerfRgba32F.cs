@@ -45,22 +45,22 @@ internal static class PerfRgba32F
             Func<TheirImage, TheirImage> Theirs)[]
         {
             ("gaussian-blur", "Gaussian blur, sigma 3",
-                i => i.GaussianBlur(3f), i => i.Clone(x => x.GaussianBlur(3f))),
+                i => i.Pipe().GaussianBlur(3f).ToImage(), i => i.Clone(x => x.GaussianBlur(3f))),
             ("box-blur", "Box blur, radius 3",
-                i => i.BoxBlur(3), i => i.Clone(x => x.BoxBlur(3))),
+                i => i.Pipe().BoxBlur(3).ToImage(), i => i.Clone(x => x.BoxBlur(3))),
             ("grayscale", "Grayscale (BT.601)",
-                i => i.Grayscale(), i => i.Clone(x => x.Grayscale(GrayscaleMode.Bt601))),
+                i => i.Pipe().Grayscale().ToImage(), i => i.Clone(x => x.Grayscale(GrayscaleMode.Bt601))),
             ("sepia", "Sepia, full strength",
-                i => i.Sepia(1f), i => i.Clone(x => x.Sepia(1f))),
+                i => i.Pipe().Sepia(1f).ToImage(), i => i.Clone(x => x.Sepia(1f))),
             ("invert", "Invert colour channels",
-                i => i.Invert(), i => i.Clone(x => x.Invert())),
+                i => i.Pipe().Invert().ToImage(), i => i.Clone(x => x.Invert())),
             ("brightness", "Brightness +0.2",
-                i => i.Brightness(0.2f), i => i.Clone(x => x.Brightness(0.2f))),
+                i => i.Pipe().Brightness(0.2f).ToImage(), i => i.Clone(x => x.Brightness(0.2f))),
             ("resize-bicubic", $"Resize {width}x{height} -> {width / 2}x{height / 2}, bicubic",
-                i => i.Resize(width / 2, height / 2, Resampler.Bicubic),
+                i => i.Pipe().Resize(width / 2, height / 2, Resampler.Bicubic).ToImage(),
                 i => i.Clone(x => x.Resize(width / 2, height / 2, KnownResamplers.Bicubic))),
             ("rotate90", "Rotate 90 degrees",
-                i => i.Rotate90(), i => i.Clone(x => x.Rotate(RotateMode.Rotate90))),
+                i => i.Pipe().Rotate90().ToImage(), i => i.Clone(x => x.Rotate(RotateMode.Rotate90))),
         };
 
         var rows = new List<string[]>();

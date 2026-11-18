@@ -51,7 +51,7 @@ public class Median3x3Tests
         using var image = SimdImaging.Image.Create(width, height, WorkingFormat.Rgba8);
         data.AsSpan().CopyTo(image.WritablePixels);
 
-        using var filtered = image.Median3x3();
+        using var filtered = image.Pipe().Median3x3().ToImage();
         Assert.Equal(expected, filtered.WritablePixels.ToArray());
     }
 
@@ -64,7 +64,7 @@ public class Median3x3Tests
         using var image = SimdImaging.Image.Create(Width, Height, WorkingFormat.Rgba16);
         data.AsSpan().CopyTo(image.WritablePixels);
 
-        using var filtered = image.Median3x3();
+        using var filtered = image.Pipe().Median3x3().ToImage();
         Assert.Equal(expected16, filtered.WritablePixels.ToArray());
     }
 

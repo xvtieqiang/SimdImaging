@@ -160,9 +160,9 @@ public class HaloDeclarationTests
             .Grayscale()
             .ToImage();
 
-        using var first = source.Brightness(0.05f);
-        using var second = first.Sharpen();
-        using var third = second.Grayscale();
+        using var first = source.Pipe().Brightness(0.05f).ToImage();
+        using var second = first.Pipe().Sharpen().ToImage();
+        using var third = second.Pipe().Grayscale().ToImage();
 
         piped.WritablePixels.ToArray().ShouldBe(third.WritablePixels.ToArray());
     }
@@ -182,9 +182,9 @@ public class HaloDeclarationTests
             .Sharpen()
             .ToImage();
 
-        using var bright = source.Brightness(0.05f);
-        using var resized = bright.Resize(20, 14);
-        using var sharpened = resized.Sharpen();
+        using var bright = source.Pipe().Brightness(0.05f).ToImage();
+        using var resized = bright.Pipe().Resize(20, 14).ToImage();
+        using var sharpened = resized.Pipe().Sharpen().ToImage();
 
         piped.Width.ShouldBe(20);
         piped.Height.ShouldBe(14);

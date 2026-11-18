@@ -27,7 +27,7 @@ public class OilPaintOpsTests
         using var image = SimdImaging.Image.Create(width, height, WorkingFormat.Rgba8);
         source.AsSpan().CopyTo(image.WritablePixels);
 
-        using var painted = image.OilPaint(radius, levels);
+        using var painted = image.Pipe().OilPaint(radius, levels).ToImage();
         Assert.Equal(expected, painted.WritablePixels.ToArray());
     }
 

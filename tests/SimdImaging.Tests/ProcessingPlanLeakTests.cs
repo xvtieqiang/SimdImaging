@@ -51,7 +51,9 @@ public class ProcessingPlanLeakTests
             .Add("first", OpCategory.Point, CopyRows)
             .Add("second", OpCategory.Point, CopyRows)
             .Add("third", OpCategory.Global, CopyRows);
-        var options = new ExecuteOptions { MaxDegreeOfParallelism = 2 };
+        // The counts below describe the fused rent pattern, so fusion is asked for explicitly now that the
+        // executor fuses on its own only where it pays.
+        var options = new ExecuteOptions { MaxDegreeOfParallelism = 2, ForceFusion = true };
 
         using (plan.ExecuteWithOptions(source.View, options, pool))
         {

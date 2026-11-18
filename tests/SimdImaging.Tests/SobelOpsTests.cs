@@ -26,7 +26,7 @@ public class SobelOpsTests
         using var image = SimdImaging.Image.Create(width, height, WorkingFormat.Rgba8);
         source.AsSpan().CopyTo(image.WritablePixels);
 
-        using var edges = image.Sobel();
+        using var edges = image.Pipe().Sobel().ToImage();
         Assert.Equal(expected, edges.WritablePixels.ToArray());
     }
 
