@@ -798,10 +798,14 @@ public static class FilterOps
 
         // One contiguous block, three row offsets into it: a jagged float[3][] would add a pointer chase
         // per tap and three allocations per call for no benefit.
-        var lines = new float[3 * stride];
-        var sourceRow = new float[stride];
-        var output = new float[stride];
-        var computed = sourceRowOffset - 2;
+        RowParallel.For(width, rows, (startRow, endRow) =>
+        {
+        var lines = FloatScratch.Rent(3 * stride);
+        var sourceRow = FloatScratch.Rent(stride);
+        var output = FloatScratch.Rent(stride);
+        try
+        {
+        var computed = sourceRowOffset + startRow - 2;
 
         void EnsureRow(int y)
         {
@@ -829,7 +833,7 @@ public static class FilterOps
             }
         }
 
-        for (var y = sourceRowOffset; y < sourceRowOffset + rows; y++)
+        for (var y = sourceRowOffset + startRow; y < sourceRowOffset + endRow; y++)
         {
             EnsureRow(Math.Min(y + 1, height - 1));
             var topOffset = (Math.Max(y - 1, 0) % 3) * stride;
@@ -846,6 +850,14 @@ public static class FilterOps
 
             Pixels.WriteRowRaw(output, width, source.Format, destination.Row(destinationY + y - sourceRowOffset));
         }
+        }
+        finally
+        {
+            FloatScratch.Return(lines);
+            FloatScratch.Return(sourceRow);
+            FloatScratch.Return(output);
+        }
+        });
     }
 
     /// <summary>
@@ -1993,9 +2005,15 @@ public static class FilterOps
         var height = source.Height;
         var stride = width * 4;
 
-        var lines = new float[3 * stride];       // three rows in one block; see Morph3x3
-        var output = new float[stride];
-        var computed = sourceRowOffset - 2;
+        // Parallel over rows when called on the whole image; from inside a band the outer loop has the machine
+        // saturated and RowParallel runs this inline. Each worker needs its own three-row ring and cursor.
+        RowParallel.For(width, rows, (startRow, endRow) =>
+        {
+        var lines = FloatScratch.Rent(3 * stride);       // three rows in one block; see Morph3x3
+        var output = FloatScratch.Rent(stride);
+        try
+        {
+        var computed = sourceRowOffset + startRow - 2;
 
         void EnsureRow(int y)
         {
@@ -2005,7 +2023,7 @@ public static class FilterOps
             computed = Math.Max(computed, y);
         }
 
-        for (var y = sourceRowOffset; y < sourceRowOffset + rows; y++)
+        for (var y = sourceRowOffset + startRow; y < sourceRowOffset + endRow; y++)
         {
             EnsureRow(Math.Min(y + 1, height - 1));
             var top = (Math.Max(y - 1, 0) % 3) * stride;
@@ -2031,6 +2049,13 @@ public static class FilterOps
 
             Pixels.WriteRowRaw(output, width, source.Format, destination.Row(destinationY + y - sourceRowOffset));
         }
+        }
+        finally
+        {
+            FloatScratch.Return(lines);
+            FloatScratch.Return(output);
+        }
+        });
     }
 
     /// <summary>Emboss: a relief kernel with a mid-grey offset, so flat areas become grey and edges stand out.</summary>
@@ -2078,11 +2103,18 @@ public static class FilterOps
 
         var width = source.Width;
         var stride = width * 4;
-        var sourceRow = new float[stride];
-        var blurredRow = new float[stride];
-        var output = new float[stride];
+        var height = source.Height;
 
-        for (var y = 0; y < source.Height; y++)
+        // Rows are independent, so this loop is the whole cost left after the blur: at 1920x1080 the combine ran
+        // on one thread for 100 ms while the blur took 26.
+        RowParallel.For(width, height, (start, end) =>
+        {
+        var sourceRow = FloatScratch.Rent(stride);
+        var blurredRow = FloatScratch.Rent(stride);
+        var output = FloatScratch.Rent(stride);
+        try
+        {
+        for (var y = start; y < end; y++)
         {
             Pixels.ReadRowRaw(source.Row(y), width, source.Format, sourceRow);
             Pixels.ReadRowRaw(destination.View.Row(y), width, source.Format, blurredRow);
@@ -2097,6 +2129,14 @@ public static class FilterOps
 
             Pixels.WriteRowRaw(output, width, source.Format, destination.View.Row(y));
         }
+        }
+        finally
+        {
+            FloatScratch.Return(sourceRow);
+            FloatScratch.Return(blurredRow);
+            FloatScratch.Return(output);
+        }
+        });
 
         return destination;
     }
