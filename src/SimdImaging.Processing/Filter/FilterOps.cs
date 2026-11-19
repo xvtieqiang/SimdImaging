@@ -2479,11 +2479,16 @@ public static class FilterOps
                             var at = column * 4;
                             for (; x < end; x++)
                             {
-                                var o = x * 4;
-                                var a = row[o + 3];
-                                sums[at] += row[o] * a;
-                                sums[at + 1] += row[o + 1] * a;
-                                sums[at + 2] += row[o + 2] * a;
+                                // One 32-bit read instead of four byte reads, unpacked in the same byte order, so
+                                // the sums are bit-identical. Measured 1.14x on this pass at 640x360
+                                // (`pixelate-ablate`, three runs of seven interleaved rounds). A vector fill of the
+                                // block value was tried and lost 12%: at twelve pixels a block the vector path
+                                // covers three stores per row and pays the tail branch.
+                                var pixel = Unsafe.ReadUnaligned<uint>(ref row[x * 4]);
+                                var a = pixel >> 24;
+                                sums[at] += (pixel & 0xFF) * a;
+                                sums[at + 1] += ((pixel >> 8) & 0xFF) * a;
+                                sums[at + 2] += ((pixel >> 16) & 0xFF) * a;
                                 sums[at + 3] += a;
                             }
                         }

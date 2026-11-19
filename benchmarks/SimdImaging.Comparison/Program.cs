@@ -46,6 +46,12 @@ if (args.Length > 0 && args[0] == "memestimate-child")
 
 // M2 steady-state allocation probe. Measures our side only (no oracle, no licence, no report,
 // no golden), so it runs as a child-style early exit before the comparison harness is set up.
+if (args.Length > 0 && args[0] == "pixelate-ablate")
+{
+    PixelateAblate.Run(int.Parse(args[1]), int.Parse(args[2]), int.Parse(args[3]));
+    return;
+}
+
 if (args.Length > 0 && args[0] == "bandcost")
 {
     BandCost.Run(int.Parse(args[1]), int.Parse(args[2]), int.Parse(args[3]));
