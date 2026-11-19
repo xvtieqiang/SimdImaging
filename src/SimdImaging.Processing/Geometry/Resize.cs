@@ -319,8 +319,6 @@ public static class Resample
         var coreBands = Math.Max(32, (height + RowParallel.Degree - 1) / RowParallel.Degree);
         bandHeight = Math.Min(bandHeight, coreBands);
         var bandCount = (height + bandHeight - 1) / bandHeight;
-        var initialRows = Math.Min(source.Height,
-            (int)Math.Ceiling(bandHeight / Math.Max(scaleY, 1e-9)) + 2 * weightsY.Taps + 4);
 
         // Each worker owns its own row/scratch buffers (FloatScratch is thread-local), so bands can
         // run concurrently without aliasing. Output rows are disjoint; source rows are read-only.
