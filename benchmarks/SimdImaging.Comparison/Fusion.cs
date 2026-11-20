@@ -26,10 +26,13 @@ internal static class Fusion
 {
     /// <summary>Four sizes, because the per-band cost is a fixed one and only a sweep shows it being amortised.</summary>
     private static readonly (int Width, int Height)[] Sizes =
-        [(640, 360), (1920, 1080), (3840, 2160), (7680, 4320)];
+        [(160, 120), (320, 180), (640, 360), (1920, 1080), (3840, 2160), (7680, 4320)];
 
     public static void Write(Report report, int width, int height)
     {
+        // `fusion 320x180` sweeps one size; the default runs the whole ladder. The small end exists because the
+        // per-band cost is fixed and only a sweep shows where it stops being amortised.
+        var sizes = width > 0 && height > 0 ? [(width, height)] : Sizes;
         report.Heading(2, "G 组 · 融合是否发生，以及它的代价随尺寸怎么变");
         report.Line("> **判定不看时间，看托管分配与 `IPixelPool.Rent`**：融合的行带窗口只租输出、边读源边算；");
         report.Line("> 逐步执行会在每一级之间落一张中间图。计时用 `Timing.Time`（≥300 ms 热身 + 7 轮交错取中位）。");
@@ -37,7 +40,7 @@ internal static class Fusion
         report.Line("> 融合省下的中间图越多，而每带的固定成本被摊得越薄——这两件事必须分尺寸看。");
         report.Line();
 
-        foreach (var (w, h) in Sizes)
+        foreach (var (w, h) in sizes)
         {
             Console.WriteLine($"[fusion] {w}x{h}...");
             var data = Fixture.Make(w, h);
@@ -142,40 +145,50 @@ internal static class Fusion
     private static string[] Measure(OurImage source, string name, ProcessingPlan plan,
         Func<IPixelPool?, OurImage> fused, Func<IPixelPool?, OurImage> separate)
     {
-        var (fusedRents, fusedAlloc, fusedMs) = One(fused);
-        var (separateRents, separateAlloc, separateMs) = One(separate);
+        // Both sides go through one Timing.Time call so their rounds alternate. Measured separately they were two
+        // independent seven-round medians taken minutes apart, and on this machine the ratio moved by 3x between
+        // runs of the mode — that was the instrument, not the code.
+        using (var warm = fused(null))
+        {
+        }
+
+        using (var warm = separate(null))
+        {
+        }
+
+        var times = Timing.Time(
+        [
+            new Runner("fused", () => { using var r = fused(null); }),
+            new Runner("separate", () => { using var r = separate(null); }),
+        ]);
+
+        var fusedSpy = new CountingPool();
+        var separateSpy = new CountingPool();
+
+        var before = GC.GetTotalAllocatedBytes(precise: true);
+        using (var result = fused(fusedSpy))
+        {
+        }
+
+        var fusedAllocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+
+        before = GC.GetTotalAllocatedBytes(precise: true);
+        using (var result = separate(separateSpy))
+        {
+        }
+
+        var separateAllocated = GC.GetTotalAllocatedBytes(precise: true) - before;
 
         return
         [
             name,
-            Timing.F(fusedMs),
-            Timing.F(separateMs),
-            (fusedMs / separateMs).ToString("F2", CultureInfo.InvariantCulture) + "×",
-            KiB(fusedAlloc),
-            KiB(separateAlloc),
-            $"{fusedRents} / {separateRents}",
+            Timing.F(times["fused"]),
+            Timing.F(times["separate"]),
+            (times["fused"] / times["separate"]).ToString("F2", CultureInfo.InvariantCulture) + "×",
+            KiB(fusedAllocated),
+            KiB(separateAllocated),
+            $"{fusedSpy.Rents} / {separateSpy.Rents}",
         ];
-    }
-
-    private static (int Rents, long Allocated, double Ms) One(Func<IPixelPool?, OurImage> run)
-    {
-        using (var warm = run(null))
-        {
-        }
-
-        var spy = new CountingPool();
-        using (var result = run(spy))
-        {
-        }
-
-        var before = GC.GetTotalAllocatedBytes(precise: true);
-        using (var result = run(spy))
-        {
-        }
-
-        var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
-        var times = Timing.Time([new Runner("run", () => { using var r = run(null); })]);
-        return (spy.Rents, allocated, times["run"]);
     }
 
     private static string KiB(long bytes) =>

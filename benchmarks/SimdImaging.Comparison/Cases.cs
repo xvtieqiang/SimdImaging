@@ -72,6 +72,17 @@ internal static class Cases
                 i => i.Pipe().GaussianBlur(3f).ToImage(),
                 i => i.Clone(x => x.GaussianBlur(3f)), full),
 
+            // The six operators this session parallelised had no case here, which is why they ran on one thread for
+            // months without a gate noticing. Only the ones with a documented ImageSharp equivalent can be paired.
+            new Case("sharpen", "FLT-7", "Unsharp mask, amount 0.6, sigma 1",
+                i => i.Pipe().Sharpen(0.6f, 1f).ToImage(),
+                i => i.Clone(x => x.GaussianSharpen(0.6f)), full),
+            // ImageSharp 4.1.3 has no public emboss or median-filter processor, so those two cannot be paired.
+
+            new Case("box-blur-r5", "FLT-2", "Box blur, radius 5",
+                i => i.Pipe().BoxBlur(5).ToImage(),
+                i => i.Clone(x => x.BoxBlur(5)), full),
+
             new Case("box-blur", "FLT-3", "Box blur, radius 3",
                 i => i.Pipe().BoxBlur(3).ToImage(),
                 i => i.Clone(x => x.BoxBlur(3)), full),
