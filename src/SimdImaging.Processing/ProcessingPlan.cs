@@ -450,20 +450,32 @@ public sealed class ProcessingPlan
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Measured at 640×360 / 1920×1080 / 3840×2160 / 7680×4320, plan ÷ step-by-step, lower is better:
+    /// Fusing trades two things: it saves one full-frame write and read per intermediate, and it pays for the halo
+    /// rows recomputed at every band boundary plus a fixed cost per band. Which side wins is not a property of the
+    /// kernel size — it is a property of whether the steps can use the machine some other way.
     /// </para>
     /// <para>
-    /// A small kernel wins at every size — 3×3 ×2 read 0.63 / 0.35 / — / 0.36 and 3×3 ×3 read 0.63 / 0.40 / — /
-    /// 0.45 — because the fused band keeps the halo rows in cache instead of writing and re-reading a whole image
-    /// between two cheap passes. A convolution loses or ties (blur σ=3 + 2 points: 1.55 / 1.02 / — / 1.19): its
-    /// own arithmetic dominates, so the intermediate it saves was not the cost. A chain of points also loses at
-    /// small sizes (1.64 / 1.15) and only wins once the intermediate images are large enough to matter
-    /// (point ×5: 1.41 / 0.91 / — / 0.54).
+    /// An earlier version of this rule read "fuse when the segment contains a small kernel", and at the time it was
+    /// right: <c>Morph3x3</c>, <c>Convolve3x3</c> and the combine loop in <c>Sharpen</c> ran on one thread, so the
+    /// fused band was the only path that used more than one core, and a 3×3 chain read 0.45 (fusion 2.2x faster).
+    /// Those operators now parallelise over rows themselves. Re-measured with the two sides interleaved in one
+    /// timing call (six sizes, three runs, plan ÷ step-by-step):
     /// </para>
     /// <para>
-    /// So: fuse a segment that contains a small kernel, and otherwise fuse only when the intermediate images it
-    /// would avoid are big enough that memory is the reason to fuse. The second half is what keeps fusion's actual
-    /// purpose — not materialising N full frames — intact at 8K even where it costs a little time.
+    /// <code>
+    ///           160x120  320x180  640x360  1080p   4K      8K
+    /// point x2    0.59     0.42     0.84    0.83   0.83    0.80
+    /// 3x3 x2      0.25     0.27     1.37    1.23   1.05    1.11
+    /// 3x3 x3      0.46     0.32     1.08    1.00   1.03    1.16
+    /// blur+2pt    1.07     0.87     1.12    1.05   1.05    1.24
+    /// </code>
+    /// </para>
+    /// <para>
+    /// The curve is not monotonic, and the reason is the parallel gate: below it a step runs on one thread, so
+    /// fusion is the only source of parallelism and wins 2-4x; above it every step is already using the cores, and
+    /// fusion keeps only the traffic it saves, which at 640x360 is less than the halo it recomputes. A chain of
+    /// points is the one shape that wins at every size above the gate, because it has no halo to recompute. What
+    /// is left for the size test is the purpose fusion was built for: not materialising N full frames.
     /// </para>
     /// </remarks>
     private static bool ShouldFuse(List<PlanStep> steps, int width, int height)
@@ -473,17 +485,22 @@ public sealed class ProcessingPlan
         foreach (var step in steps)
             maxHalo = Math.Max(maxHalo, Math.Max(step.HaloX, step.HaloY));
 
-        // A small kernel: cheap per pixel, so the round trip through a full-size intermediate is the larger cost.
-        if (maxHalo is > 0 and <= SmallKernelHalo)
+        var pixels = (long)width * height;
+
+        // Below the parallel gate every step would run on the calling thread: fusion is the only way this image
+        // uses more than one core, and it measured 0.25-0.46 at 160x120 and 320x180.
+        if (pixels < RowParallel.MinWorkPixels)
             return true;
 
-        // Otherwise only when the intermediates would exceed what we are willing to materialise.
+        // A chain with no halo costs nothing to fuse: there is no window to recompute, only a frame to skip.
+        // Measured 0.80-0.84 from 640x360 to 8K.
+        if (maxHalo == 0)
+            return true;
+
+        // Everything else keeps fusion for what it was built for — not materialising N full frames.
         var intermediateBytes = (long)width * height * 4 * (count - 1);
         return intermediateBytes > FuseIntermediateBytes;
     }
-
-    /// <summary>Halo at or below which a step is treated as a small kernel: 3×3 is 1, 5×5 is 2.</summary>
-    private const int SmallKernelHalo = 2;
 
     /// <summary>
     /// The worth of a full-size intermediate above which fusing is justified even when the steps are expensive:
