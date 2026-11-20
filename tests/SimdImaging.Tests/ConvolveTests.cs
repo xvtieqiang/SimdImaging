@@ -150,6 +150,31 @@ public class ConvolveTests
     }
 
     /// <summary>
+    /// The float median (16-bit and float formats) parallelises over rows; the banded plan calls it per band with
+    /// the outer loop already saturated, which takes the inline path. Both must agree byte for byte.
+    /// </summary>
+    [Theory]
+    [InlineData(2, 5)]
+    [InlineData(3, 3)]
+    public void FloatMedian_MatchesAcrossBandHeights(int radius, int bandRows)
+    {
+        using var image = Image.Create(320, 256, WorkingFormat.Rgba16);   // above the 64 K-pixel parallel gate
+        var random = new Random(20261120);
+        var span = image.WritablePixels;
+        for (var i = 0; i < span.Length; i++)
+            span[i] = (byte)random.Next(256);
+
+        using var whole = image.Pipe().Median(radius).ToImage();
+
+        var plan = new ProcessingPlan { BandRows = bandRows }.Add(PlanOps.Median(radius));
+        using var banded = plan.ExecuteWithOptions(image[0].Pixels.View,
+            new ExecuteOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2) });
+
+        whole.WritablePixels.SequenceEqual(banded.View.Span)
+            .ShouldBeTrue($"radius={radius} bandRows={bandRows}");
+    }
+
+    /// <summary>
     /// The banded plan must give the same bytes as the whole-image call: a median reads a radius of rows on either
     /// side, so a plan that under-declares its halo shows up as a seam.
     /// </summary>

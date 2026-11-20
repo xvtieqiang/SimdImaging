@@ -23,6 +23,12 @@ internal static class RowParallel
     internal static int RowsPerWorker => RowsPerWorkerOverride > 0 ? RowsPerWorkerOverride : 32;
 
     /// <summary>
+    /// Pixels below which <see cref="For"/> runs the body on the calling thread. Shared with the fusion decision:
+    /// an image this small has no other way to use more than one core, so fusing is what gives it parallelism.
+    /// </summary>
+    internal const long MinWorkPixels = 64 * 1024;
+
+    /// <summary>
     /// Non-zero while this thread is already inside a band of some outer parallel loop. Re-entering
     /// Parallel.For from a worker oversubscribes the pool — the outer loop has the machine saturated
     /// already — so nested work runs inline. ThreadStatic, so it cannot race across workers.
@@ -86,7 +92,7 @@ internal static class RowParallel
         // was given — and writing 1 here would overwrite the count the band split just reported.
         var nested = _nesting > 0;
         var degree = Degree;
-        const long minWorkPixels = 64 * 1024;
+        const long minWorkPixels = MinWorkPixels;
         var perWorker = Math.Max(1, RowsPerWorker);
         var workers = Math.Min(degree, Math.Max(1, (height + perWorker - 1) / perWorker));
         if (degree <= 1 || (long)width * height < minWorkPixels || workers <= 1)

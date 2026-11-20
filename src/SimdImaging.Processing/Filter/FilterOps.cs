@@ -1463,16 +1463,20 @@ public static class FilterOps
         var samples = ringRows * ringRows;
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
-        var ring = new float[ringRows * stride];
-        var loaded = new int[ringRows];
-        Array.Fill(loaded, -1);
-        var row = new float[stride];
-        var output = new float[stride];
-        var window = new float[samples];
-
         try
         {
-            for (var y = 0; y < height; y++)
+            // Per worker: the ring and its load markers are the operator's state, and bands would race on them.
+            RowParallel.For(width, height, (start, end) =>
+            {
+            var ring = FloatScratch.Rent(ringRows * stride);
+            var loaded = new int[ringRows];
+            Array.Fill(loaded, -1);
+            var row = FloatScratch.Rent(stride);
+            var output = FloatScratch.Rent(stride);
+            var window = FloatScratch.Rent(samples);
+            try
+            {
+            for (var y = start; y < end; y++)
             {
                 for (var tap = -radius; tap <= radius; tap++)
                 {
@@ -1482,7 +1486,9 @@ public static class FilterOps
                         continue;
 
                     Pixels.ReadRowRaw(source.Row(wanted), width, source.Format, row);
-                    row.CopyTo(ring, slot * stride);
+                    // Explicit length: a pooled buffer can be longer than the stride it was asked for, and CopyTo
+                    // would move the whole array into the ring.
+                    row.AsSpan(0, stride).CopyTo(ring.AsSpan(slot * stride));
                     loaded[slot] = wanted;
                 }
 
@@ -1508,6 +1514,15 @@ public static class FilterOps
 
                 Pixels.WriteRowRaw(output, width, source.Format, view.Row(y));
             }
+            }
+            finally
+            {
+                FloatScratch.Return(ring);
+                FloatScratch.Return(row);
+                FloatScratch.Return(output);
+                FloatScratch.Return(window);
+            }
+            });
 
             return destination;
         }
@@ -1519,22 +1534,109 @@ public static class FilterOps
     }
 
     /// <summary>Median of the buffer's first <paramref name="count"/> values, by insertion sort in place.</summary>
+    /// <summary>
+    /// The median of an odd-length window, by quickselect rather than a full sort.
+    /// </summary>
+    /// <remarks>
+    /// The window is always <c>(2r+1)²</c>, which is odd, so the median is the single element at rank
+    /// <c>count / 2</c> — a value, not an average of two. Any correct selection returns exactly what the insertion
+    /// sort returned, so the bytes cannot move; only the comparisons do. At radius 3 that is 49 samples per channel
+    /// per pixel, and the sort was O(k²) of them.
+    /// </remarks>
     private static float Middle(float[] values, int count)
     {
-        for (var i = 1; i < count; i++)
+        var target = count / 2;
+        var left = 0;
+        var right = count - 1;
+
+        while (left < right)
         {
-            var value = values[i];
-            var j = i - 1;
-            while (j >= 0 && values[j] > value)
+            // Hoare partition around the middle element. Strict comparisons on both sides keep runs of equal
+            // samples converging instead of spinning.
+            var pivot = values[(left + right) >> 1];
+            var i = left;
+            var j = right;
+            while (i <= j)
             {
-                values[j + 1] = values[j];
-                j--;
+                while (values[i] < pivot)
+                    i++;
+
+                while (values[j] > pivot)
+                    j--;
+
+                if (i <= j)
+                {
+                    (values[i], values[j]) = (values[j], values[i]);
+                    i++;
+                    j--;
+                }
             }
 
-            values[j + 1] = value;
+            if (target <= j)
+                right = j;
+            else if (target >= i)
+                left = i;
+            else
+                break;
         }
 
-        return values[count / 2];
+        return values[target];
+    }
+
+    /// <summary>
+    /// Pixels below which a two-input table is not worth building.
+    /// </summary>
+    /// <remarks>
+    /// Same device as <c>PointOps.Lut16PixelFloor</c> — a 65,536-entry table whose build must beat the work it
+    /// replaces — but the numbers differ by 9x because this one fills inline instead of invoking a transform per
+    /// entry: 0.16–0.26 ms against that one's 2.3 ms.
+    /// <para>
+    /// The crossover is build ÷ per-pixel saving, which lands between 4K and 43K pixels depending on whether the
+    /// image is above the parallel gate. That spread is wider than a timing on a shared machine can resolve, so
+    /// the constant is not tuned to it: it takes <see cref="RowParallel.MinWorkPixels"/>, the engine's existing
+    /// boundary for "worth spending a fixed cost to go faster". One boundary in the engine, not two, and it sits
+    /// above the crossover rather than on it.
+    /// </para>
+    /// </remarks>
+    private const long TwoInputLutFloor = RowParallel.MinWorkPixels;
+
+    /// <summary>The sharpen combine for 8-bit input: <c>round((s + amount·(s − b))·255)</c>, as a table.</summary>
+    private static void CombineRgba8(PixelView source, PixelView destination, float amount)
+    {
+        var table = new byte[256 * 256];
+        for (var s8 = 0; s8 < 256; s8++)
+        {
+            var s = s8 * (1f / 255f);
+            for (var b8 = 0; b8 < 256; b8++)
+            {
+                var b = b8 * (1f / 255f);
+                var value = s + (amount * (s - b));
+
+                // Exactly Pixels.ToByte: scale, add a half, truncate, clamp. MathF.Round would be banker's
+                // rounding and would move one code in every hundred pixels.
+                var scaled = (value * 255f) + 0.5f;
+                table[(s8 << 8) | b8] = scaled <= 0f ? (byte)0 : scaled >= 255f ? (byte)255 : (byte)scaled;
+            }
+        }
+
+        var width = source.Width;
+        RowParallel.For(width, source.Height, (start, end) =>
+        {
+            for (var y = start; y < end; y++)
+            {
+                var sourceRow = source.Row(y);
+                var blurredRow = destination.Row(y);
+                var output = destination.Row(y);
+
+                for (var i = 0; i < sourceRow.Length; i += 4)
+                {
+                    output[i] = table[(sourceRow[i] << 8) | blurredRow[i]];
+                    output[i + 1] = table[(sourceRow[i + 1] << 8) | blurredRow[i + 1]];
+                    output[i + 2] = table[(sourceRow[i + 2] << 8) | blurredRow[i + 2]];
+                    output[i + 3] = sourceRow[i + 3];
+                }
+            }
+        });
     }
 
     /// <summary>
@@ -1632,19 +1734,67 @@ public static class FilterOps
                         if (weight == 0f)
                             continue;
 
-                        for (var x = 0; x < width; x++)
+                        // The clamped columns, kept as the original expression so the edges cannot drift.
+                        void Edge(int x)
                         {
                             var sourceX = Map(x + tapX, width, border);
                             var o = x * 4;
                             for (var c = 0; c < 3; c++)
                             {
-                                var sample = sourceX < 0 || (baseOffset < 0 && !wraps)
+                                var sample = sourceX < 0
                                     ? constantValue
-                                    : wraps
-                                        ? wrapRow[(sourceX * 4) + c]
-                                        : ring[baseOffset + (sourceX * 4) + c];
+                                    : ring[baseOffset + (sourceX * 4) + c];
                                 sum[o + c] += weight * sample;
                             }
+                        }
+
+                        if (wraps)
+                        {
+                            // Every tap wraps to a different column, so this path keeps the per-pixel Map.
+                            for (var x = 0; x < width; x++)
+                            {
+                                var sourceX = Map(x + tapX, width, border);
+                                var o = x * 4;
+                                for (var c = 0; c < 3; c++)
+                                {
+                                    var sample = sourceX < 0
+                                        ? constantValue
+                                        : wrapRow[(sourceX * 4) + c];
+                                    sum[o + c] += weight * sample;
+                                }
+                            }
+                        }
+                        else if (baseOffset < 0)
+                        {
+                            // Outside the image on every column: one value for the whole row.
+                            var contribution = weight * constantValue;
+                            for (var x = 0; x < width; x++)
+                            {
+                                var o = x * 4;
+                                sum[o] += contribution;
+                                sum[o + 1] += contribution;
+                                sum[o + 2] += contribution;
+                            }
+                        }
+                        else
+                        {
+                            // Interior columns need no clamp and no branch. The ternary used to sit inside the tap
+                            // loop, so every tap of every pixel paid it — the same mistake HorizontalRow records.
+                            // Tap order and per-pixel order are unchanged, so the bytes cannot move.
+                            var first = Math.Max(0, -tapX);
+                            var last = Math.Min(width, width - tapX);
+                            for (var x = 0; x < first; x++)
+                                Edge(x);
+                            for (var x = first; x < last; x++)
+                            {
+                                var o = x * 4;
+                                var s = baseOffset + ((x + tapX) * 4);
+                                sum[o] += weight * ring[s];
+                                sum[o + 1] += weight * ring[s + 1];
+                                sum[o + 2] += weight * ring[s + 2];
+                            }
+                            for (var x = last; x < width; x++)
+                                Edge(x);
                         }
                     }
                 }
@@ -2100,6 +2250,17 @@ public static class FilterOps
         // time, so writing it back in place costs no extra frame. It used to rent a second full-size buffer for
         // the result — at 7680x4320 that is 126.6 MiB for nothing.
         var destination = GaussianBlur(source, sigma, pool);
+
+        // Byte-domain combine for Rgba8. The float path converts both rows to floats and back for a three-term
+        // lerp, which at 1920x1080 cost more than the blur it follows: 13.7 ms of the operator's 24.3. A 64K table
+        // over (source byte, blurred byte) computes the identical expression — same float ops, same rounding — so
+        // the output bytes cannot move.
+        if (source.Format == WorkingFormat.Rgba8 && destination.View.Format == WorkingFormat.Rgba8
+            && (long)source.Width * source.Height >= TwoInputLutFloor)
+        {
+            CombineRgba8(source, destination.View, amount);
+            return destination;
+        }
 
         var width = source.Width;
         var stride = width * 4;
@@ -2604,9 +2765,13 @@ public static class FilterOps
         var span = MathF.Max(1f - radius, 1e-6f);
 
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
-        var row = new float[stride];
 
-        for (var y = 0; y < height; y++)
+        RowParallel.For(width, height, (start, end) =>
+        {
+        var row = FloatScratch.Rent(stride);
+        try
+        {
+        for (var y = start; y < end; y++)
         {
             Pixels.ReadRowRaw(source.Row(y), width, source.Format, row);
             var dy = (y + 0.5f - centreY) / halfDiagonal;
@@ -2626,6 +2791,12 @@ public static class FilterOps
 
             Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));
         }
+        }
+        finally
+        {
+            FloatScratch.Return(row);
+        }
+        });
 
         return destination;
     }
@@ -2653,9 +2824,13 @@ public static class FilterOps
         var width = source.Width;
         var stride = width * 4;
         using var highlights = WorkingBuffer.Rent(width, source.Height, source.Format, null);
-        var row = new float[stride];
 
-        for (var y = 0; y < source.Height; y++)
+        RowParallel.For(width, source.Height, (start, end) =>
+        {
+        var row = FloatScratch.Rent(stride);
+        try
+        {
+        for (var y = start; y < end; y++)
         {
             Pixels.ReadRowRaw(source.Row(y), width, source.Format, row);
             for (var x = 0; x < width; x++)
@@ -2677,13 +2852,62 @@ public static class FilterOps
 
             Pixels.WriteRowRaw(row, width, source.Format, highlights.View.Row(y));
         }
+        }
+        finally
+        {
+            FloatScratch.Return(row);
+        }
+        });
 
         using var halo = GaussianBlur(highlights.View, sigma, null);
 
         var destination = WorkingBuffer.Rent(width, source.Height, source.Format, pool);
-        var glowRow = new float[stride];
 
-        for (var y = 0; y < source.Height; y++)
+        // Same shape as the sharpen combine: two rows in, one clamped sum out. A 64K table over the two byte
+        // samples computes the identical expression, so the round trip through floats buys nothing.
+        if (source.Format == WorkingFormat.Rgba8 && halo.View.Format == WorkingFormat.Rgba8
+            && (long)width * source.Height >= TwoInputLutFloor)
+        {
+            var table = new byte[256 * 256];
+            for (var s8 = 0; s8 < 256; s8++)
+            {
+                var s = s8 * (1f / 255f);
+                for (var h8 = 0; h8 < 256; h8++)
+                {
+                    var add = h8 * (1f / 255f) * amount;
+                    var value = s + add;
+                    var scaled = (Math.Clamp(value, 0f, 1f) * 255f) + 0.5f;
+                    table[(s8 << 8) | h8] = scaled <= 0f ? (byte)0 : scaled >= 255f ? (byte)255 : (byte)scaled;
+                }
+            }
+
+            RowParallel.For(width, source.Height, (start, end) =>
+            {
+                for (var y = start; y < end; y++)
+                {
+                    var sourceRow = source.Row(y);
+                    var haloRow = halo.View.Row(y);
+                    var output = destination.View.Row(y);
+                    for (var i = 0; i < sourceRow.Length; i += 4)
+                    {
+                        output[i] = table[(sourceRow[i] << 8) | haloRow[i]];
+                        output[i + 1] = table[(sourceRow[i + 1] << 8) | haloRow[i + 1]];
+                        output[i + 2] = table[(sourceRow[i + 2] << 8) | haloRow[i + 2]];
+                        output[i + 3] = sourceRow[i + 3];
+                    }
+                }
+            });
+
+            return destination;
+        }
+
+        RowParallel.For(width, source.Height, (start, end) =>
+        {
+        var row = FloatScratch.Rent(stride);
+        var glowRow = FloatScratch.Rent(stride);
+        try
+        {
+        for (var y = start; y < end; y++)
         {
             Pixels.ReadRowRaw(source.Row(y), width, source.Format, row);
             Pixels.ReadRowRaw(halo.View.Row(y), width, source.Format, glowRow);
@@ -2698,6 +2922,13 @@ public static class FilterOps
 
             Pixels.WriteRowRaw(row, width, source.Format, destination.View.Row(y));
         }
+        }
+        finally
+        {
+            FloatScratch.Return(row);
+            FloatScratch.Return(glowRow);
+        }
+        });
 
         return destination;
     }
