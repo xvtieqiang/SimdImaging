@@ -225,7 +225,7 @@ public static class DrawOps
         return true;
     }
 
-    private static void FillRow(Span<byte> row, int width, RgbaColor color, WorkingFormat format)
+    internal static void FillRow(Span<byte> row, int width, RgbaColor color, WorkingFormat format)
     {
         var bytesPerPixel = format.BytesPerPixel();
         Span<byte> pixel = stackalloc byte[16];

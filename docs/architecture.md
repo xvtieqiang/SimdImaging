@@ -1,8 +1,8 @@
 # SimdImaging 架构设计（v0.1）
 
-> 状态：**设计契约 + 实施记录（2026-11-15）**。M0、M1、M6–M14 已完成并验收，M15 进行中，M5 验收未启动，
+> 状态：**设计契约 + 实施记录（2026-11-25）**。M0、M1、M6–M14 已完成并验收，M15 进行中，M16（文件级流式）、M17（区域执行）与 M18（几何进入执行模型）已完成（§6.5 / §6.6 / §6.7），M5 验收未启动，
 > M2–M4 功能已落地但出口条件仅部分核验。§11 中带「已完成」与实测数字的行是记录，未标记的行仍是待兑现的设计。
-> 底层依赖：`Sdcb.SimdCodecs` 2.0.x，**NuGet 包**，版本锁在 `Directory.Packages.props`。仓库不持有、也不构建任何外部源码。
+> 底层依赖：`Sdcb.SimdCodecs` 2.1.x，**NuGet 包**，版本锁在 `Directory.Packages.props`。仓库不持有、也不构建任何外部源码。
 > 算子清单见 [`operators.md`](operators.md)。
 
 ---
@@ -55,7 +55,7 @@
 
 ## 2. 底层能力盘点（事实，非推断）
 
-读的是已发布的 `Sdcb.SimdCodecs` **2.0.0** 包（源码提交 `3b43931`，2026-11-09；版本族 2.0）。下表"位置"列写包名与类型，**不再指向本地源码路径**——仓库里没有那份检出。
+读的是已发布的 `Sdcb.SimdCodecs` **2.1.0** 包（源码提交 `8d62810`，2026-11-24；版本族 2.1）。下表"位置"列写包名与类型，**不再指向本地源码路径**——仓库里没有那份检出。
 
 ### 2.1 已有的
 
@@ -70,6 +70,7 @@
 | `ImageDecoder` 会话 + 多帧 + 时长 | `Sdcb.SimdCodecs` / `ImageDecoder.cs` | 动图/多页的帧模型 |
 | `ColorEncoding`（H.273 primaries/transfer/matrix） | `Abstractions/ColorEncoding.cs` | 只**标记**，从不重算像素 |
 | `ImageMetadata`（Exif 原始块、XMP、ICC） | `Abstractions/ImageMetadata.cs` | 透传 |
+| `IImageRowReader` / `StreamEncoderSession`：行级读写 + `IsStreaming` 能力位（2.1.0 起） | `Abstractions/IImageRowReader.cs`、`Sdcb.SimdCodecs/StreamEncoderSession.cs` | 文件级流式的**底层**已具备；不满足流式条件的变体（渐进式 JPEG、交错 PNG、缩放/带方向解码）内部仍整图缓冲，靠 `IsStreaming` 分辨 |
 | `Sdcb.SimdCodecs.Exif`：解析 + 写回 | 包 `Sdcb.SimdCodecs.Exif` | 方向、GPS、拍摄参数 |
 | `Sdcb.SimdCodecs.Color.Icc`：**只有 profile 字节**（sRGB v4） | 包 `Sdcb.SimdCodecs.Color.Icc` | ICC **变换**是空白，归我们 |
 
@@ -102,7 +103,7 @@ AGENTS.md 写明：JPEG 编解码、WebP 解码、PNG 编解码**已调到世界
   │
   ├─ 边界：一次 PixelConverter + RasterImage
   │
-  ├─ Sdcb.SimdCodecs 2.0.x          编解码 / 容器 / 元数据块 / 布局转换
+  ├─ Sdcb.SimdCodecs 2.1.x          编解码 / 容器 / 元数据块 / 布局转换
   │
   └─ BCL：ZLibStream / Brotli / ArrayPool / Vector128 / 256 / 512
 ```
@@ -112,7 +113,7 @@ AGENTS.md 写明：JPEG 编解码、WebP 解码、PNG 编解码**已调到世界
 ```
 SimdImaging.slnx
 Directory.Build.props          # TFM net10.0, IsAotCompatible, PublicAPI 分析器, 统一版本
-Directory.Packages.props       # 中央包版本；Sdcb.SimdCodecs 锁 2.0.x
+Directory.Packages.props       # 中央包版本；Sdcb.SimdCodecs 锁 2.1.x
 global.json                    # SDK 10.0.100, rollForward latestFeature
 docs/
   architecture.md     # 本文
@@ -541,6 +542,19 @@ bandRows  = clamp(min(byPixels, byThreads), 8, 1024);
 
 时间是**白拿的**：8K 下带高 128 / 64 / 33 分别是 836 / 794 / 833 ms，差别在噪声内。
 
+**但这条规则只属于「带数就是并行度」的执行器。** 带泵与区域执行器是**顺序出带**、带内按行并行，带高必须大到
+让带自己的行循环填满机器，否则每个算子都在调用线程上串行跑，而且不报错。实测 512 宽的 3 步链：64 行带
+14.8–36.8 ms，192/256 行带 **3.0 ms**（同一批像素）。因此它们用另一条规则（`SequentialBands`）：
+
+```csharp
+byWorkers = degree × RowParallel.RowsPerWorker;          // 32 行/worker
+byPixels  = ceil(MinWorkPixels / width);                 // 64 K 像素，否则 RowParallel.For 不进并行
+byBudget  = 4 MiB / (width × bpp);                       // 一个窗口的上限
+bandRows  = min(max(byWorkers, byPixels), byBudget, height);
+```
+
+1080p 下两者都算出 128–256 行，差别在噪声内；512 宽的区域从 3–5× 慢变成与整图同价（见 §6.6.5）。
+
 配套的两步：
 
 - `ImageOp.Into`：分带适配器原本让算子自己租一块窗口缓冲、算完再把属于自己那几行拷出来。接了这条路的算子
@@ -615,9 +629,10 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 
 | 阶段 | 能力 |
 |---|---|
-| v1（M1–M3） | 整图执行；`MapSourceRect` 契约已在，算子全实现 |
+| v1（M1–M3） | 整图执行。`MapSourceRect` 只在 `IImageOp` 上**声明**过，全仓零实现；执行器真正的契约是 `ImageOp` / `PlanStep` 的 `HaloX/HaloY` |
 | P1（M4） | 行带流式：只对 `Neighborhood` / `Separable` 打开，halo = 核半径；内存从 O(H) 降到 O(band + halo) |
-| P2 | 二维分块：`Geometric` 也支持；`Global` 算子强制两遍（先统计后处理），仍受 `MaxWorkingBytes` 约束 |
+| P2 · 已交付一半（M17） | **矩形执行**：任意源矩形 → 窗口 → `RunWindow` → 内圈，见 §6.6。源只有 TIFF 段级实现 |
+| P2 · 未做 | `Geometric`（尺寸变化）与 `Global` 两遍（先统计后处理），仍受 `MaxWorkingBytes` 约束 |
 
 分块的验收不是"能跑"，是**输出与整图执行逐字节相同**。这一条会让不少 op 在 P1 阶段被判定为"不能分块"，那是正确结果，不是失败。
 
@@ -625,6 +640,282 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 
 - `MaxWorkingBytes` 不够 → 先尝试降档（Rgba32F → Rgba16，若算子是精确整数语义）→ 仍不够则抛，**不静默改精度**。
 - `MaxPixels` 在 Load 的头信息阶段就检查，避免先分配再失败。
+
+### 6.5 文件级流式（M16，S1+S2 已落地）
+
+现状：`Load` 把整个文件读成 `byte[]`（`ImageIo.cs:22`），`Save` 把整图编成 `byte[]` 再落盘（`ImageIo.cs:341`）。
+执行器本身早已是「只持有一带 + halo」的窗口递归（§6.2）——**缺的从来不是算法，是输入从哪来、输出往哪去**。
+
+`Sdcb.SimdCodecs` 2.1.0 正好提供了这道缝：`ImageCodecs.OpenRowReader(stream, format, options, leaveOpen, ct)`
+返回 forward-only 的 `IImageRowReader`（`ReadRows(span, stride, maxRows, ct)`，行 i 写在 `i × stride`）；
+`ImageCodecs.CreateEncoder(format, stream, options, leaveOpen)` 返回 `StreamEncoderSession`
+（`AddFrame → StreamFrameEncoder.WriteRows → Commit`）。两者都有诚实的 `IsStreaming`：为 false 时编解码器
+自己在内部缓冲整图（渐进式 JPEG、交错 PNG、带 `ScaleDenominator`/`Region` 的解码、WebP 无损编码、
+非 seekable 流上的 TIFF 补丁字节），**字节仍然正确，只是不省内存**。
+
+#### 6.5.1 三种模式由「源能力 × 汇能力」决定，不由 API 决定
+
+| 模式 | 源 | 汇 | 何时 |
+|---|---|---|---|
+| Materialized（现状） | 整图 `PixelView` | 整图 buffer | 计划含 `Global` / `Geometric`、多段、Rgba32F 链 |
+| ForwardRows（M16 新增） | `IRowSource`，只能向下 | `IRowSink`，只能追加 | 单段可带化计划（`Point` / `Neighborhood` / `Separable`） |
+| RandomRegion（M17，§6.6） | `IRegionSource`，任意矩形 | 调用方给的 `PixelView` | 计划必须能带化；源目前只有 TIFF 段级实现 |
+
+#### 6.5.2 契约放 Abstractions，适配器放门面
+
+`IRowSource` / `IRowSink` 只谈行和 `WorkingFormat`，不 import codec（依赖方向：`Abstractions ← Processing ← SimdImaging`）。
+`IImageRowReader` / `StreamFrameEncoder` 的适配器在 `SimdImaging`，因为那里才允许 `using Sdcb.SimdCodecs`。
+
+```csharp
+public interface IRowSource              // Abstractions
+{
+    int Width { get; }
+    int Height { get; }                  // header 已知 → 边界钳制与整图路径同一套，不需要"未知高度"分支
+    WorkingFormat Format { get; }
+    int ReadRows(Span<byte> destination, int stride, int maxRows);   // 返回行数，0 = 结束
+}
+
+public interface IRowSink
+{
+    void WriteRows(ReadOnlySpan<byte> rows, int stride, int rowCount);
+}
+```
+
+对外是 `ImageTranscode` 的链（与 `Load` / `Save` 对称；`ProcessTo` 现在只是它的内部路由目标）：
+
+```csharp
+ProcessReport report = ImageTranscode.From(sourcePath).GaussianBlur(1f).Run(destinationPath);
+// Stream 源/目标：ImageTranscode.From(requestBody).GaussianBlur(1f).Run(responseBody, ImageFormat.Png, ct)
+```
+
+`ProcessReport` 把两层分开报：`Mode`（带泵还是物化）与 `ReaderIsStreaming` / `EncoderIsStreaming`
+（IO 层是不是真流式），`FullyStreamed` 是三者都成的派生结论。合成一个 bool 就是在撒谎——
+「执行流式、解码器内部整图缓冲」是真实且常见的一档（渐进式 JPEG、交错 PNG、带缩放的解码）。
+
+#### 6.5.3 带泵：复用 `RunBand`，不新写内核
+
+把 `FusedExecutor.RunBand` 从「对整图 view 做 `Slice(winTop, rows)`」重构成「接收已填好的窗口 view」：
+整图路径传 `source.Slice(...)`，流式路径传从行缓存拷进去的窗口。halo 递归、边界钳制、rect 计算
+一行不改——这正是逐字节等价能成立的原因，也是验收要盯的唯一一件事。
+
+每带的动作：
+1. 需要 `[top−H, bottom+H)`（`H` = Σ `HaloY`，钳到图像边界）；
+2. 与上一带重叠的 `2H` 行从行缓存滑过来，其余从 `IRowSource` 读；
+3. 跑这一段；
+4. 最后一步产出的 `bandRows` 行是终值，写 `IRowSink`。
+
+内存 = 两份窗口 + 行缓存（`2H`）+ 每 worker scratch + 编码器约 64 KiB，与图像高度无关。
+
+**并行度是这条路的暗礁。** 计划路径的并行度来自**带数**：每步适配器包一层 `RowParallel.EnterNested()`，
+带内一律串行（§6.2.3），实测单带慢 4 倍。带泵若顺序出带又照搬 `EnterNested`，就会退化成单线程。因此：
+
+- 第一版（S1，已实现）：带与带之间串行（解码本来就是顺序的），每带内部恢复行并行。注意 `EnterNested` 是烘进
+  `PlanStep.Kernel` 的（`PlanSteps.cs:31/62/119/132/167`），直接调 `Kernel` 仍然是串行——带泵因此用
+  `RowParallel.EnterTopLevel()`（ThreadStatic，scope 内 `EnterNested` 变成 no-op）。没有它第一版会静默退化成
+  单线程，而且**不报错**。
+- 第二版（S2）：**测量后取消**。有序带队列原本是为了恢复带级并行，但 S1 的带内行并行已经拿到了同一件事：
+  实拍 JPEG → PNG 实测流式/整图 = **1.00 / 1.00 / 1.00×**（1280×720，point / blur / 3×3）、
+  **1.08 / 1.09 / 1.06×**（3069×2653）。差距约等于解码没有与计算重叠的那一点；换它要 S 个窗口同时在飞
+  （S = worker 数），用 ~9× 常驻内存买 ≤9% 不成立。留下的是把 `ExecuteOptions.MaxDegreeOfParallelism`
+  接进带泵（`RowParallel.EnterTopLevel(degree)`，已完成）——这才是那个参数该有的行为。
+
+#### 6.5.4 不能流式时，物化并说明原因
+
+| 条件 | 处理 |
+|---|---|
+| 计划含 `Global`（直方图 / 量化 / CLAHE） | `ProcessTo` 物化（`StreamRefusal.GlobalStep`）；plan 级调用方拿到 `TryExecuteTo` 的 false 自行决定 |
+| 计划含 `Composite`（两个输入） | 同上（`CompositeStep`）——行源只供一路 |
+| 某步读整图（Mirror / Wrap 卷积） | `StepNeedsWholeSource`；给带泵一个带会让它在带边反射，接缝 |
+| 计划含 `Geometric` | 不可能发生：`ProcessingPlan.Add` 对 `Geometric` 直接抛（尺寸会变） |
+| 源无行读投影（float 样本、HDR 传输） | `ProcessTo` 抛 `NotSupportedException`；这里没有"物化"这条路，因为行源本身不存在 |
+| `LoadOptions.PreferNativeScale` 且缩档 > 1 | `DecodeNeedsWholeInput`：输出尺寸要先从整个头部协商出来，行读器必须以确定的尺寸/格式打开 |
+| `ReaderIsStreaming=false` / `EncoderIsStreaming=false` | 仍走带泵，报告如实记 IO 层非流式 |
+| 目标流不可 seek（TIFF） | 编码器自己退化为整图编码，`EncoderIsStreaming=false` |
+
+#### 6.5.5 验收（与 §6.3 同一把尺子）
+
+1. **逐字节**：`StreamingTests` 的 `Streamed_MatchesWholeImage_ByteForByte`（5 条链 × 2 种深度）、
+   `BandHeight_DoesNotChangeTheBytes`（带高 1/2/7/64）、`ProcessTo_Png_*`（8/16-bit，与
+   `Load → Apply → Save` 比文件字节）。
+2. **内存**：`RowsHeld_DoNotGrowWithTheImageHeight` —— 高度 64 vs 512，单次读取行数不变。
+3. **回退**：`Global`（Equalize）、`StepNeedsWholeSource`（Mirror 卷积）、Rgba32F 各一例，断言原因。
+4. **取消**：`Cancellation_StopsMidStream` 抛 `OperationCanceledException`（不是"截断的流"）。
+5. **AOT**：`stream.plan` 已进 `AotSmoke` 的 `REQUIRED`——ILC 产物与 JIT 逐字节一致，并且条目内部就断言了
+   「流式输出 == 整图路径输出」。
+
+S2 已做：`MaxDegreeOfParallelism` 进带泵、AOT 条目、头部元数据随流写出（见下）。
+仍未做：`Global` 的两遍执行（需要可重开的 path 源）。有序带队列按上面的测量取消。
+**区域源已由 M17 交付，见 §6.6**——带泵与区域执行是同一段 `RunWindow` 的两种喂法。
+
+**元数据（2026-11-25 修正）**：早先的实现用 `ImageDecoder.Open` 同时取深度与元数据，实测它会**遍历整个文件**
+（202 KB 的 JPEG 读 206 KB、71.7 KB 的 TIFF 读 147 KB），整条 `ProcessTo` 的 I/O 因此是文件的 2.0–3.4×。
+现在默认**只读头部**：TIFF 用 `TiffReader.ReadLayout`（几百字节），其它格式用 ≤4 KiB 前缀（不够再增长到 1 MiB）。
+代价是元数据默认不随行——`ProcessOptions.PreserveMetadata = true` 才走整文件那一趟，`ProcessReport.MetadataCarried`
+如实报告。实测：默认 JPEG 1.01× / PNG 1.07× / TIFF 1.41×（TIFF 行读器自身预读），保留元数据 2.01× / 2.14× / 3.40×。
+
+不做：多帧（`Encode` 已按单帧拒绝，与 §6.5 一致）、任意角度旋转、`Global` 自动两遍、Float32 流式编码。
+`Region` / `ScaleDenominator` 可直接透给 `OpenRowReader`——区域解码 + 流式是同一趟，不需要额外设计。
+
+### 6.6 区域执行（M17）
+
+**一句话**：把「窗口」当作一张独立的小图，喂给同一个 `FusedExecutor.RunWindow`；X 方向的 halo 靠窗口更宽表达，
+Y 方向靠 `haloTotal`；只把窗口内圈（= 请求矩形 R）拷进目标。内核、halo 递归、矩形算术一行不改——这是逐字节
+等价最有力的结构证据，与 §6.5 的带泵同一手法。
+
+```
+R ──expand(ΣHaloX, ΣHaloY)──► W ──clamp(图像)──► W'
+        │                                          │
+        │  每带：IRegionSource.ReadRegion(W')  ─────┤
+        ▼                                          ▼
+   RunWindow(winW, winH, srcWin, outWin, winTop:0, band:0, bandRows:winH, haloTotal:ΣHaloY)
+        │  每步写满整个窗口
+        ▼
+   拷 outWin[(R.X−W'.X), (R.Y+bandTop−W'.Y)] ──► destination
+```
+
+#### 6.6.1 契约
+
+`IRegionSource`（`SimdImaging.Abstractions`，不 import codec）：`Width/Height/Format` 描述**整图**，
+`ReadRegion(PixelRect region, PixelView destination)` 写一个绝对坐标的矩形，调用方保证它已在图内。
+`ImageTranscode.From(path|stream).Region(rect)` 是门面入口（`ProcessRegion` 是内部路由目标），`DescribeRegion` 只读头部报能力。
+`ProcessingPlan.CanExecuteRegion` / `TryExecuteRegion` 是计划层入口，分类复用 `StreamingExecutor.Classify`
+（唯一分类器），`RegionRefusal` 是它的 1:1 映射。
+
+#### 6.6.2 等价性
+
+记 `h_k`、`Hx=ΣHaloX`、`Hy=ΣHaloY`，窗口 `W = expand(R, Hx, Hy) ∩ image`。归纳：第 k 步写出的像素 q，若到窗口
+每条**非图像边**的距离 ≥ `Σ_{j≤k} h_j`，则值与整图相同。k=0 时源是真像素；k→k+1 时 q 的支撑全落在 P(k) 成立区，
+q 离视图边 ≥ halo 时算子内 clamp 不作用于 q；距离不足的那条边必是图像边（否则窗口会继续外扩），此时 clamp 与
+整图路径一致。最后一步 `ρ=Hy/Hx`，R 内所有点满足。三条支撑事实：`RunWindow` 的 rect 跨满窗口宽；
+`PlanSteps.Neighborhood` 只保留内圈行；声明的 halo 必须等于真实支撑（`AGENTS.md` 已写死）。
+
+竖直方向同理，但注意 `RunWindow` 传的是 `band:0, bandRows:winH, winTop:0`，于是每一步都写满整个窗口
+（`dstTop=max(0,−remaining)=0`、`dstBottom=min(winH, winH+remaining)=winH`）。代价是 steps≥2 时比带泵多算
+`(步数−1)×窗口`；换来的是「不读池里未初始化的字节」和零改动。实测前先记账（见 `known-gaps.md`）。
+
+#### 6.6.3 内存
+
+```
+windows      = 步数 > 1 ? 4 : 2                       // 源窗 + 输出窗（+ 两步 ping-pong ×2）
+windowBytes  = min(W, R.Width+2Hx) · min(H, bandRows+2Hy) · bpp
+estimate     = windows·windowBytes + R 的字节 + perWorkerScratch·workers
+sourcePeak   ≈ 一个段缓冲（复用）
+```
+与图像总尺寸无关：`windowBytes` 只含 R 与 halo。`ExecuteOptions.MaxWorkingBytes` 事前拒绝，规则与带泵同文；
+`RegionOptions.MaxSegmentBytes` 事前拒绝单段过大的页。实测见 §6.6.5。
+
+#### 6.6.4 拒绝表
+
+| 条件 | 结果 |
+|---|---|
+| 计划含 `Global` / `Composite` / 读整图步（Mirror·Wrap 卷积） | `RegionRefusal.{GlobalStep, CompositeStep, StepNeedsWholeSource}`，目标一个字节都不写 |
+| 非 TIFF | `NotSupportedException` |
+| TIFF 4/2 样本（`ExtraSamples` 不可见） | `NotSupportedException`，消息点名 `ExtraSamples` |
+| Palette / CMYK / YCbCr / CIE Lab / 透明掩码 | `NotSupportedException`（`TiffColor` internal，颜色转换是 codec 的私有定义） |
+| `Int` / `IeeeFloat` / 非 8·16 位 | `NotSupportedException` |
+| 单段 > `MaxSegmentBytes` | `NotSupportedException`，消息教调用方改 `RowsPerStrip` / tile |
+| 区域为空 / 越界 / 目标尺寸不符 | `ArgumentException`；区域像素 > `MaxPixels` → `InvalidOperationException`（与 `Load` 同口径） |
+| 流不可 seek、TIFF 头不在 0 | `NotSupportedException`（TIFF 偏移是绝对的） |
+
+#### 6.6.5 实测与验收
+
+- 等价：`RegionExecutorTests` 25 例（4 链 × 2 深度 × 6 矩形、带高 1/7/64、degree 1/4、非对称 halo 5×3、
+  1×1 区 + halo 18），全部与 `Execute(整图).Slice(R)` 逐字节相同；`RegionEndToEndTests` 4 例，
+  `ProcessRegion == Load → Apply → Crop`（含 `BitDepth` / `Orientation` / `Format`）。
+- 读量（16×16 区域，512 宽，RGB8，`RowsPerStrip=32`）：512 高读 **3.06 KB**（文件 43.8 KB），
+  2048 高读 **3.44 KB**（文件 174.5 KB）——目录随段数增长，与高度无关。
+- 内存：100 000² 的合成源读 64×64，`CountingPool.PeakBytes` 与 4096² 源同级（测试断言 ≤1.25×）。
+- 速度（带高规则修正后，同像素量对比 `Execute(整图)`）：512² 区域 **9.7 ms vs 8.1 ms**（1.20×；修正前 36.8 ms，
+  3.65×）；2048² 区域 **59.6 ms vs 73.1 ms**（0.81×，窗口没有整图中间缓冲）。带高见 §6.2.2。
+- AOT：`region.plan` / `region.tiff` 进 `AotSmoke` 的 `REQUIRED`，条目内部断言「区域 == 整图裁剪」。
+
+#### 6.6.6 本切片不做
+
+`Image.Load(path, Region)` 的 TIFF 快路径（`Load` 没有「原生/物化」报告位，且它的元数据来自整文件解码）；
+4 通道 / Palette / CMYK（等 `TiffPageLayout` 暴露 `ExtraSamples`）；`Geometric` 分块；`Global` 两遍；多输入；
+把结果写回文件的某个矩形（没有区域 sink）。**区域结果不带 ICC/Exif**：codec 文档写明元数据需要读整个文件，
+读它等于放弃这条路的全部意义；需要时用 `SaveOptions.Metadata` 附上。
+
+### 6.7 几何进入执行模型（M18，第一切片已落地）
+
+现状：`ProcessingPlan.Add` 对 `Geometric` 直接抛，几何算子唯一的通道是 `ImagePipeline.Reshape` 的整图执行；
+区域执行只能配同尺寸计划。也就是说 §6.5 的三种源能力对几何算子全部无效。
+
+要让它成立，缺的是三件事，缺一不可：
+
+1. **尺寸变换**：`PlanStep` 要能声明「这一步把 w×h 变成 w'×h'」，`Execute` 的输出尺寸由链累积；带泵与区域的
+   sink 必须**在解码前**知道输出尺寸（编码器 `AddFrame` 要 w/h）。这会改动 `ProcessingPlan` 的对外形状，
+   是本里程碑最贵的一处。
+2. **原点感知的重采样**：`Resample` 现在用传入 view 的 `Width/Height` 建权重、按 view 坐标 clamp（见 §6.7.1）。
+   分块需要「全图尺寸 + 窗口原点」，而权重、边界钳制、累加序一个字都不能变——`known-gaps.md` 里那条
+   FMA/1-ULP 记录就是这条路的雷。
+3. **并行喂料**：行泵顺序读源。水平遍是 `O(srcH × destW × taps)`，4× 降采样时约为垂直遍的 4 倍，
+   单线程实现会比 `Resize` 慢 5–6 倍。可行方案：每带把源行读进字节暂存（`span × srcRowBytes`），
+   水平遍按行并行、垂直遍按行并行；32 MiB 暂存在 8K（30 KB/行）下约 1000 行。
+
+#### 6.7.1 事实依据（2026-11-25 核查）
+
+- `ProcessingPlan.Add` 第 191 行拒绝 `Geometric`；`PlanOps` 没有任何几何工厂。
+- `Resize.cs:219` 用 `source.Width/Height` 建 `WeightTable`；`Resize.cs:402/412` 以 view 坐标索引与钳制；
+  行号是绝对目标行（`:353`、`:362`），没有原点参数。
+- `IImageOp.MapSourceRect` 全仓零实现（见 §6.3），执行器真正的契约是 `ImageOp` 的 `HaloX/HaloY`。
+- `Resize` 的并行度来自目标行带（`RowParallel.ForBands`），不是行内并行——这决定了「顺序喂料」不能直接复用它的并行结构。
+
+#### 6.7.2 第一个切片（已落地）
+
+`ImageTranscode.From(sourcePath).Resize(width, height, resampler)`：**只有一步 resize**，不碰 plan。
+
+- 输出与 `Load → Resize` 逐字节相同（同一权重表、同一 clamp、同一累加序）。
+- 内存：`(taps+2) × destW × 4` 的 ring + 一个带的字节暂存，与源高度无关。
+- 判据：8K→1080p 峰值 ≤ 64 MiB，吞吐 ≥ `Resize` 的 0.8×；达不到就说明并行喂料没做对，先修它再谈 plan。
+- 通过后再做尺寸变换与 plan 接线（M18 主体）。
+
+#### 6.7.3 实测（2026-11-25，第一切片）
+
+`ImageTranscode` 的缩放已落地：单步（或链上任意位置）缩放、行流式，与 `Load → Resize` 逐字节相同。
+
+| 项 | 结果 |
+|---|---|
+| 逐字节 | 4 尺寸 × 2 深度 × 5 滤波器共 **40 组**，全部与 `Resample.Resize` 相同；8K→1080p 的 PNG 文件也逐字节相同 |
+| 8K→1080p bicubic | 流式 **390 ms** vs 整图 **426 ms**（**0.92×**，门槛 1.25×） |
+| 工作集 | ring `212×1920×16B ≈ 6.5 MiB` + 暂存 `204×30 KB ≈ 6 MiB` + band `0.5 MiB`，与源高度无关 |
+| 拒绝 | 4000² → 4000×4 的极端降采样 ring 需 64 MiB，直接抛并说明预算 |
+| AOT | `resize.stream` 进 `REQUIRED`，三档 sha 相同，条目内部断言与整图一致 |
+
+缩放按调用顺序出现在链里（`GaussianBlur(1f).Resize(...)`）：带泵产出的行直接交给 `ResizeRowSource`，链中间
+不出现整图。实测 8K→1080p：纯缩放 **390 vs 426 ms（0.92×）**、`blur → 缩放 → sharpen` **835 vs 791 ms（1.06×）**，
+逐字节相同。链上不流式的算子（`Global`）会物化执行，报告里 `Mode=Materialized`。
+
+并行喂料：每带把源行按预算切块（8K 下 204 行）读进字节暂存，水平遍按行并行、垂直遍按 `ForBands` 并行；带之间顺序。
+`ForBands` 而不是 `For`：4× 降采样时一次只完成十几行目的行，低于 `For` 的 64 K 像素门限，会被静默串行。
+
+区域 + 几何：`ImageTranscode.From(path).Region(rect).Resize(w, h)` 只解码相交的 strip/tile，按带喂给
+`ResizeRowSource`，与 `Load → Crop → Resize` 逐字节相同；区域本身不整块存在。带算子的形式把读入窗口按
+`ΣHaloX/ΣHaloY` 扩大、跑完算子后用 `CropRowSource` 只把内圈交给缩放，等于 `Load → 处理 → Crop → Resize`
+一趟完成（AOT 条目 `region.resizeplan` 内部就这样断言）。
+
+**分层说明**：内存里的惯用法始终是 `image.Pipe()...ToImage()`，文件侧是 `ImageTranscode.From(...).Apply(...).Resize(...).Save(...)`
+（`ProcessTo` / `ResizeTo` / `ProcessRegion` / `ResizeRegion` 自 2026-11-25 起为内部实现，公开面只有 builder 与 `DescribeRegion`；
+计划是链的编译产物，文件侧不暴露 `Apply(plan)`，内存侧 `Image.Apply(plan)` 标为高级 API（IntelliSense 隐藏，
+只给编译好的配方与 `PlanObserver` 用）；算子方法由 `ImageOpPipeline<TSelf>` 单一声明，
+`ImagePipeline` 与 `ImageTranscode` 共用，几何/合成分支留在 `ImagePipeline`）
+（算子调用在 `Resize` 前后分别落到下层的 `plan` / `after`）；`ProcessingPlan` 是它编译出的描述，`Apply(plan)` 是
+低阶入口，`ProcessTo` 则因为文件没有 `Image` 可 pipe 才直接吃计划。两条路字节相同（`ApiLayerTests` 钉住）。
+
+**计划本身可以以缩放结尾**：`ProcessingPlan.Resize(w, h, resampler)`，之前的步骤在同尺寸上跑、之后按新尺寸输出；
+`Execute` 与 `TryExecuteTo` 都认它（流式仍是一趟，`PlanRowSource → ResizeRowSource`），区域执行拒绝
+（`RegionRefusal.GeometricStep`，区域 + 缩放走 `ResizeRegion`）。`Add` 在 `Resize` 之后会抛——缩放只能是最后一级。
+
+**缩放夹在两个计划之间**也已打通：`ResizeTo(..., plan: before, after: after)`。实现上把带泵改成了**拉式源**
+（`PlanRowSource`：按需产出一带），于是整条链就是 `PlanRowSource → ResizeRowSource → PlanRowSource` 的串联，
+`Pipeline.Copy` 只负责把最后一级写进 sink。每一级仍然只认识"上游给我行"。
+
+区域 + 几何之外，文件侧还能流式**行局部几何**：`Crop`、`Pad`、`FlipHorizontal`（连同 `Resize`），按调用顺序
+串成拉式链；输出尺寸由阶段折叠得到（`ProcessChain` 用 `SizeOf` 在编码器打开前算好）。`FlipVertical` /
+`Rotate90` / `Transpose` / `Affine` / `Perspective` 需要整行重排或随机访问，前向流不可做。异步入口（`RunAsync` / `SaveAsync` / `ToImageAsync`）是把同步
+管线放到线程池，不是重叠 IO。
+
+仍未做：多级缩放（两次 resize 连用）、Pad/FlipHorizontal 的流式版、Affine/Perspective。
 
 ---
 
@@ -869,6 +1160,10 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 | **M13 HDR GainMap 与 ICC LUT（已完成）** | `IccProfile`（header/tag 表校验 + `mft1`/`mft2`/`mAB`/`mBA` 解析 + 方向选择）/ `IccClut3D`（u16 网格、Q15 权重、int64 累加、四面体六分支）/ `IccTransformOps` 行带并行 + PCS 缝合 / ICC 边界（见 `docs/known-gaps.md` 的评估记录） / `GainMapParameters` + `HdrOps.ReconstructGainMap`（hdrgm：min/max/gamma/offsetSdr/offsetHdr/capacity，1/4 尺寸双线性上采样，行带并行）/ `GainMappedImage`（Crop·Flip·Rotate90/180·Rotate·Resize·Affine·Perspective·WarpNormalized 的同步几何 + Load/Save/FromHdr/ToHdr）/ `ColorDifference`（ΔE2000） | ✅ 2026-11-14：`failed=0 passed=864`（+65 例：ICC 28、ΔE 7、配对几何 22、Ultra HDR 8）；ΔE2000 对 Sharma 34 组参考全部 ≤1e-4；ICC 1080p 实测 `grid=33` **40.0 ms** / `grid=2` **36.5 ms** / 同图 matrix-TRC **34.8 ms** ⇒ CLUT 只占约 9%，**per-pixel SIMD 实测否决**（AVX2 无 64 位整数乘、8 角点 gather），见 `known-gaps.md` M13 节；gainmap 重建 1080p **28.4 ms**（加行带并行前 138.6 ms）、配对 resize 1080p→720p **5.2 ms**；快照 58 行**只有新增、0 删除 0 改写**；`run.sh` 的 `REQUIRED` 含新增 `icc.lut` / `gainmap.hdr` |
 | **M14 内存预算与预估 API（已完成）** | `FloatScratch` per-thread 字节预算（64 MB 保留 / 32 MB 单块上限、最久未用淘汰、命中/分配/淘汰计数、`Trim`）/ 权重表缓存从「24 条 + 全清」改为 8 MB + 64 条 + LRU + 命中率 / `MemoryBudget.Snapshot()·Trim()·SetLimits(...)` / `MemoryEstimator.Estimate(...)`（源、目标、计划 scratch、每 worker 声明、峰值；`checked` 溢出安全）/ `PlanStep.Scratch` + `Add(..., scratch)` 6 参重载 / `RichardsonLucyOps.ScratchBytes` / `CountingPool` 增加到字节峰值统计 | ✅ 2026-11-14：`gates.sh --aot` → `warnings=0 errors=0`、`failed=0 passed=884`（+20 例）、快照**只新增不改写**（5 参 `Add` 原样保留，新增 6 参重载）；三档 body SHA 仍为 `846c1c62…20c6`（**既有算子零字节变化**，与 M13 相同）；预估对拍 `CountingPool.PeakBytes` 三个尺寸全过（`PeakBytes ≥ 实测 + 源`）；融合算术锁常量：两个 point 步 / 64 行 band / degree 4 → `2×4×491520 = 3 932 160` 字节；预算压到 0 后 resize 输出与基线逐字节相同 |
 | **M15 SIMD / 门禁 / 契约收口（进行中）** | 已完成：**性能回退门禁**（版本化基线 + 同机器同源码可比性 + 机器校正判定 + `--self-test`）与 `docs/contracts.md` 30 条逐条关联测试。AVX-512 已出评估（`docs/known-gaps.md` 的评估记录，本机 `avx512=False`，只出评估不出数）；AotSmoke 已全量核对（53 条 hash / 23 条设闸 / 0 悬空） | ✅ 2026-11-15：判定口径重做为**机器校正**——绝对毫秒在同一台机器上 4 小时内漂 1.2–1.8×，黑盒参照 ImageSharp 同幅漂移（resize-bicubic 12.5 → 19.3 ms），故每跑自带两个不调用本库的探针（256 MB 并行求和 / 32M xorshift），判定用 `got / max(mem, alu)` 相对基线校正；阈值由**五次**运行归一化后的偏差推出 `max(20, ceil(3×S))`，设闸条数随机器噪声浮动（本次 16/29，阈值 20–59%），规则见 `known-gaps.md` 的 M15 节。实测 `--perf` 正常跑 `enforced=16`、最差 **+1.4%**；`--self-test` **exit=1**（29 条全部纳入）；负载验证：4 核抢占下 `alu` 探针报 **x1.59**、校正后全部设闸场景**最差 −1.2%**，而未校正的原始读数均值 **+40%**。2026-11-14 的旧口径（两次一对照、15 个 15% 闸、`enforced=15`）已被替换，原因见 `known-gaps.md` 的 M15 节 |
+
+| **M16 文件级流式（完成；静态入口 2026-11-25 起内部化，公开面为 `ImageTranscode`）** | S1：`IRowSource` / `IRowSink`（Abstractions）+ `ProcessingPlan.CanStream` / `TryExecuteTo` + `Image.ProcessTo`（path / stream）+ `StreamRefusal` / `StreamResult` / `ProcessReport` + `FusedExecutor.RunWindow`（整图与流式共用同一段递归）+ `PlanStep.NeedsWholeSource`。S2：`RowParallel.EnterTopLevel(degree)` 把 `MaxDegreeOfParallelism` 接进带泵、`PreserveMetadata` 显式保留元数据（默认只读头部：I/O 从 2.0–3.4× 降到 1.01–1.41×）、`stream.plan` 进 AotSmoke `REQUIRED`；**有序带队列测量后取消**（见 §6.5.3） | ✅ 2026-11-25：`gates.sh --aot` observed `warnings=0 errors=0`、`failed=0 passed=1169`、快照只有新增、`stream.plan` 三档（jit / avx2 / base）sha 相同且条目内部断言「流式 == 整图」。`StreamingTests` 26 例：逐字节等价（5 链 × 2 深度、带高 1/2/7/64、PNG 8/16-bit、带 Exif 的 JPEG 走 `PreserveMetadata`）、默认丢元数据且如实报告、读量 ≤1.5×、行缓存不随高度增长、四种回退、串行度一致、取消。实拍 JPEG→PNG 实测流式/整图 **1.00–1.02×**（1280×720）、**1.06–1.09×**（3069×2653），输出逐字节相同（含 9.4 KB Exif）。**未做**：`Global` 两遍、TIFF 区域源 |
+| **M17 区域执行（完成；静态入口 2026-11-25 起内部化）** | `IRegionSource`（Abstractions）+ `RegionExecutor` / `RegionRefusal` / `RegionResult` + `ProcessingPlan.CanExecuteRegion` / `TryExecuteRegion` + `Image.DescribeRegion` / `ProcessRegion` + `TiffRegionSource`（`TiffReader.ReadLayout` / `ReadSegment`，显式引用 `Sdcb.SimdCodecs.Tiff`）+ 运行期 TIFF 夹具（codec 写条带、手写 tile / MinIsWhite / float / 4 通道） | ✅ 2026-11-25：`gates.sh --aot` observed `warnings=0 errors=0`、`failed=0 passed=1211`（1 skip）、快照 128 行**只有新增、0 删除 0 改写**、AOT 三路 `region.plan` / `region.tiff` sha 相同且条目内部断言「区域 == 整图裁剪」。`RegionExecutorTests` 25 + `TiffRegionTests` 13 + `RegionEndToEndTests` 4；等价（4 链 × 2 深度 × 6 矩形、带高 1/7/64、非对称 5×3 halo、1×1 区 + halo 18）、读量（16² 区域：512 高 3.06 KB / 2048 高 3.44 KB）、内存（100 000² 源读 64² 与 4096² 同级）、拒绝表逐项、取消。**不做**：`Load(path, Region)` 快路径、4 通道 / Palette / CMYK、Geometric / Global 两遍、区域 sink |
+| **M18 几何进入执行模型（完成）** | 拉式流水线：`PlanRowSource`（按需出一带）/ `ResizeRowSource`（按需出缩放行）/ `CropRowSource` / `Pipeline` 驱动；`Image.ResizeTo`（path / stream，`plan:` 在缩放前、`after:` 在缩放后）；`Image.ResizeRegion`（可带计划）；`Resample.TryNearestTap` 共享；AOT `resize.stream` / `resize.plan` / `resize.after` / `plan.resize` / `region.resize` / `region.resizeplan` / `file.builder` / `file.geometry`。未做：多级缩放、Affine/Perspective | ✅ 2026-11-25：40 组（4 尺寸 × 2 深度 × 5 滤波器）与 `Resample.Resize` 逐字节；8K→1080p 纯缩放 **390 vs 426 ms（0.92×）**、blur+contrast→缩放→sharpen **835 vs 791 ms（1.06×）**；区域链与 `Load → Apply/Crop → Resize` 逐字节；AOT 六条三档一致；`plan.resize` 与 `resize.plan` 的 sha 相同（两条路径、同一份字节） |
 
 > **状态口径**：M2–M4 的功能（算子、测试、公开 API）都已落地；上表「出口条件」是当初写进设计的验收标准。
 > 2026-11-11 补测后：M2 模糊、M3 量化 PSNR（已出数但无阈值可判）、M4 的 8K 峰值内存有了实数

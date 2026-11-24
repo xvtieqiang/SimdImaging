@@ -35,7 +35,49 @@ internal static class RowParallel
     /// </summary>
     [ThreadStatic] private static int _nesting;
 
-    internal static void EnterNested() => _nesting++;
+    /// <summary>
+    /// Non-zero while the current thread is the top-level owner of a band pump (see <see cref="EnterTopLevel"/>).
+    /// In that mode the "you are inside a band already" guard does not apply: the pump runs one band at a time and
+    /// the operator's own row loop is the only parallelism there is.
+    /// </summary>
+    [ThreadStatic] private static int _topLevel;
+
+    /// <summary>The degree the pump was given, applied while it owns the thread (0 = the machine default).</summary>
+    [ThreadStatic] private static int _pumpDegree;
+
+    /// <summary>Marks the current thread as the pump's own thread, so <see cref="EnterNested"/> stops forcing the
+    /// operator's row loop onto one thread, and so <paramref name="degree"/> reaches that loop instead of the
+    /// environment being read a second time. Without the scope a streamed band would silently run single-threaded:
+    /// the plan adapters call <see cref="EnterNested"/> unconditionally, and a single band has no outer loop to nest
+    /// inside.</summary>
+    internal static TopLevelScope EnterTopLevel(int degree)
+    {
+        _topLevel++;
+        var previous = _pumpDegree;
+        _pumpDegree = degree;
+        return new TopLevelScope(previous);
+    }
+
+    /// <summary>Restores the guard on dispose. A struct so the pump's hot path allocates nothing.</summary>
+    internal readonly struct TopLevelScope : IDisposable
+    {
+        private readonly int _previousDegree;
+
+        internal TopLevelScope(int previousDegree) => _previousDegree = previousDegree;
+
+        public void Dispose()
+        {
+            if (_topLevel > 0)
+                _topLevel--;
+            _pumpDegree = _previousDegree;
+        }
+    }
+
+    internal static void EnterNested()
+    {
+        if (_topLevel == 0)
+            _nesting++;
+    }
 
     internal static void ExitNested()
     {
@@ -45,6 +87,7 @@ internal static class RowParallel
 
     internal static int Degree => _nesting > 0
         ? 1
+        : _pumpDegree > 0 ? _pumpDegree
         : DegreeOverride > 0 ? DegreeOverride : Environment.ProcessorCount;
 
     /// <summary>Same fixed-band rule for work already divided into coarse bands (blur / resize), where the

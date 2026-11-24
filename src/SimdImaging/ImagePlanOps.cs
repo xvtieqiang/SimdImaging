@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 
@@ -36,7 +37,10 @@ public sealed partial class Image
     }
 
     /// <summary>
-    /// Runs <paramref name="plan"/> over this image and returns the last step's result. Same-size steps are
+    /// Runs <paramref name="plan"/> over this image and returns the last step's result.
+    /// <para>Advanced entry: <c>Image.Pipe()</c> is the user-facing chain, and every operator it exposes is also a
+    /// plan step; use this only for a compiled recipe or per-step observation. It is hidden from IntelliSense for
+    /// the same reason.</para> Same-size steps are
     /// split into row bands; global steps run whole.
     /// </summary>
     /// <param name="plan">The steps, in order.</param>
@@ -44,6 +48,7 @@ public sealed partial class Image
     /// <param name="observe">Optional per-step hook, called while the step's output is still alive.</param>
     /// <exception cref="ArgumentNullException"><paramref name="plan"/> is null.</exception>
     /// <exception cref="NotSupportedException">The image has more than one frame.</exception>
+    [EditorBrowsable(EditorBrowsableState.Advanced)]
     public Image Apply(ProcessingPlan plan, IPixelPool? pool = null, PlanObserver? observe = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
@@ -62,6 +67,7 @@ public sealed partial class Image
     /// <param name="observe">Optional per-step hook; present forces the step-by-step path.</param>
     /// <exception cref="ArgumentNullException"><paramref name="plan"/> or <paramref name="options"/> is null.</exception>
     /// <exception cref="NotSupportedException">The image has more than one frame.</exception>
+    [EditorBrowsable(EditorBrowsableState.Advanced)]
     public Image ApplyWithOptions(ProcessingPlan plan, ExecuteOptions options, IPixelPool? pool = null,
         PlanObserver? observe = null)
     {

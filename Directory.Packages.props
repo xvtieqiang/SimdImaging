@@ -5,9 +5,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Codec layer. Both packages ship in lockstep; keep them on the same version. -->
-    <PackageVersion Include="Sdcb.SimdCodecs" Version="2.0.0" />
-    <PackageVersion Include="Sdcb.SimdCodecs.Abstractions" Version="2.0.0" />
+    <!-- Codec layer. Every package listed here ships in lockstep; keep them on the same version. Tiff is explicit
+         because the region source calls TiffReader/TiffPageLayout directly. -->
+    <PackageVersion Include="Sdcb.SimdCodecs" Version="2.1.0" />
+    <PackageVersion Include="Sdcb.SimdCodecs.Abstractions" Version="2.1.0" />
+    <PackageVersion Include="Sdcb.SimdCodecs.Tiff" Version="2.1.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.3.0" />
     <PackageVersion Include="Shouldly" Version="4.3.0" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />

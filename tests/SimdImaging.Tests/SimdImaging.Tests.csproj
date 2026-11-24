@@ -26,6 +26,7 @@
     <Compile Include="..\..\src\Shared\PixelDiff.cs" Link="Fixtures\PixelDiff.cs" />
     <Compile Include="..\..\tests\Fixtures\SyntheticCorpus.cs" Link="Fixtures\SyntheticCorpus.cs" />
     <Compile Include="..\..\tests\Fixtures\SyntheticIccProfiles.cs" Link="Fixtures\SyntheticIccProfiles.cs" />
+    <Compile Include="..\..\tests\Fixtures\TiffFixture.cs" Link="Fixtures\TiffFixture.cs" />
   </ItemGroup>
 
 </Project>

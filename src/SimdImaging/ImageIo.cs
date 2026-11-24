@@ -361,6 +361,22 @@ public sealed partial class Image
         options ??= SaveOptions.Default;
 
         var pixelFormat = image.Format.ToPixelFormat();
+        var encodeOptions = BuildEncodeOptions(format, options);
+
+        var frame = image[0];
+        var view = frame.Pixels.View;
+        return ImageCodecs.Encode(view.Span, image.Width, image.Height, pixelFormat, format,
+            stride: view.Stride,
+            options: encodeOptions,
+            metadata: options.Metadata ?? image.Metadata,
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>The encoder options a <see cref="SaveOptions"/> implies, with the "wrong format" checks that make a
+    /// silently ignored field impossible. Shared by <see cref="Encode"/> and <c>Image.ProcessTo</c>: two copies of
+    /// this rule would drift, and the drift would show up as a quality or lossless setting that stopped applying.</summary>
+    private static EncodeOptions? BuildEncodeOptions(ImageFormat format, SaveOptions options)
+    {
         EncodeOptions? encodeOptions = null;
         if (format == ImageFormat.Jpeg)
             encodeOptions = new JpegEncodeOptions { Quality = options.JpegQuality ?? 90 };
@@ -380,13 +396,7 @@ public sealed partial class Image
             throw new ArgumentException("WebpLossless only applies to ImageFormat.Webp.", nameof(options));
         }
 
-        var frame = image[0];
-        var view = frame.Pixels.View;
-        return ImageCodecs.Encode(view.Span, image.Width, image.Height, pixelFormat, format,
-            stride: view.Stride,
-            options: encodeOptions,
-            metadata: options.Metadata ?? image.Metadata,
-            cancellationToken: cancellationToken);
+        return encodeOptions;
     }
 
     /// <summary>
@@ -536,7 +546,7 @@ public sealed partial class Image
         }
     }
 
-    private static ImageFormat FormatFromExtension(string extension) => extension.ToLowerInvariant() switch
+    internal static ImageFormat FormatFromExtension(string extension) => extension.ToLowerInvariant() switch
     {
         ".png" => ImageFormat.Png,
         ".jpg" or ".jpeg" or ".jpe" or ".jfif" => ImageFormat.Jpeg,

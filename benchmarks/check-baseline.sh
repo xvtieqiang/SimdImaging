@@ -194,6 +194,14 @@ print(f"observed: comparable-baselines={len(comparable)} enforced={enforced}")
 if worst is not None:
     print(f"observed: worst-delta={worst[1]:+.1f}% ({worst[0]})")
 
+# A baseline whose every entry is null gates nothing, and a green "PASS (0 enforced)" is worse than no gate:
+# it looks like coverage. Recording with SimdImaging.Benchmarks writes null thresholds, so a re-record has to
+# bring the thresholds with it; until it does, say so and fail.
+if enforced == 0:
+    print("FAIL  comparable baselines exist but every entry has thresholdPercent = null: the gate checked nothing",
+          file=sys.stderr)
+    sys.exit(1)
+
 if failures:
     for line in failures:
         print(f"FAIL  {line}", file=sys.stderr)

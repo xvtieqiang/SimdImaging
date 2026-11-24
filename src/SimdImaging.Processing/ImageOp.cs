@@ -87,5 +87,9 @@ public sealed class ImageOp
     /// <summary>Rows read above and below the destination rectangle.</summary>
     public int HaloY { get; }
 
+    /// <summary>The operator's kernel reads the whole source image, not just its window: Mirror and Wrap borders
+    /// reflect or wrap about the image edge, so a band-only source cannot serve it.</summary>
+    internal bool NeedsWholeSource { get; init; }
+
     internal OpKernel Kernel { get; }
 }

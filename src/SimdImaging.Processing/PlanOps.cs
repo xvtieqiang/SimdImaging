@@ -236,7 +236,12 @@ public static class PlanOps
                     FilterOps.ConvolveBanded(window, context, full, weights, radius, border, bias, constantValue),
                 radius, radius),
             // One float RGBA copy of the window, which is a band plus the halo on both sides.
-            (width, _, rows, _) => (long)rows * width * 16);
+            (width, _, rows, _) => (long)rows * width * 16)
+        {
+            // Mirror and Wrap map taps in image coordinates; the kernel is handed the full source for that. A
+            // streaming executor has only a band, so it must refuse this step rather than seam at the band edge.
+            NeedsWholeSource = true,
+        };
     }
 
     /// <summary>

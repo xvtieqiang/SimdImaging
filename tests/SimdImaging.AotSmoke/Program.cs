@@ -3,10 +3,13 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Security.Cryptography;
+using Sdcb.SimdCodecs;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Geometry;
+using Sdcb.SimdCodecs.Tiff;
 
 // Prints the tier first so run.sh can prove the AOT build actually kept its vector paths:
 // ILC folds IsHardwareAccelerated to false against a lower baseline, which would make a green
@@ -36,6 +39,170 @@ Console.WriteLine($"jpeg.bytes={jpeg.Length} sha={Hash(jpeg)}");
 
 using (var decoded = Image.Load(jpeg))
     Console.WriteLine($"jpeg.pixels sha={Hash(decoded.WritablePixels)}");
+
+// The band pump, under ILC: same bytes as the whole-image path, or the streaming claim is not a claim.
+var streamPlan = new ProcessingPlan().Add(PlanOps.GaussianBlur(1f)).Add(PlanOps.Contrast(1.1f));
+using (var streamSource = new MemoryStream(png))
+using (var streamSink = new MemoryStream())
+{
+    var streamReport = ImageTranscode.From(streamSource).GaussianBlur(1f).Contrast(1.1f).Run(streamSink, ImageFormat.Png);
+    ((int)streamReport.Mode).ShouldBe((int)ProcessMode.Streamed);
+    ((int)streamReport.Refusal).ShouldBe((int)StreamRefusal.None);
+    using var streamExpected = image.Apply(streamPlan);
+    var expectedBytes = Image.Encode(streamExpected, ImageFormat.Png);
+    if (!streamSink.ToArray().AsSpan().SequenceEqual(expectedBytes))
+        throw new InvalidOperationException("Streamed output differs from the whole-image path.");
+    Console.WriteLine($"stream.plan sha={Hash(streamSink.ToArray())}");
+}
+
+// The region path, under ILC: a rectangle of an in-memory source, and a rectangle of a TIFF, both compared with
+// the whole-image path inside the entry so a green hash means the promise held.
+var regionPlan = new ProcessingPlan().Add(PlanOps.GaussianBlur(1f)).Add(PlanOps.Contrast(1.1f));
+var region = new PixelRect(11, 9, 20, 16);
+using (var wholeRegion = image.Apply(regionPlan))
+using (var expectedRegion = wholeRegion.Pipe().Crop(region).ToImage())
+using (var actualRegion = Image.Create(region.Width, region.Height, WorkingFormat.Rgba8))
+{
+    var result = regionPlan.TryExecuteRegion(new SmokeRegionSource(image[0].Pixels.View), region,
+        actualRegion[0].Pixels.View);
+    ((int)result.Refusal).ShouldBe((int)RegionRefusal.None);
+    if (!actualRegion.WritablePixels.SequenceEqual(expectedRegion.WritablePixels))
+        throw new InvalidOperationException("The region run differs from the whole-image slice.");
+    Console.WriteLine($"region.plan sha={Hash(actualRegion.WritablePixels)}");
+}
+
+using (var tiffBytes = new MemoryStream())
+{
+    // RGB24, not the Rgba32 this image holds: a 4-sample TIFF is refused by the region source, by design.
+    var rgb = new byte[Width * Height * 3];
+    for (var i = 0; i < Width * Height; i++)
+    {
+        rgb[i * 3] = pixels[i * 4];
+        rgb[i * 3 + 1] = pixels[i * 4 + 1];
+        rgb[i * 3 + 2] = pixels[i * 4 + 2];
+    }
+
+    tiffBytes.Write(ImageCodecs.Encode(rgb, Width, Height, PixelFormat.Rgb24, ImageFormat.Tiff,
+        options: new TiffEncodeOptions { Page = new TiffPageOptions { RowsPerStrip = 8 } }));
+
+    tiffBytes.Position = 0;
+    using var fromRegion = ImageTranscode.From(tiffBytes).Region(region).GaussianBlur(1f).Contrast(1.1f).ToImage();
+    tiffBytes.Position = 0;
+    using var whole = Image.Load(tiffBytes.ToArray());
+    using var applied = whole.Apply(regionPlan);
+    using var expected = applied.Pipe().Crop(region).ToImage();
+    if (!fromRegion.WritablePixels.SequenceEqual(expected.WritablePixels))
+        throw new InvalidOperationException("The TIFF region run differs from the whole-image slice.");
+    Console.WriteLine($"region.tiff sha={Hash(fromRegion.WritablePixels)}");
+
+    tiffBytes.Position = 0;
+    using var regionResized = ImageTranscode.From(tiffBytes).Region(region).Resize(15, 11).ToImage();
+    using var cropResized = whole.Pipe().Crop(region).Resize(15, 11, Resampler.Bicubic).ToImage();
+    if (!regionResized.WritablePixels.SequenceEqual(cropResized.WritablePixels))
+        throw new InvalidOperationException("The region resize differs from crop then resize.");
+    Console.WriteLine($"region.resize sha={Hash(regionResized.WritablePixels)}");
+
+    tiffBytes.Position = 0;
+    using var regionPlanResized = ImageTranscode.From(tiffBytes).Region(region).GaussianBlur(1f).Contrast(1.1f).Resize(15, 11).ToImage();
+    tiffBytes.Position = 0;
+    using var planWhole = Image.Load(tiffBytes.ToArray());
+    using var planApplied = planWhole.Apply(regionPlan);
+    using var planExpected = planApplied.Pipe().Crop(region).Resize(15, 11, Resampler.Bicubic).ToImage();
+    if (!regionPlanResized.WritablePixels.SequenceEqual(planExpected.WritablePixels))
+        throw new InvalidOperationException("The planned region resize differs from apply, crop, resize.");
+    Console.WriteLine($"region.resizeplan sha={Hash(regionPlanResized.WritablePixels)}");
+}
+
+// The streaming resize, under ILC: a geometric operator inside the row model, byte-identical to Load -> Resize.
+using (var resizeSource = new MemoryStream(png))
+using (var resizeSink = new MemoryStream())
+{
+    var resizeReport = ImageTranscode.From(resizeSource).Resize(31, 23).Run(resizeSink, ImageFormat.Png);
+    resizeReport.Height.ShouldBe(23);
+    using var resizeExpected = image.Pipe().Resize(31, 23, Resampler.Bicubic).ToImage();
+    var resizeBytes = Image.Encode(resizeExpected, ImageFormat.Png);
+    if (!resizeSink.ToArray().AsSpan().SequenceEqual(resizeBytes))
+        throw new InvalidOperationException("The streaming resize differs from the whole-image resize.");
+    Console.WriteLine($"resize.stream sha={Hash(resizeSink.ToArray())}");
+}
+
+// A same-size plan followed by the resize, still one pass.
+using (var planResizeSource = new MemoryStream(png))
+using (var planResizeSink = new MemoryStream())
+{
+    var resizePlan = new ProcessingPlan().Add(PlanOps.GaussianBlur(1f));
+    var planReport = ImageTranscode.From(planResizeSource).GaussianBlur(1f).Resize(31, 23)
+        .Run(planResizeSink, ImageFormat.Png);
+    planReport.Width.ShouldBe(31);
+    using var planExpected = image.Pipe().GaussianBlur(1f).Resize(31, 23, Resampler.Bicubic).ToImage();
+    var planBytes = Image.Encode(planExpected, ImageFormat.Png);
+    if (!planResizeSink.ToArray().AsSpan().SequenceEqual(planBytes))
+        throw new InvalidOperationException("The planned streaming resize differs from the whole chain.");
+    Console.WriteLine($"resize.plan sha={Hash(planResizeSink.ToArray())}");
+
+    // The resize between two plans, still one pass.
+    using var afterResizeSource = new MemoryStream(png);
+    using var afterResizeSink = new MemoryStream();
+    var afterPlan = new ProcessingPlan().Add(PlanOps.Contrast(1.05f));
+    var afterReport = ImageTranscode.From(afterResizeSource).GaussianBlur(1f).Resize(31, 23).Contrast(1.05f)
+        .Run(afterResizeSink, ImageFormat.Png);
+    afterReport.Width.ShouldBe(31);
+    using var afterWhole = image.Apply(resizePlan);
+    using var afterResized = afterWhole.Pipe().Resize(31, 23, Resampler.Bicubic).ToImage();
+    using var afterExpected = afterResized.Apply(afterPlan);
+    var afterBytes = Image.Encode(afterExpected, ImageFormat.Png);
+    if (!afterResizeSink.ToArray().AsSpan().SequenceEqual(afterBytes))
+        throw new InvalidOperationException("The resize between two plans differs from apply, resize, apply.");
+    Console.WriteLine($"resize.after sha={Hash(afterResizeSink.ToArray())}");
+}
+
+// A plan that ends with a size change, in memory: the same bytes as the steps then resize.
+var planResize = new ProcessingPlan().Add(PlanOps.GaussianBlur(1f)).Resize(31, 23);
+using (var planResizeImage = image.Apply(planResize))
+{
+    planResizeImage.Width.ShouldBe(31);
+    using var planResizeExpectedFiltered = image.Apply(new ProcessingPlan().Add(PlanOps.GaussianBlur(1f)));
+    using var planResizeExpected = planResizeExpectedFiltered.Pipe().Resize(31, 23).ToImage();
+    if (!planResizeImage.WritablePixels.SequenceEqual(planResizeExpected.WritablePixels))
+        throw new InvalidOperationException("A plan ending in a resize differs from the steps then resize.");
+    Console.WriteLine($"plan.resize sha={Hash(planResizeImage.WritablePixels)}");
+}
+
+// The file builder, under ILC: same chain, same bytes as the plan path.
+using (var builderSource = new MemoryStream(png))
+using (var builderSink = new MemoryStream())
+{
+    var builderReport = ImageTranscode.From(builderSource)
+        .GaussianBlur(1f)
+        .Resize(31, 23)
+        .Run(builderSink, ImageFormat.Png);
+    builderReport.Width.ShouldBe(31);
+    using var builderExpected = image.Pipe().GaussianBlur(1f).Resize(31, 23).ToImage();
+    var builderBytes = Image.Encode(builderExpected, ImageFormat.Png);
+    if (!builderSink.ToArray().AsSpan().SequenceEqual(builderBytes))
+        throw new InvalidOperationException("The file builder differs from the fluent chain.");
+    Console.WriteLine($"file.builder sha={Hash(builderSink.ToArray())}");
+}
+
+// Row-local geometry inside the streaming chain, under ILC: crop, pad, flip, filter, resize, in that order.
+using (var cropSource = new MemoryStream(png))
+using (var cropSink = new MemoryStream())
+{
+    var cropRect = new PixelRect(10, 8, 40, 30);
+    var padColor = new RgbaColor(20, 40, 60, 255);
+    var cropReport = ImageTranscode.From(cropSource).Crop(cropRect).Pad(3, padColor).FlipHorizontal()
+        .GaussianBlur(1f).Resize(21, 17).Run(cropSink, ImageFormat.Png);
+    cropReport.Width.ShouldBe(21);
+    using var cropCropped = image.Pipe().Crop(cropRect).ToImage();
+    using var cropPadded = cropCropped.Pipe().Pad(3, padColor).ToImage();
+    using var cropFlipped = cropPadded.Pipe().FlipHorizontal().ToImage();
+    using var cropFiltered = cropFlipped.Pipe().GaussianBlur(1f).ToImage();
+    using var cropExpected = cropFiltered.Pipe().Resize(21, 17).ToImage();
+    var cropBytes = Image.Encode(cropExpected, ImageFormat.Png);
+    if (!cropSink.ToArray().AsSpan().SequenceEqual(cropBytes))
+        throw new InvalidOperationException("The streaming geometry chain differs from the in-memory one.");
+    Console.WriteLine($"file.geometry sha={Hash(cropSink.ToArray())}");
+}
 
 using var wide = Image.Create(32, 24, WorkingFormat.Rgba16);
 var widePixels = MemoryMarshal.Cast<byte, ushort>(wide.WritablePixels);
@@ -431,6 +598,23 @@ static byte[] BuildLut16Profile(byte grid)
             BinaryPrimitives.WriteUInt16BigEndian(tag.Slice(offset, 2), (ushort)(i * 257));
 
     return profile;
+}
+
+/// <summary>An in-memory image read as rectangles, for the region entry.</summary>
+internal sealed class SmokeRegionSource(PixelView image) : IRegionSource
+{
+    public int Width => image.Width;
+
+    public int Height => image.Height;
+
+    public WorkingFormat Format => image.Format;
+
+    public void ReadRegion(PixelRect region, PixelView destination)
+    {
+        var rowBytes = region.Width * image.Format.BytesPerPixel();
+        for (var y = 0; y < region.Height; y++)
+            image.Row(region.Y + y).Slice(region.X * image.Format.BytesPerPixel(), rowBytes).CopyTo(destination.Row(y));
+    }
 }
 
 internal static class SmokeAssert

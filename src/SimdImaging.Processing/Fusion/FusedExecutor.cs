@@ -103,8 +103,43 @@ internal static class FusedExecutor
 
         // Source and destination views share this origin and height, so every rect below is
         // "global row minus winTop" and the two views address the same rows.
-        PixelView previous = source.Slice(new PixelRect(0, winTop, width, windowRows));
-        PixelView outputWindow = output.Slice(new PixelRect(0, winTop, width, windowRows));
+        RunWindow(width, height,
+            source.Slice(new PixelRect(0, winTop, width, windowRows)),
+            output.Slice(new PixelRect(0, winTop, width, windowRows)),
+            winTop, steps, first, count, band, bandRows, haloTotal, window, next);
+    }
+
+    /// <summary>
+    /// The band loop over windows the caller already owns: <paramref name="sourceWindow"/> and
+    /// <paramref name="outputWindow"/> start at absolute row <paramref name="winTop"/> and have the same height.
+    /// The whole-image path slices them out of the full buffers; the streaming path fills them from a row source.
+    /// <para>Keeping this one loop for both paths is the reason a streamed result is byte-identical: the halo
+    /// recursion, the clamping and the rectangle arithmetic are not re-derived anywhere else.</para>
+    /// </summary>
+    /// <param name="height">Rows in the whole image, for the bottom clamp. The windows are shorter than this.</param>
+    /// <param name="winTop">Absolute row that row 0 of both windows corresponds to.</param>
+    internal static void RunWindow(int width, int height, PixelView sourceWindow, PixelView outputWindow,
+        int winTop, IReadOnlyList<PlanStep> steps, int first, int count, int band, int bandRows, int haloTotal,
+        PixelView window, PixelView next)
+    {
+        var top = band * bandRows;
+        var bottom = top + Math.Min(bandRows, height - top);
+        RunWindow(width, height, sourceWindow, outputWindow, winTop, top, bottom, steps, first, count, haloTotal,
+            window, next);
+    }
+
+    /// <summary>
+    /// The same loop for a caller that knows the band's absolute rows (the region executor, whose bands are not
+    /// multiples of a height-splitting rule). <paramref name="height"/> is still the whole image, because that is
+    /// what the kernels clamp to; <paramref name="top"/> and <paramref name="bottom"/> are the rows this call owns.
+    /// </summary>
+    internal static void RunWindow(int width, int height, PixelView sourceWindow, PixelView outputWindow,
+        int winTop, int top, int bottom, IReadOnlyList<PlanStep> steps, int first, int count, int haloTotal,
+        PixelView window, PixelView next)
+    {
+        var windowRows = sourceWindow.Height;
+
+        PixelView previous = sourceWindow;
         var previousRect = new PixelRect(0, 0, width, windowRows);
 
         // remaining starts at Σ all halos and loses step k's halo before step k's rect is computed:

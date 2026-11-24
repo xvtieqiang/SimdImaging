@@ -21,11 +21,11 @@
 | 多帧 / 动画 | 已实现：`Load` 见 `FrameCount > 1` 走会话逐帧解码（`LoadFrames`），保留每帧 `Duration`；保存仍只写单帧，对多帧抛 `NotSupportedException`（见「实现边界」） |
 | 处理算子 | 已实现 119 个（全量）；实现边界见下方「实现边界」 |
 | SIMD 内核 | Rgba8 行读写、resize/blur 两遍卷积已向量化；点算子走「字节 LUT + 值主序矩阵记录 + 寄存器内钳制打包」，与标量孪生逐位一致（有端到端对比测试）。全部逐位一致，有测试兜底 |
-| `ProcessingPlan` | 已实现：同尺寸步骤按行带执行。**公共面只有 `Add(ImageOp)`**——halo 由 `ImageOps` 工厂从算子参数推出，调用方写不出来；`PlanSteps`（手工 halo 的适配器）已转 `internal`，字符串版 `Add` 同样内部化。`Mutate` 未提供（算子返回新图，原地绘制归 DrawOps） |
+| `ProcessingPlan` | 已实现：同尺寸步骤按行带执行，也是行泵的输入。**缩放不在计划里**——它由门面表达（`ResizeTo(plan, after)` / `ResizeRegion`），因为计划目前没有尺寸变换；**公共面只有 `Add(ImageOp)`**——halo 由 `ImageOps` 工厂从算子参数推出，调用方写不出来；`PlanSteps`（手工 halo 的适配器）已转 `internal`，字符串版 `Add` 同样内部化。`Mutate` 未提供（算子返回新图，原地绘制归 DrawOps） |
 | `SimdImaging.Drawing` 包 | 未创建，P1 起 |
 | `NativePixelPool` / `NullPixelPool` | 只有 `ArrayPixelPool` |
 | 公开 API 门禁 | 不接 RS0016 分析器，改用 `docs/public-api.txt` 快照：`PublicApiTests` 反射出全部公开签名（含可空标注）逐行比对，改动必须显式重新生成并 review diff |
-| 分块 / 行带执行 | 行带执行已实现（`ProcessingPlan`）；二维 tile 未做，几何与全局算子仍整图执行 |
+| 分块 / 行带 / 区域 / 几何 | 已实现：整图；行带（`ProcessTo`）；矩形（`ProcessRegion`、`ResizeRegion`）；行流式缩放（`ResizeTo`，可夹在一个计划之后）。未做：`Global` 两遍、多级缩放连用、Affine/Perspective、区域 sink（把结果写回文件的矩形） |
 | 公开参考向量包 | 已实现（M6，2026-11-14）：`tests/Fixtures/vectors/` 固定输入 / 期望 / SHA-256 + 独立高精度生成脚本；初始 3 条 `warp-identity-*`，`VectorTests` 独立重算哈希。新增向量允许，为过测试改已有 `expected` 禁止 |
 | 像素差异工具 | 已实现（M6）：`src/Shared/PixelDiff.cs` 单一源码共享，测试项目与 Comparison 工程链接复用，不造第二把尺子；补首个不匹配位置、每通道误差、Top N、SHA-256、P6 差异热图，分级沿用 `Metrics.Grade` |
 | SIMD 档位自动化 | 已实现（M6）：`benchmarks/simd-tiers.sh` 三档 JIT 全量测试 + 算子输出 body SHA-256 逐档比对。修正了 §7.5 设计稿的 `--filter "FullyQualifiedName~Kernel"` —— 它实际只匹配名字里恰好带 Kernel 的用例，不匹配 scalar-twin 测试，现改为跑全量 |
@@ -1228,3 +1228,64 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 | **LUT 实验（点算子向量化）** | 不做。字节域查表已领先对手 1.4–4×，向量化只加风险 |
 | **ICC 边界** | 只做 matrix/TRC 与 RGB LUT 型 profile；非 RGB 设备空间仍是缺口 |
 | **ICC 同图对拍** | **确认不可行（2026-11-16）**：ImageSharp 4.1.3 的 profile→profile 转换在 `ColorProfileConverterExtensionsIcc`，反射显示 `public=False`，而本仓库只比对公开面。改为**自洽验证**（`benchmarks ... icc`）：恒等 ΔE **0.000**、sRGB→P3→sRGB 往返最大 ΔE **0.654**、中性轴 **0.000**，素材是 CC0 的 Compact ICC Profiles |
+
+## M17 区域执行（2026-11-25）
+
+- **4 通道 / 2 通道 TIFF 一律拒绝**：`TiffPageLayout` 不暴露 `ExtraSamples`，无法区分直通 alpha 与
+  associated（预乘）alpha；猜错就是静默错像素。**本库 `Save` 出的 TIFF 正好是 RGBA**，所以对自己的输出调用
+  `ProcessRegion` 会被拒——消息点名 `ExtraSamples`。复访条件：codec 在 layout 上公开 `ExtraSamples`
+  （或 `TiffColor` 的 alpha 规则），届时放开并补 associated/unassociated 两个用例。
+- **Palette / CMYK / YCbCr / CIE Lab / 透明掩码拒绝**：颜色转换在 `TiffColor`（internal）里，是冻结定义；在
+  本库复制一份就是第二把尺。复访条件同上。
+- **单条带大页拒绝**：`ReadSegment` 以段为单位解码，`RegionOptions.MaxSegmentBytes`（默认 64 MiB）事前拒绝，
+  消息教调用方重编码时给 `RowsPerStrip` / tile。本库 `Save` 的 TIFF 默认就是整图一条带（无 `RowsPerStrip`），
+  因此它同时踩中 4 通道与单条带两个拒绝。
+- **区域结果不带 ICC / Exif / Resolution / ColorEncoding**：实测 `ImageDecoder.Open` 对 TIFF 会读出**超过文件本身
+  的字节**（512² 文件 61.9 KB，Open 读了 127.9 KB）——codec 文档写明元数据需要整个文件。区域路径因此只从
+  `TiffPageLayout` 取尺寸 / 位深 / Orientation，`ColorEncoding` 报告为 `AssumedSrgb`。需要元数据时用
+  `SaveOptions.Metadata` 附上，或走 `Load`。
+- **`Image.Load(path, LoadOptions{Region})` 的 TIFF 快路径未做**：`Load` 没有「原生 / 物化」的报告位，且它的
+  `Metadata` / `Resolution` 来自整文件解码；加进去会造出一个「元数据略不同的第二个 Load」。复访条件：
+  `LoadOptions` 有诚实的读模式位，且 layout 能给出 ICC / Resolution。
+- **每步处理整个窗口**：区域路径把窗口当独立小图（`band 0`、`bandRows = winH`），`RunWindow` 的每步都写满窗口，
+  而不是像带泵那样按 `remaining` 收缩。链长 × halo 大时会多算，量级 `(步数−1)×窗口`；**未实测**。若实测同像素量
+  比带泵慢 >1.5×，给 `RunWindow` 加 `top/bottom` 重载（语义不变）。
+- **`ProcessTo` 的读放大已修（2026-11-25）**：早先 `ResolveFormat` 用 `ImageDecoder.Open` 取深度与元数据，实测它
+  会遍历整个文件（202 KB 的 JPEG 读 206 KB、71.7 KB 的 TIFF 读 147 KB），整条 `ProcessTo` 是文件的 2.0–3.4×。
+  现在默认只读头部：TIFF 走 `TiffReader.ReadLayout`，其它格式 ≤4 KiB 前缀（失败再增长到 1 MiB）；实测
+  JPEG 1.01× / PNG 1.07× / TIFF 1.41×（TIFF 行读器的预读，codec 行为，不是我们的）。**代价**：元数据默认不随行，
+  `ProcessOptions.PreserveMetadata = true` 恢复旧的整文件行为（2.01× / 2.14× / 3.40×），
+  `ProcessReport.MetadataCarried` 报告是否携带。修的过程中还抓到一个签名判断 bug：`LooksLikeTiff` 拿**整个** 4 KiB
+  前缀和 4 字节签名比较，永远为 false，把 TIFF 推进了 1 MiB 嗅探——`ProcessTo_ReadsTheSourceAboutOnce` 就是为此加的。
+- **多页 TIFF 只测了越界**：`RegionOptions.PageIndex` 透传给 `TiffReader.ReadLayout(stream, page)`，正例没有夹具
+  （手写构建器目前单页）。补夹具后再把这一行删掉。
+
+## 几何执行（M18）
+
+- **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 15 MiB。
+- **一次流水线只支持一个缩放**：`ResizeTo(..., plan, after)` 覆盖「计划 → 缩放 → 计划」；两次缩放连用仍要分两次调用
+  （中间落一张整图）。真正的多级流水线需要 plan 自带尺寸变换，见 `architecture.md` §6.7。
+- **编码器尺寸仍由门面给出**：`ResizeTo` 的 width/height 是参数；计划自己改变尺寸（不经过门面参数）还不支持。
+- **区域 + 几何已支持「解码 + 计划 + 缩放」**：`ResizeRegion(path, plan, rect, w, h)` 一趟完成；
+  仍未做的是「缩放夹在多个计划之间」（需要 plan 的尺寸变换）与 Affine/Perspective。
+- **原点感知重采样未做**：`Resize` 以 view 尺寸建权重、按 view 坐标钳制；分块需要「全图尺寸 + 原点」，
+  而权重/钳制/累加序必须逐字节不变。
+- **Affine / Perspective 不在行模型里**：它们的源区域通常不是矩形（透视甚至不可表达），需要另一套按目标行
+  求源窗口的映射，且要单列等价性论证。
+
+## 性能基线的录制（2026-11-25）
+
+- **`SimdImaging.Benchmarks` 不写阈值**：`BaselineJson.Write` 恒写 `thresholdPercent: null`，所以「跑一遍保存 JSON」
+  得到的基线一条都不设闸。`check-baseline.sh` 现在对这种情况直接 FAIL（此前会打印 `PASS (0 enforced)`）。
+- **没有录制脚本**：阈值要按「五次运行归一化后的偏差 `max(20, ceil(3×S))`」推出，目前靠手工。M16 基线因此
+  没有可复现的来源；重录前应先补一个 `record-baseline.sh`。
+- **噪声地板**：2026-11-25 连跑四次，两次失败、失败项不同（`quantize` +30.6%、`stroke` +25.9%），都在阈值附近。
+  在把这台机器换成更安静的之前，性能门禁的结论要按「多次运行」读，不要按单次。
+
+## 流式几何与异步（2026-11-25）
+
+- **文件侧流式几何是行局部的四个**：`Crop`、`Pad`、`FlipHorizontal`、`Resize`，按调用顺序串成拉式链。
+  `FlipVertical` / `Rotate90` / `Transpose` / `Affine` / `Perspective` / 接缝处理需要整行重排或随机访问，
+  前向流做不了，保持整图 `Pipe()` 路径；`Region` 与几何阶段组合也拒绝。
+- **异步是 offload，不是重叠 IO**：`RunAsync` / `SaveAsync` / `ToImageAsync` 把同步管线放到线程池，取消在带之间生效；
+  codec 的行读者与编码器都是同步的，真正重叠 IO 需要上游提供异步行接口。

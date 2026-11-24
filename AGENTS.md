@@ -31,15 +31,45 @@ Not in scope: codecs (SimdCodecs owns them), text rendering, GPU backends.
   codecs, and Abstractions must stay dependency-light. Operators take `PixelView`, never `Image`, so
   Processing does not need the facade.
 - Dependency direction: `Abstractions ← Processing ← SimdImaging`. Never the reverse.
-- The codec layer is a **NuGet dependency**, never a source checkout: `Sdcb.SimdCodecs` 2.0.x, version pinned
+- The codec layer is a **NuGet dependency**, never a source checkout: `Sdcb.SimdCodecs` 2.1.x, version pinned
   in `Directory.Packages.props` and kept equal to `Sdcb.SimdCodecs.Abstractions`. No `ProjectReference` into
   another repository.
 - Our owned pixel buffer is **`WorkingBuffer`**, deliberately not `PixelBuffer`: `Sdcb.SimdCodecs.Abstractions`
   2.0 ships a `PixelBuffer` of its own (native layout, codec side) and every file that touches pixels imports
   both namespaces. The names differ, so no alias directives and no qualification noise.
 - No shipped package uses another's internals; shared code is source-shared under `src/Shared`.
+- File-level streaming is a **source/sink seam, not a second executor**: `IRowSource` / `IRowSink` live in
+  Abstractions, and `FusedExecutor.RunWindow` serves both the whole-image and the band-pump path, which is why the
+  two are byte-identical. A plan that cannot stream is refused by `ProcessingPlan.CanStream` and reported, never
+  approximated — `Global`, `Composite`, and steps whose kernel reads the whole image (Mirror / Wrap convolution)
+  are the three refusals that exist today.
+- **The same window loop serves three sources**: whole image, forward rows (`IRowSource`), and rectangles
+  (`IRegionSource`). A region run hands each window to `FusedExecutor.RunWindow` as a standalone image
+  (`band 0`, `bandRows = window height`), so no kernel knows the difference — and a plan that cannot stream cannot
+  run over a region either. A region target is refused, never materialised: the whole-file path is `Load`.
+- **Operator methods have one declaration.** `ImageOpPipeline<TSelf>` holds every operator that compiles to a plan
+  step, and both `ImagePipeline` and `ImageTranscode` inherit it; adding an operator means adding it there once. The
+  geometry and composite operators stay on `ImagePipeline` because they are not same-size plan steps.
+- **Row stages pull, they do not push.** `PlanRowSource` produces a band on demand, `ResizeRowSource` produces
+  resized rows on demand, and `Pipeline.Copy` drives the last one into a sink. That is why "plan → resize → plan"
+  needs no queue and no thread: composition is nesting one `IRowSource` inside the next.
 - **PublicAPI analyzers land in M1**, not M0: the surface still moves, and locking it now would only produce
   churn. Until then, public API changes are reviewed by diff.
+
+## Versioning
+
+- **The version moves when a release is cut, not when a change lands.** `VersionPrefix` is `0.1.0` with the
+  `-alpha` suffix while nothing has been published (today: no tags, no GitHub releases, no NuGet packages), so the
+  number is a label for "the current unreleased shape", not a promise to anyone. Bumping it per dependency change
+  or per milestone produces diffs that mean nothing and a changelog nobody can reconstruct.
+- A release is a tag `v<version>` plus a package push, both made together, and the numbers that go with it:
+  `MAJOR.MINOR.PATCH`. While `0.x`, the minor may break anything — the **public API snapshot** (`docs/public-api.txt`)
+  is the real contract, and its diff is what gets reviewed.
+- What counts as a minor, not a patch: a breaking public-API change; a **codec-floor move** (`Sdcb.SimdCodecs`
+  2.0.x → 2.1.x), because it changes what a consumer is forced to take even when our source is untouched; a change
+  to the meaning of an existing option. Patches are fixes that do not move any of those.
+- The prerelease suffix stays until the first package ships. A version that was never published cannot be
+  "already taken", so there is no reason to skip numbers before then.
 
 ## Language
 

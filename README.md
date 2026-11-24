@@ -19,15 +19,15 @@
 
 ## 状态
 
-**M0、M1、M5、M6–M14 已完成并验收；M15（SIMD 收口 / 门禁 / 契约）进行中；M2–M4 功能已落地、
-出口条件部分核验**——M2 的「点算子融合后分配 = 0」已判定**未达标**（≈4.3–6.0 KiB/op，2026-11-15），
+**M0、M1、M5、M6–M14 已完成并验收；M15（SIMD 收口 / 门禁 / 契约）进行中；M16（文件级流式）与 M17（区域执行）已完成；
+M2–M4 功能已落地、出口条件部分核验**——M2 的「点算子融合后分配 = 0」已判定**未达标**（≈4.3–6.0 KiB/op，2026-11-15），
 M4 的 8K `gaussian-blur` 峰值超 7.1%，M3 抗锯齿覆盖率与 M4 的 HEIF 端点仍无判据可测。
 逐项状态见 [`docs/architecture.md` §11](docs/architecture.md) 与 [`docs/known-gaps.md`](docs/known-gaps.md)。
 全量测试通过、`Release` 构建 0 警告、public API 由快照锁定。
 
 **已可用：**`Image.Load / Save / Encode`、`Image.Mutate`（原地链式）、`Image.Pipe`（返回新图的链）、三个工作格式、池化缓冲；几何
 （Crop / Pad / Flip / Rotate90·180 / Rotate 任意角 / Affine / Perspective / Resize 十六种采样器）；点算子（Brightness / Contrast / Saturation /
-Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueRotate / Sepia / Normalize / Vibrance / Temperature / Tint / ColorBalance / ChannelSwap / BlackWhite / Curves / Opacity / Clamp）、直方图与均衡；滤波（GaussianBlur / BoxBlur / Median3x3 / Sobel / 形态学 3×3 / 双边 / 卷积 / 浮雕 / 锐化 / 运动模糊 / 散景 / 渐变 / 贴图 / 水印）；合成（Porter-Duff 12 式 + 18 种混合模式）、原地填充/清空、矩形描边、Bresenham 直线、椭圆与多边形填充、预乘/反预乘、调色板量化（中位切分 / Wu / WebSafe / 抖动）、直方图与均衡；高级摄影（非局部均值 / 局部拉普拉斯 / Richardson-Lucy 反卷积 / 接缝裁剪）；色彩管理（ICC 的 matrix/TRC **与 RGB LUT 型 profile**、CIEDE2000）；HDR（五种色调映射、增益图成对类型 `GainMappedImage` + Ultra HDR 读写）；内存治理（每线程 scratch 预算 64 MB、权重表缓存 8 MB + LRU、`MemoryBudget` 统计与 Trim、`MemoryEstimator.Estimate` 预估峰值且区分精确项与算子声明项）。
+Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueRotate / Sepia / Normalize / Vibrance / Temperature / Tint / ColorBalance / ChannelSwap / BlackWhite / Curves / Opacity / Clamp）、直方图与均衡；滤波（GaussianBlur / BoxBlur / Median3x3 / Sobel / 形态学 3×3 / 双边 / 卷积 / 浮雕 / 锐化 / 运动模糊 / 散景 / 渐变 / 贴图 / 水印）；合成（Porter-Duff 12 式 + 18 种混合模式）、原地填充/清空、矩形描边、Bresenham 直线、椭圆与多边形填充、预乘/反预乘、调色板量化（中位切分 / Wu / WebSafe / 抖动）、直方图与均衡；高级摄影（非局部均值 / 局部拉普拉斯 / Richardson-Lucy 反卷积 / 接缝裁剪）；色彩管理（ICC 的 matrix/TRC **与 RGB LUT 型 profile**、CIEDE2000）；HDR（五种色调映射、增益图成对类型 `GainMappedImage` + Ultra HDR 读写）；内存治理（每线程 scratch 预算 64 MB、权重表缓存 8 MB + LRU、`MemoryBudget` 统计与 Trim、`MemoryEstimator.Estimate` 预估峰值且区分精确项与算子声明项）；文件级流水线 `ImageTranscode`（`From → Apply/Resize → Save/Run/ToImage`：解码、计划、缩放、编码一条流水线，常驻内存不随高度增长；TIFF 可只处理一个矩形）；区域能力查询 `Image.DescribeRegion`。
 
 - `Release` 构建 0 警告，全量测试通过（此处不写死数量，以 CI 输出为准）。
 - Resize 走行带执行：4K→1080p 的分配从 70 MB 降到 **17 MB**（16 MB 预算），输出逐字节不变。
@@ -112,6 +112,64 @@ byte[] png = Image.Encode(img, ImageFormat.Png);   // ImageFormat 来自 Sdcb.Si
 失败分两种，别混：输入不是图片 → `InvalidDataException`（或 `TryLoad` 返回 false）；调用方参数错了 →
 `ArgumentException` / `NotSupportedException`。没有静默降级。
 
+### 文件级流水线（不整图载入）
+
+文件进、文件出没有 `Image` 可以 pipe，用 `ImageTranscode`——动词与 `Pipe()` 对齐，内部路由到行带流水线：
+
+```csharp
+// 一步到位：读 → 模糊 → 缩放 → 写
+ImageTranscode.From("in.jpg").GaussianBlur(1f).Resize(1600, 900).Save("out.png");
+
+// 要报告（流式与否、读了多少行、元数据带没带）
+ProcessReport report = ImageTranscode.From("in.jpg").GaussianBlur(1f).Resize(1600, 900).Run("out.png");
+
+// 不可 seek 的源（HTTP 请求体）也行，容器由目标格式给出
+ProcessReport report = ImageTranscode.From(requestBody).GaussianBlur(1f).Run(responseBody, ImageFormat.Png);
+
+// 只处理一块再缩小（crop 是最先的 stage，解码不多读）
+ImageTranscode.From("huge.jpg").Crop(rect).GaussianBlur(1f).Resize(1600, 900).Save("out.png");
+
+// 行局部几何可以自由组合：裁剪 → 加边 → 水平翻转 → 滤波 → 缩放
+ImageTranscode.From("in.png").Crop(rect).Pad(8, RgbaColor.White).FlipHorizontal().Resize(800, 600).Save("out.png");
+
+// 也要整图在手里
+using var image2 = ImageTranscode.From("in.jpg").GaussianBlur(1f).Resize(1600, 900).ToImage();
+
+// 异步：把同步管线放到线程池（codec 的行 IO 是同步的），可取消在带之间生效
+await ImageTranscode.From("in.jpg").GaussianBlur(1f).Resize(1600, 900).SaveAsync("out.png");
+```
+
+- 算子面与 `Pipe()` 是**同一份声明**（`ImageOpPipeline<TSelf>`，40 个计划算子）；几何与合成算子只在 `Pipe()`，因为它们不是同尺寸步骤。**文件侧不出现 plan**——所有算子都是链上的一级，计划只存在于实现里。
+- 不带 `Region` 时全程流式：读行 → 算子 → 缩放 → 写行，常驻内存是窗口 + 环形缓冲，**不随图片高度增长**。
+- 结果与 `Load → Pipe()...ToImage() → Save` **逐字节相同**（源文件不带元数据时）。元数据默认**不**随行：读它要遍历整个文件；要就开 `TranscodeOptions.PreserveMetadata`（多读一趟），或直接用 `SaveOptions.Metadata` 附上，报告的 `MetadataCarried` 如实说明。
+- 默认只扫一遍源：JPEG **1.01×**、PNG **1.07×**、TIFF **1.41×** 的文件字节（TIFF 行读器自身预读）。
+- 8K→1080p：纯缩放 **0.92×**、`blur → 缩放 → sharpen` **1.06×**，工作集约 15 MiB。
+- 链里有 `Global` 算子（直方图 / 量化 / CLAHE）或读整图的步骤（Mirror / Wrap 卷积）时不**做近似**：物化执行，`report.Refusal` 说明原因；float 样本没有行读投影，直接抛。
+- 解码器 / 编码器是否真流式分开报（`ReaderIsStreaming` / `EncoderIsStreaming`），`FullyStreamed` 是三者都成的结论。
+- 文件侧能流式的几何是**行局部**的那几个：`Crop`、`Pad`、`FlipHorizontal`、`Resize`，按调用顺序执行。`FlipVertical` / `Rotate90` / `Transpose` / `Affine` / `Perspective` / 接缝要么需要整行重排、要么需要随机访问，`Pipe()` 整图路径是唯一正确通道。`Region` 模式下这些几何阶段一律拒绝——矩形已经由 `Region` 选定。
+
+#### 只处理一个矩形（超大 TIFF）
+
+```csharp
+// 只解相交的 strip/tile，再处理、再缩放
+using var thumb = ImageTranscode.From("huge.tif").Region(rect).GaussianBlur(1f).Resize(480, 320).ToImage();
+
+// 不读像素，先问能不能读、最大段多大
+RegionCapabilities caps = Image.DescribeRegion("huge.tif");
+```
+
+- 输出与 `Load(整图) → 处理 → Crop(rect)`（带缩放时再加 `Resize`）**逐字节相同**，halo 边界也一样。
+- 只读与矩形相交的 strip/tile：16×16 区域在 512² 上读 **3.1 KB**（文件 43.8 KB），图像高 4 倍后仍 **3.4 KB**。
+- 不带缩放时那块按带读、按带处理，区域本身不整块存在；带缩放时按 Σhalo 扩大读入、只把内圈交给缩放，一趟完成。
+- 读不了就抛，不物化：非 TIFF、4 通道（`ExtraSamples` 不可见）、Palette / CMYK / YCbCr、单段超预算、含 `Global` 的计划，各有明确消息。
+- 结果不带 ICC/Exif（codec 读元数据要整个文件）；需要时用 `SaveOptions.Metadata` 附上。
+- 本库 `Save` 出的 TIFF 是 4 通道单条带，会被区域读拒绝——这个入口是给「别处写的大图」用的。
+
+> 内存里不需要 builder：`image.Pipe().GaussianBlur(1f).Resize(1600, 900).ToImage()` 就是惯用法。
+> 计划是低阶：`Image.Apply(plan)` / `ApplyWithOptions` 标为 `EditorBrowsable(Advanced)`，只给「编译好的配方」与逐步
+> 计时用；用户层只有 `Pipe()` / `Mutate()` / `ImageTranscode`。
+> 旧的静态入口（`ProcessTo` / `ResizeTo` / `ProcessRegion` / `ResizeRegion`）已改为内部实现，公开面只留 builder 与 `DescribeRegion`。
+
 ### 原地修改
 
 不想换变量时用 `Mutate`，链一样，结果写回这张图：
@@ -169,4 +227,4 @@ tests/
   SimdImaging.AotSmoke/      NativeAOT vs JIT 逐字节比对；不在 slnx 里
 ```
 
-编解码层是 **NuGet 依赖**：`Sdcb.SimdCodecs` **2.0.0**，版本锁在 `Directory.Packages.props`（与 `Sdcb.SimdCodecs.Abstractions` 同版本、同步升级）。仓库不包含、也不引用任何外部源码检出。
+编解码层是 **NuGet 依赖**：`Sdcb.SimdCodecs` **2.1.0**，版本锁在 `Directory.Packages.props`（与 `Sdcb.SimdCodecs.Abstractions` 同版本、同步升级）。仓库不包含、也不引用任何外部源码检出。

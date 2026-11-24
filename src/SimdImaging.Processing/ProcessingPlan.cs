@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Fusion;
+using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Processing;
@@ -53,6 +54,14 @@ public readonly record struct PlanStep(string Name, OpCategory Category, int Hal
     /// and not a number. <c>MemoryEstimator</c> reads it and reports the largest declaration.</para>
     /// </summary>
     public Func<int, int, int, WorkingFormat, long>? Scratch { get; init; }
+
+    /// <summary>
+    /// True when the kernel reads the whole source image and not just its window — the general convolution's
+    /// Mirror and Wrap borders reflect or wrap about the <b>image</b> edge, and a band-only source cannot supply
+    /// that. A streaming executor must refuse such a plan instead of handing the kernel a band and letting it
+    /// reflect about the band edge, which would seam.
+    /// </summary>
+    internal bool NeedsWholeSource { get; init; }
 }
 
 /// <summary>
@@ -99,6 +108,9 @@ public sealed class ProcessingPlan
     public const int DefaultBandPixels = 128 * 1920;
 
     private readonly List<PlanStep> _steps = [];
+    private int _resizeWidth;
+    private int _resizeHeight;
+    private Resampler _resizeResampler;
     private ReadOnlyCollection<PlanStep>? _readOnlySteps;
 
     /// <summary>Bumped on every <c>Add</c>; the execution cache below is keyed on it.</summary>
@@ -124,6 +136,105 @@ public sealed class ProcessingPlan
     /// </remarks>
     public IReadOnlyList<PlanStep> Steps => _readOnlySteps ??= _steps.AsReadOnly();
 
+    /// <summary>Whether the plan ends with a size change.</summary>
+    public bool HasResize => _resizeWidth > 0;
+
+    /// <summary>
+    /// Ends the plan with a resize. Steps before it run at the source size, the resize changes it, and nothing may be
+    /// added after — a plan with a resize <em>between</em> steps is not expressible yet (§6.7).
+    /// <para>For a streamed run the rows are resized as they are produced, so the size change never becomes an
+    /// intermediate image; for <see cref="Execute"/> the same-size steps run first and the result is resampled.</para>
+    /// <para>In memory the idiomatic form is <c>image.Pipe().Resize(width, height)</c>; this exists so a file pipeline
+    /// (<c>Image.ProcessTo</c>), which has no <c>Image</c> to pipe, can describe the same chain in one pass.</para>
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
+    /// <exception cref="InvalidOperationException">The plan already ends with a resize.</exception>
+    public ProcessingPlan Resize(int width, int height, Resampler resampler = Resampler.Bicubic)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        if (HasResize)
+            throw new InvalidOperationException(
+                "The plan already ends with a resize; a second one is a second call, not a second step.");
+
+        _resizeWidth = width;
+        _resizeHeight = height;
+        _resizeResampler = resampler;
+        _version++;
+        return this;
+    }
+
+    /// <summary>Appends another plan's steps. Used by the file builder to keep one plan per side of a resize.</summary>
+    internal void Append(ProcessingPlan other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        if (HasResize || other.HasResize)
+            throw new InvalidOperationException("A plan that ends with a resize cannot be merged with another.");
+        if (other._steps.Count == 0)
+            return;
+
+        _steps.AddRange(other._steps);
+        _version++;
+    }
+
+    /// <summary>The size <see cref="Execute"/> and a streamed run produce for a given input.</summary>
+    public (int Width, int Height) OutputSize(int width, int height) =>
+        HasResize ? (_resizeWidth, _resizeHeight) : (width, height);
+
+    /// <summary>
+    /// Whether this plan can run against a forward-only row source (<see cref="TryExecuteTo"/>): every step must be
+    /// able to produce its output from a band of rows. A <see cref="OpCategory.Global"/> or
+    /// <see cref="OpCategory.Composite"/> step cannot, and neither can a step whose kernel reads the whole image
+    /// (the general convolution's Mirror and Wrap borders).
+    /// <para>A refused plan is refused, not approximated: run it over a whole image instead. The answer depends on
+    /// the plan alone, so a caller can decide before it opens a stream it could not re-read.</para>
+    /// </summary>
+    public StreamRefusal CanStream() => StreamingExecutor.Classify(_steps, out _);
+
+    /// <summary>
+    /// Runs the plan over a forward-only row source, writing finished rows to <paramref name="sink"/>: the
+    /// file-level streaming counterpart of <see cref="Execute"/>. Nothing but a band of rows and the operators'
+    /// own scratch is ever held, so memory does not grow with the image height.
+    /// <para>The result is byte-identical to <c>Execute</c> over the same pixels: both use the same halo
+    /// recursion. An empty plan is a straight copy of the rows.</para>
+    /// </summary>
+    /// <exception cref="ArgumentException">The source reports a non-positive size.</exception>
+    /// <exception cref="InvalidDataException">The source ends before its declared height.</exception>
+    /// <exception cref="InvalidOperationException"><see cref="ExecuteOptions.MaxWorkingBytes"/> cannot be met, or
+    /// cannot be enforced because a step declares no scratch and
+    /// <see cref="ExecuteOptions.AllowUnestimatedScratch"/> is false.</exception>
+    /// <exception cref="OperationCanceledException">The token in <paramref name="options"/> was cancelled.</exception>
+    public StreamResult TryExecuteTo(IRowSource source, IRowSink sink, ExecuteOptions? options = null) =>
+        HasResize
+            ? StreamingExecutor.ExecuteWithResize(this, source, sink, _resizeWidth, _resizeHeight, _resizeResampler,
+                options)
+            : StreamingExecutor.Execute(this, source, sink, options);
+
+    /// <summary>
+    /// Whether this plan can run over a rectangle of a <see cref="IRegionSource"/>. The conditions are the same as
+    /// <see cref="CanStream"/> — a <see cref="OpCategory.Global"/> or <see cref="OpCategory.Composite"/> step, or one
+    /// whose kernel reads the whole image, cannot produce its output from a window.
+    /// </summary>
+    public RegionRefusal CanExecuteRegion() => RegionExecutor.Classify(_steps, HasResize, out _);
+
+    /// <summary>
+    /// Runs the plan over <paramref name="region"/> only, reading through <paramref name="source"/>: the
+    /// two-dimensional counterpart of <see cref="Execute"/>. The result is byte-identical to
+    /// <c>Execute(whole).Slice(region)</c> for every pixel of the region.
+    /// <para>Nothing is written when the plan is refused. Memory is four windows plus the destination, and does not
+    /// grow with the source's width or height.</para>
+    /// </summary>
+    /// <exception cref="ArgumentException">The region is empty or lies outside the source, or the destination is not
+    /// the region's size or format.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="BandRows"/> is not positive.</exception>
+    /// <exception cref="InvalidOperationException"><see cref="ExecuteOptions.MaxWorkingBytes"/> cannot be met, or
+    /// cannot be enforced because a step declares no scratch and
+    /// <see cref="ExecuteOptions.AllowUnestimatedScratch"/> is false.</exception>
+    /// <exception cref="OperationCanceledException">The token in <paramref name="options"/> was cancelled.</exception>
+    public RegionResult TryExecuteRegion(IRegionSource source, PixelRect region, PixelView destination,
+        ExecuteOptions? options = null, IPixelPool? pool = null) =>
+        RegionExecutor.Execute(this, source, region, destination, options, pool);
+
     /// <summary>Rows per band for this plan.</summary>
     public int BandRows { get; init; } = DefaultBandRows;
 
@@ -139,14 +250,16 @@ public sealed class ProcessingPlan
     public ProcessingPlan Add(ImageOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
-        return Add(op.Name, op.Category, op.Kernel, op.HaloX, op.HaloY, op.Scratch);
+        return Add(op.Name, op.Category, op.Kernel, op.HaloX, op.HaloY, op.Scratch, op.NeedsWholeSource);
     }
 
     /// <summary>Appends a step that also declares its own scratch.</summary>
     /// <param name="scratch">What the step allocates per worker for a band of the given height; null when it
     /// allocates nothing worth reporting. <see cref="MemoryEstimator"/> turns these into the per-worker term.</param>
+    /// <param name="needsWholeSource">The kernel reads the whole image, not just its window (see
+    /// <see cref="PlanStep.NeedsWholeSource"/>).</param>
     internal ProcessingPlan Add(string name, OpCategory category, OpKernel kernel, int haloX, int haloY,
-        Func<int, int, int, WorkingFormat, long>? scratch)
+        Func<int, int, int, WorkingFormat, long>? scratch, bool needsWholeSource = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(kernel);
@@ -155,8 +268,15 @@ public sealed class ProcessingPlan
         if (category == OpCategory.Geometric)
             throw new NotSupportedException(
                 "A geometric step changes the image size, which a same-size plan cannot represent; run it outside the plan.");
+        if (HasResize)
+            throw new InvalidOperationException(
+                "A resize ends the plan; add the steps before processing the size change, or run the resize outside.");
 
-        _steps.Add(new PlanStep(name, category, haloX, haloY, kernel) { Scratch = scratch });
+        _steps.Add(new PlanStep(name, category, haloX, haloY, kernel)
+        {
+            Scratch = scratch,
+            NeedsWholeSource = needsWholeSource,
+        });
         _version++;
         return this;
     }
@@ -176,6 +296,10 @@ public sealed class ProcessingPlan
         if (rgbaTable.Length != 4 * 256)
             throw new ArgumentException(
                 $"The table must be 4 channels × 256 entries, not {rgbaTable.Length} bytes.", nameof(rgbaTable));
+
+        if (HasResize)
+            throw new InvalidOperationException(
+                "A resize ends the plan; add the steps before processing the size change, or run the resize outside.");
 
         var table = rgbaTable.ToArray();
         _steps.Add(new PlanStep(name, OpCategory.Point, 0, 0, BuildLutKernel(table)) { Lut = table });
@@ -250,6 +374,25 @@ public sealed class ProcessingPlan
     /// <see cref="ExecuteOptions.MaxWorkingBytes"/>.</exception>
     public WorkingBuffer ExecuteWithOptions(PixelView source, ExecuteOptions options, out PlanReport? report,
         IPixelPool? pool = null, PlanObserver? observe = null)
+    {
+        var buffer = ExecuteSameSize(source, options, out report, pool, observe);
+        if (!HasResize)
+            return buffer;
+
+        try
+        {
+            // The steps ran at the source size; the resize is the last stage, so it sees their output whole. That is
+            // the same thing a streamed run does band by band, byte for byte.
+            return Resample.Resize(buffer.View, _resizeWidth, _resizeHeight, _resizeResampler, pool);
+        }
+        finally
+        {
+            buffer.Dispose();
+        }
+    }
+
+    private WorkingBuffer ExecuteSameSize(PixelView source, ExecuteOptions options, out PlanReport? report,
+        IPixelPool? pool, PlanObserver? observe)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(BandRows);
@@ -416,7 +559,7 @@ public sealed class ProcessingPlan
     }
 
     /// <summary>The band height for this image: the caller's, or the pixel budget expressed in rows.</summary>
-    private int BandRowsFor(int width, int height)
+    internal int BandRowsFor(int width, int height)
     {
         if (BandRows != DefaultBandRows)
             return BandRows;

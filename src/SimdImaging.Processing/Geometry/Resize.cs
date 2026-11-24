@@ -273,38 +273,6 @@ public static class Resample
         }
 
         // The tap offset that carries the whole weight, or false when the table is not a single unit tap.
-        static bool TryNearestTap(WeightTable table, out int offset)
-        {
-            offset = -1;
-            for (var x = 0; x < table.Starts.Length; x++)
-            {
-                var baseIndex = x * table.Taps;
-                var unit = -1;
-                for (var k = 0; k < table.Taps; k++)
-                {
-                    var weight = table.Weights[baseIndex + k];
-                    if (weight == 1f && unit < 0)
-                    {
-                        unit = k;
-                        continue;
-                    }
-
-                    if (weight != 0f)
-                        return false;
-                }
-
-                if (unit < 0)
-                    return false;
-
-                if (offset < 0)
-                    offset = unit;
-                else if (offset != unit)
-                    return false;          // the unit tap moves between destination pixels
-            }
-
-            return offset >= 0;
-        }
-
         var stride = width * 4;
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         var view = destination.View;
@@ -376,8 +344,42 @@ public static class Resample
     }
 
 
+/// <summary>The tap offset that carries the whole weight, or false when the table is not a single unit tap.</summary>
+/// <remarks>Shared with the streaming resize, which has to reproduce the nearest fast path byte for byte.</remarks>
+internal static bool TryNearestTap(WeightTable table, out int offset)
+{
+    offset = -1;
+    for (var x = 0; x < table.Starts.Length; x++)
+    {
+        var baseIndex = x * table.Taps;
+        var unit = -1;
+        for (var k = 0; k < table.Taps; k++)
+        {
+            var weight = table.Weights[baseIndex + k];
+            if (weight == 1f && unit < 0)
+            {
+                unit = k;
+                continue;
+            }
+
+            if (weight != 0f)
+                return false;
+        }
+
+        if (unit < 0)
+            return false;
+
+        if (offset < 0)
+            offset = unit;
+        else if (offset != unit)
+            return false;          // the unit tap moves between destination pixels
+    }
+
+    return offset >= 0;
+}
+
     /// <summary>One source row → one scratch row of premultiplied floats.</summary>
-    private static void HorizontalRow(float[] source, int sourceWidth, Span<float> destination,
+    internal static void HorizontalRow(float[] source, int sourceWidth, Span<float> destination,
         int destinationWidth, WeightTable weights)
     {
         var taps = weights.Taps;
@@ -420,7 +422,7 @@ public static class Resample
 
 
     /// <summary>One destination row: accumulate every tap in a register, write the row once.</summary>
-    private static void VerticalRow(float[] scratch, int ringRows, int sourceHeight, int width, int dy, WeightTable weights, float[] destination)
+    internal static void VerticalRow(float[] scratch, int ringRows, int sourceHeight, int width, int dy, WeightTable weights, float[] destination)
     {
         var stride = width * 4;
         var start = weights.Starts[dy];

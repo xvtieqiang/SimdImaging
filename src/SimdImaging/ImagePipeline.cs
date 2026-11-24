@@ -33,7 +33,7 @@ namespace SimdImaging;
 ///     .ToImage();
 /// </code>
 /// </example>
-public sealed class ImagePipeline
+public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 {
     private readonly Image _source;
     private readonly IPixelPool? _pool;
@@ -80,130 +80,40 @@ public sealed class ImagePipeline
     /// <summary>Mirrors top to bottom. Ends the current band pass.</summary>
     public ImagePipeline FlipVertical() => Reshape(v => Transforms.FlipVertical(v, _pool));
 
-    /// <summary>Brightness by <paramref name="shift"/>.</summary>
-    public ImagePipeline Brightness(float shift = 0f) => Step(PlanOps.Brightness(shift));
 
-    /// <summary>Contrast about the mid-point.</summary>
-    public ImagePipeline Contrast(float gain = 1f) => Step(PlanOps.Contrast(gain));
 
-    /// <summary>Gamma correction; above one darkens.</summary>
-    public ImagePipeline Gamma(float gamma) => Step(PlanOps.Gamma(gamma));
 
-    /// <summary>Inverts the colour channels.</summary>
-    public ImagePipeline Invert() => Step(PlanOps.Invert());
 
-    /// <summary>BT.601 luma.</summary>
-    public ImagePipeline Grayscale(bool bt709 = false) => Step(PlanOps.Grayscale(bt709));
 
-    /// <summary>Blends towards sepia.</summary>
-    public ImagePipeline Sepia(float blend = 1f) => Step(PlanOps.Sepia(blend));
 
-    /// <summary>Scales saturation about luma.</summary>
-    public ImagePipeline Saturation(float gain = 1f, bool bt709 = false) => Step(PlanOps.Saturation(gain, bt709));
 
-    /// <summary>Quantizes each channel to <paramref name="levels"/> steps.</summary>
-    public ImagePipeline Posterize(int levels) => Step(PlanOps.Posterize(levels));
 
-    /// <summary>Remaps the tone curve.</summary>
-    public ImagePipeline Levels(float inputBlack, float inputWhite, float gamma = 1f,
-        float outputBlack = 0f, float outputWhite = 1f) =>
-        Step(PlanOps.Levels(inputBlack, inputWhite, gamma, outputBlack, outputWhite));
 
-    /// <summary>Gaussian blur.</summary>
-    public ImagePipeline GaussianBlur(float sigma) => Step(PlanOps.GaussianBlur(sigma));
 
-    /// <summary>Box blur of the given radius.</summary>
-    public ImagePipeline BoxBlur(int radius) => Step(PlanOps.BoxBlur(radius));
 
-    /// <summary>Unsharp mask.</summary>
-    public ImagePipeline Sharpen(float gain = 0.5f, float sigma = 1f) => Step(PlanOps.Sharpen(gain, sigma));
 
-    /// <summary>3x3 emboss.</summary>
-    public ImagePipeline Emboss(float strength = 1f) => Step(PlanOps.Emboss(strength));
 
-    /// <summary>3x3 Sobel magnitude.</summary>
-    public ImagePipeline Sobel() => Step(PlanOps.Sobel());
 
-    /// <summary>3x3 median.</summary>
-    public ImagePipeline Median3x3() => Step(PlanOps.Median3x3());
 
-    /// <summary>Convolution with an arbitrary odd kernel and any border mode.</summary>
-    /// <param name="kernel">Weights, row-major, <c>(2r+1)²</c> of them.</param>
-    /// <param name="radius">Kernel radius.</param>
-    /// <param name="border">How to read outside the image.</param>
-    /// <param name="bias">Added after the sum, in sample units.</param>
-    public ImagePipeline Convolve(ReadOnlySpan<float> kernel, int radius,
-        BorderMode border = BorderMode.Clamp, float bias = 0f, float constantValue = 0f) =>
-        Step(PlanOps.Convolve(kernel, radius, border, bias, constantValue));
 
-    /// <summary>Warm or cool shift.</summary>
-    /// <param name="shift">Positive warms, negative cools.</param>
-    public ImagePipeline Temperature(float shift = 0f) => Step(PlanOps.Temperature(shift));
 
-    /// <summary>Tone curve through the given points.</summary>
-    /// <param name="points">Control points, at least two.</param>
-    public ImagePipeline Curves(params CurvePoint[] points) => Step(PlanOps.Curves(points));
 
-    /// <summary>Saturation weighted towards already-saturated colours.</summary>
-    /// <param name="lift">0 is unchanged, 0.5 is a clear lift, 1 is already strong. Leaves saturated colours alone.</param>
-    /// <param name="bt709">Use BT.709 luma instead of BT.601.</param>
-    public ImagePipeline Vibrance(float lift = 0f, bool bt709 = false) => Step(PlanOps.Vibrance(lift, bt709));
 
-    /// <summary>Seeded grain; whole-image because the generator advances per pixel.</summary>
-    /// <param name="amplitude">Amplitude in normalised units.</param>
-    /// <param name="kind">Uniform or Gaussian.</param>
-    /// <param name="seed">Sequence seed.</param>
-    public ImagePipeline Noise(float amplitude = 0.05f, NoiseKind kind = NoiseKind.Gaussian, uint seed = 1) =>
-        Step(PlanOps.Noise(amplitude, kind, seed));
 
-    /// <summary>Unsharp mask built from a negative Gaussian.</summary>
-    /// <param name="gain">Strength.</param>
-    /// <param name="sigma">Gaussian sigma.</param>
-    public ImagePipeline GaussianSharpen(float gain = 0.5f, float sigma = 1f) =>
-        Step(PlanOps.GaussianSharpen(gain, sigma));
 
-    /// <summary>Erosion or dilation with a square window of odd side <c>2r+1</c>.</summary>
-    /// <param name="radius">Window radius; 1 is 3×3.</param>
-    /// <param name="kind">Erode or dilate.</param>
-    public ImagePipeline Morph(int radius, Morphology kind = Morphology.Erode) =>
-        Step(PlanOps.Morph(radius, kind));
 
-    /// <summary>Applies a pre-built point chain table.</summary>
-    public ImagePipeline PointChain(PointChainTable table) => Step(PlanOps.PointChain(table));
 
-    /// <summary>
-    /// Several per-channel point transforms collapsed into one table and one pass (8-bit).
-    /// </summary>
-    /// <param name="transforms">The transforms, applied in order.</param>
-    public ImagePipeline PointChain(params PointOps.RowTransform[] transforms) =>
-        Step(PlanOps.PointChain(transforms));
 
-    /// <summary>Median with radius <paramref name="radius"/> (1 is 3×3, up to 8).</summary>
-    /// <param name="radius">Window radius.</param>
-    public ImagePipeline Median(int radius) => Step(PlanOps.Median(radius));
 
-    /// <summary>3x3 erosion.</summary>
-    public ImagePipeline Erode3x3() => Step(PlanOps.Erode3x3());
 
-    /// <summary>3x3 dilation.</summary>
-    public ImagePipeline Dilate3x3() => Step(PlanOps.Dilate3x3());
 
-    /// <summary>Erosion then dilation.</summary>
-    public ImagePipeline Open3x3() => Step(PlanOps.Open3x3());
 
-    /// <summary>Dilation then erosion.</summary>
-    public ImagePipeline Close3x3() => Step(PlanOps.Close3x3());
 
     /// <summary>Edge-preserving bilateral filter.</summary>
     public ImagePipeline Bilateral(int radius = 2, float sigmaSpace = 0f, float sigmaRange = 0.1f) =>
         Reshape(v => FilterOps.Bilateral(v, radius, sigmaSpace, sigmaRange, _pool));
 
-    /// <summary>Directional blur.</summary>
-    public ImagePipeline MotionBlur(int length, float angleDegrees = 0f) =>
-        Step(PlanOps.MotionBlur(length, angleDegrees));
 
-    /// <summary>Disc-shaped bokeh.</summary>
-    public ImagePipeline BokehBlur(int radius) => Step(PlanOps.BokehBlur(radius));
 
     /// <summary>Guided filter.</summary>
     public ImagePipeline GuidedFilter(int radius = 4, float epsilon = 1e-4f, int bandRows = 128) =>
@@ -216,42 +126,19 @@ public sealed class ImagePipeline
         return Reshape(v => GuidedFilterOps.GuidedFilter(v, guide[0].Pixels.View, radius, epsilon, bandRows, _pool));
     }
 
-    /// <summary>Non-local means.</summary>
-    public ImagePipeline NonLocalMeans(int searchRadius, int patchRadius = 1, float h = 0.1f) =>
-        Step(PlanOps.NonLocalMeans(searchRadius, patchRadius, h));
 
-    /// <summary>Oil paint.</summary>
-    public ImagePipeline OilPaint(int radius, int levels = 20) => Step(PlanOps.OilPaint(radius, levels));
 
-    /// <summary>Vignette. Runs whole-image; costs one intermediate.</summary>
-    public ImagePipeline Vignette(float radius = 0.75f, float darkening = 1f) =>
-        Step(PlanOps.Vignette(radius, darkening));
 
-    /// <summary>CLAHE. Runs whole-image; costs one intermediate.</summary>
-    public ImagePipeline Clahe(int tilesX = 8, int tilesY = 8, float clipLimit = 3f) =>
-        Step(PlanOps.Clahe(tilesX, tilesY, clipLimit));
 
     /// <summary>Local Laplacian. Runs whole-image; costs one intermediate.</summary>
     public ImagePipeline LocalLaplacian(int levels = 5, int samples = 32, float alpha = 0.25f, float beta = 1f,
         float sigmaR = 0.15f) =>
         Reshape(v => LocalLaplacianOps.LocalLaplacian(v, levels, samples, alpha, beta, sigmaR, _pool));
 
-    /// <summary>Per-channel histogram stretch. Runs whole-image.</summary>
-    public ImagePipeline Normalize() => Step(PlanOps.Normalize());
 
-    /// <summary>Adaptive threshold. Runs whole-image.</summary>
-    public ImagePipeline AdaptiveThreshold(int radius = 8, float offset = 0.05f) =>
-        Step(PlanOps.AdaptiveThreshold(radius, offset));
 
-    /// <summary>Block mosaic.</summary>
-    public ImagePipeline Pixelate(int blockSize) => Step(PlanOps.Pixelate(blockSize));
 
-    /// <summary>Removes haze. Runs whole-image; costs two single-channel planes.</summary>
-    public ImagePipeline Dehaze(int patchRadius = 7, float omega = 0.95f, float tMin = 0.1f, int refineRadius = 20) =>
-        Step(PlanOps.Dehaze(patchRadius, omega, tMin, refineRadius));
 
-    /// <summary>Histogram equalisation.</summary>
-    public ImagePipeline Equalize() => Step(PlanOps.Equalize());
 
     /// <summary>
     /// Runs the chain and returns a new image. The source is not modified; the result belongs to the caller.
@@ -290,7 +177,7 @@ public sealed class ImagePipeline
     /// <summary>Whether any step has been recorded or run; false means the pipeline is the source.</summary>
     internal bool HasWork => _current is not null || _pending.Count > 0;
 
-    private ImagePipeline Step(ImageOp op)
+    protected override ImagePipeline Step(ImageOp op)
     {
         ObjectDisposedException.ThrowIf(_finished, this);
         _pending.Add(op);

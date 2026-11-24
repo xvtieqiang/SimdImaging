@@ -7,10 +7,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The region tests open TiffRegionSource directly to prove segment assembly without the executor around it. -->
+    <InternalsVisibleTo Include="SimdImaging.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\SimdImaging.Abstractions\SimdImaging.Abstractions.csproj" />
     <ProjectReference Include="..\SimdImaging.Processing\SimdImaging.Processing.csproj" />
-    <!-- Codec layer. Pinned to 2.0.x; the version lives in Directory.Packages.props. -->
+    <!-- Codec layer. Pinned to 2.1.x; the versions live in Directory.Packages.props. Tiff is explicit: the
+         region source uses TiffReader/TiffPageLayout, and compile-time use should not rest on a transitive asset. -->
     <PackageReference Include="Sdcb.SimdCodecs" />
+    <PackageReference Include="Sdcb.SimdCodecs.Tiff" />
   </ItemGroup>
 
 </Project>

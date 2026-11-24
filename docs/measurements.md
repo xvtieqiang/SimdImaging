@@ -617,3 +617,107 @@ CopyRows(result.View, 0, destination, ...);          // 再整块拷进目标
 建表 2.3 ms，每次委托调用）是同一判断的不同数值，差别来自**建表成本差 9 倍**，不是口径不同。
 
 **Sharpen 对 ImageSharp（1080p）**：改前 21.8 ms（0.56×），改后 **12.5 ms（1.01×）**，对手 12.6。
+
+## 区域读取的读放大量（M17，2026-11-25）
+
+协议：`TiffFixture` 同款输入——512 宽、RGB8、`RowsPerStrip=32`、确定性高熵图案，经 codec 的 TIFF 编码器写出
+（deflate）。用 `Image.ProcessRegion(stream, emptyPlan, rect)` 读 16×16 区域，`CountingStream` 统计从流里真正
+读出的字节（`Read` 累计，不看 seek）。
+
+| 图像 | 文件字节 | 区域读字节 | 占文件 |
+|---|---|---|---|
+| 512×512 | 43 766 | 3 056 | 7.0% |
+| 512×2048 | 174 450 | 3 440 | 2.0% |
+
+两行的读量差 12%，来自目录（IFD + 段偏移数组）随条带数增长；**与像素总量无关**。区域本身落在一条 32 行条带内，
+所以 3 KB ≈ 条带 49 152 字节的 deflate 后大小 + 目录。整图 `Load` 会把 43.8 KB / 174.5 KB 全部读入托管堆。
+
+复跑：`dotnet test --filter RegionEndToEndTests` 断言 `shortFile < 786 432/8` 且两次读数相差 ≤25%；
+上表的绝对值来自同参数的临时探针（未入库）。
+
+## 区域执行的带高阈值（M17，2026-11-25）
+
+同一批像素（512×512，3 步：Brightness → GaussianBlur(1) → Contrast），只改 `BandRows`；9 次取中位。
+整图执行同一 512² 图像作基线 **10.09 ms**。
+
+| `BandRows` | 区域执行 |
+|---|---|
+| 默认（512 宽 → 64） | 36.82 ms（首轮，含预热噪声；显式 64 行 14.79 ms） |
+| 64 | 14.79 ms |
+| 96 | 14.80 ms |
+| 128 | 12.35 ms |
+| 192 | **3.05 ms** |
+| 256 | **3.93 ms** |
+| 512（单带） | **3.84 ms** |
+
+拐点在 128→192：`RowParallel.For` 按 32 行/worker 切分，128 行只够 4 个 worker，且窗口像素数刚过
+`MinWorkPixels`。修法是 `SequentialBands`（≥ degree×32 行、≥ 64 K 像素、≤ 4 MiB/窗口）。修正后：
+512² 区域 9.7 ms（同像素整图 8.1 ms），2048² 区域 59.6 ms（整图 73.1 ms）。
+
+## `ProcessTo` 的读放大（2026-11-25）
+
+`ProcessTo(stream → stream, Invert)`，`CountingStream` 统计 `Read` 字节。
+
+| 输入 | 文件字节 | 实际读出 | 倍数 |
+|---|---|---|---|
+| PNG 512×2048 | 57 383 | 122 958 | 2.14× |
+| JPEG 512×2048 | 806 229 | 1 616 554 | 2.01× |
+| TIFF 512×2048 | 174 450 | 593 688 | 3.40× |
+
+成因是 `ResolveFormat` 的 `ImageDecoder.Open(stream)`：单看它就吃掉了整份文件（JPEG 202 007 → 206 103；
+TIFF 71 662 → 147 420；PNG 14 417 → 8 192，`Metadata` 再补到 22 609），随后行读器再读一遍。
+
+**2026-11-25 修复后**（同一批文件，`ProcessOptions` 默认 / `PreserveMetadata = true`）：
+
+| 输入 | 文件字节 | 默认读出 | 默认倍数 | 保留元数据 | 倍数 | `MetadataCarried` |
+|---|---|---|---|---|---|---|
+| TIFF | 174 450 | 245 510 | **1.41×** | 593 688 | 3.40× | false / true |
+| PNG | 57 383 | 61 479 | **1.07×** | 122 958 | 2.14× | false / true |
+| JPEG | 806 229 | 810 325 | **1.01×** | 1 616 554 | 2.01× | false / true |
+
+TIFF 的 1.41× 来自 codec 行读器自身的预读（`OpenRowReader` 约 66 KB + 按条带读），不是本库的额外扫描。
+
+## 行流式缩放（M18 第一切片，2026-11-25）
+
+`Image.ResizeTo`（`StreamingResize`）对 `Load → Resize`，同机同进程交替执行：
+
+| 输入 | 流式 | 整图 | 比值 |
+|---|---|---|---|
+| 7680×4320 → 1920×1080，Bicubic，PNG | 390 ms | 426 ms | **0.92×** |
+| 7680×4320 blur+contrast → 缩放 → sharpen | 835 ms | 791 ms | 1.06× |
+
+输出文件逐字节相同。整图那条路的累计分配 131.3 MiB（一张 8K RGBA8 = 126.6 MiB 本身）；流式的第二次调用
+只新分配 0.2 MiB（ring/暂存由 `FloatScratch`/`ArrayPool` 复用）。**这不是峰值**：峰值按公式估为
+ring `408×1920×16B` ≈ 12.5 MiB + 暂存 `64×30KB` ≈ 2 MiB + 输出带 0.8 MiB ≈ **15 MiB**，
+`An8KDownscale_FitsTheDefaultBudget` 证明默认 24 MiB 预算下不拒绝。
+
+等价性：4 尺寸（降/升/恒等/奇数）× 2 深度（Rgba8/Rgba16）× 5 滤波器（Nearest/Bilinear/Bicubic/
+Lanczos3/Box）= 40 组，全部与 `Resample.Resize` 逐字节相同；带计划前缀（blur+contrast）的链与
+`Load → Apply → Resize` 逐字节相同（含 8K 的 PNG 文件比对）。
+
+注：本机在长时间会话后整体变慢（同一路径 383→485 ms 的波动见过），比值比绝对值稳定，上表复测两轮取值。
+
+## 性能回退门禁：2026-11-25 的四次运行
+
+M16–M18 改过带高规则（顺序出带改 `SequentialBands`）、文件流式的头部探测、以及整条行管线（拉式）。
+在 `windows-10.0.19045-x64-16-m16` 基线上连跑四次（同一二进制，间隔数分钟）：
+
+| 次 | 结果 | 最差项 |
+|---|---|---|
+| 1 | FAIL | `quantize 4K -> 64 (octree)` +30.6%（阈值 30.0%） |
+| 2 | PASS | `gainmap resize 1080p->720p` +19.6% |
+| 3 | FAIL | `stroke 4K ellipse path (aa, w=6)` +25.9%（阈值 25.0%） |
+| 4 | PASS | `chroma 4:2:0 4K` +24.4% |
+
+四次里两次失败、失败项各不相同，且都不在这一轮改过的路径上（`quantize` 是整图 `Global` 步、`stroke` 是绘制）。
+结论：这台机器今晚的噪声地板就在阈值附近，**门禁仍然有效但会偶发误报**。M15 的记录里同机 4 小时漂移
+1.2–1.8×，与此一致。
+
+**重录尝试与工具缺口**：按「当前树重录一份基线」执行时发现 `BaselineJson.Write` **恒写
+`"thresholdPercent": null`**——录出来的基线一条都不设闸，`check-baseline.sh` 还会打印
+`PASS ... (0 enforced)`。这正是仓库最反对的「绿的 gate 什么都没验」。处理：
+
+1. 已给 `check-baseline.sh` 加守卫：可比基线存在但一条都没设闸时 **FAIL**，不再假绿。
+2. 暂不替换 m16 基线：阈值需要按「五次运行归一化后的偏差 `max(20, ceil(3×S))`」手工推导，仓库里没有录制脚本；
+   在噪声地板附近录出来的阈值要么过宽（掩盖回归）要么过窄（继续误报）。
+3. 待办：写一个录制脚本（N 次运行 → 归一化中位值 + 阈值），再用它产出 `-m18.json` 替换 `-m16.json`。
