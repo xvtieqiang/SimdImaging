@@ -1032,6 +1032,10 @@
   SimdImaging.Processing.OpKernel.BeginInvoke(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.PixelView destination, Sdcb.SimdCodecs.Abstractions.PixelRect destinationRect, Sdcb.SimdCodecs.Abstractions.PixelRect sourceRect, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
   SimdImaging.Processing.OpKernel.EndInvoke(System.IAsyncResult result) -> System.Void
   SimdImaging.Processing.OpKernel.Invoke(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.PixelView destination, Sdcb.SimdCodecs.Abstractions.PixelRect destinationRect, Sdcb.SimdCodecs.Abstractions.PixelRect sourceRect) -> System.Void
+  SimdImaging.Processing.OpKernel2.#ctor(System.Object object, System.IntPtr method)
+  SimdImaging.Processing.OpKernel2.BeginInvoke(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.PixelView second, SimdImaging.Abstractions.PixelView destination, Sdcb.SimdCodecs.Abstractions.PixelRect destinationRect, Sdcb.SimdCodecs.Abstractions.PixelRect sourceRect, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
+  SimdImaging.Processing.OpKernel2.EndInvoke(System.IAsyncResult result) -> System.Void
+  SimdImaging.Processing.OpKernel2.Invoke(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.PixelView second, SimdImaging.Abstractions.PixelView destination, Sdcb.SimdCodecs.Abstractions.PixelRect destinationRect, Sdcb.SimdCodecs.Abstractions.PixelRect sourceRect) -> System.Void
   SimdImaging.Processing.PaletteQuantizer.Apply(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.PaletteQuantizer.Build(SimdImaging.Abstractions.PixelView source, System.Int32 maxColors) -> SimdImaging.Abstractions.ColorPalette
   SimdImaging.Processing.PaletteQuantizer.Dither(SimdImaging.Abstractions.PixelView source, SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Processing.DitherKernel kernel, System.Single maxError, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
@@ -1100,6 +1104,7 @@
   SimdImaging.Processing.PlanOps.Bilateral(System.Int32 radius, System.Single sigmaSpace, System.Single sigmaRange) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BlackWhite(System.Single threshold, System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Blend(SimdImaging.Abstractions.PixelView overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.BlendMode mode) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Blend(System.Int32 x, System.Int32 y, SimdImaging.Processing.BlendMode mode) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BokehBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BoxBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Brightness(System.Single amount) -> SimdImaging.Processing.ImageOp
@@ -1112,6 +1117,7 @@
   SimdImaging.Processing.PlanOps.ColorBlindness(SimdImaging.Processing.ColorVisionDeficiency kind, System.Single severity, System.Boolean correct) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.ColorMatrix(System.ReadOnlySpan<System.Single> matrix) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Composite(SimdImaging.Abstractions.PixelView overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.PorterDuff mode) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Composite(System.Int32 x, System.Int32 y, SimdImaging.Processing.PorterDuff mode) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Contrast(System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.ConvertColorSpace(SimdImaging.Processing.ColorSpace target, SimdImaging.Processing.YCbCrStandard ycbcr, System.Boolean limitedRange, SimdImaging.Processing.WhitePoint white, SimdImaging.Processing.ChromaticAdaptation adaptation) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Convolve(System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue) -> SimdImaging.Processing.ImageOp
@@ -1123,6 +1129,7 @@
   SimdImaging.Processing.PlanOps.DistanceTransform(System.Single threshold) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dither(System.Int32 bits, SimdImaging.Processing.DitherKernel kernel) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.DitherToPalette(SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Processing.DitherKernel kernel, System.Single maxError) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.DrawImage(Sdcb.SimdCodecs.Abstractions.PixelRect destination, System.Single opacity) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.DrawImage(SimdImaging.Abstractions.PixelView image, Sdcb.SimdCodecs.Abstractions.PixelRect destination, System.Single opacity) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Emboss(System.Single strength) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Equalize() -> SimdImaging.Processing.ImageOp
@@ -1132,6 +1139,7 @@
   SimdImaging.Processing.PlanOps.GaussianSharpen(System.Single amount, System.Single sigma) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Glow(System.Single threshold, System.Single sigma, System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Grayscale(System.Boolean bt709) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.GuidedBy(System.Int32 radius, System.Single epsilon, System.Int32 bandRows) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.GuidedFilter(SimdImaging.Abstractions.PixelView guide, System.Int32 radius, System.Single epsilon, System.Int32 bandRows) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.HueRotate(System.Single degrees) -> SimdImaging.Processing.ImageOp
@@ -1257,6 +1265,7 @@
   SimdImaging.Processing.PorterDuff.Xor = 11
   SimdImaging.Processing.ProcessingPlan.#ctor()
   SimdImaging.Processing.ProcessingPlan.Add(SimdImaging.Processing.ImageOp op) -> SimdImaging.Processing.ProcessingPlan
+  SimdImaging.Processing.ProcessingPlan.Add(SimdImaging.Processing.ImageOp op, SimdImaging.Abstractions.PixelView second) -> SimdImaging.Processing.ProcessingPlan
   SimdImaging.Processing.ProcessingPlan.AddPointLut(System.String name, System.ReadOnlySpan<System.Byte> rgbaTable) -> SimdImaging.Processing.ProcessingPlan
   SimdImaging.Processing.ProcessingPlan.BandRows : System.Int32 { get; set; }
   SimdImaging.Processing.ProcessingPlan.CanExecuteRegion() -> SimdImaging.Processing.RegionRefusal
@@ -1495,6 +1504,7 @@ delegate SimdImaging.NormalizedWarp
 delegate SimdImaging.Processing.Geometry.PixelWarp
 delegate SimdImaging.Processing.IntoKernel
 delegate SimdImaging.Processing.OpKernel
+delegate SimdImaging.Processing.OpKernel2
 delegate SimdImaging.Processing.PlanObserver
 delegate SimdImaging.Processing.PointOps.RowTransform
 enum SimdImaging.Abstractions.AlphaMode

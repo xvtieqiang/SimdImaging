@@ -55,11 +55,13 @@ internal sealed class KernelImplementations
 {
     internal KernelImplementations(OpKernel planKernel,
         Func<PixelView, WorkingBuffer>? wholeImage = null,
-        IntoKernel? into = null)
+        IntoKernel? into = null,
+        OpKernel2? secondKernel = null)
     {
         PlanKernel = planKernel ?? throw new ArgumentNullException(nameof(planKernel));
         WholeImage = wholeImage;
         Into = into;
+        SecondKernel = secondKernel;
     }
 
     /// <summary>The band kernel every plan step uses.</summary>
@@ -70,4 +72,7 @@ internal sealed class KernelImplementations
 
     /// <summary>"Write these rows into that destination", when the operator has that form.</summary>
     internal IntoKernel? Into { get; }
+
+    /// <summary>The second-input form, when the operator takes its overlay from the plan rather than a closure.</summary>
+    internal OpKernel2? SecondKernel { get; }
 }

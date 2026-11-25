@@ -1264,12 +1264,11 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 
 **P3 已完成**：所有窗口算子都在计划、格式段或 Composite 步骤里，`AutoOrient` 也以 GeometryStep 进入 recipe
 （方向元数据在 pipeline 包装结果时复位）；反卷积的 halo 修正为 `2 × PSF 半径 × iterations`。
-- **多输入（Frame 版已落地，通用模型仍缺）**：`PlanOps.Composite` / `PlanOps.Blend` 以 `OpCategory.Composite`
-  和两个端口进入计划，Frame 由内核捕获的 overlay 视图执行；`ImagePipeline.Composite/Blend` 已从 barrier 迁成步骤，
-  overlay 必须活到 `ToImage`（xmldoc 写明），格式在调用时校验。Stream / Region 仍以 `CompositeStep` 拒绝。
-  未做的部分：`PlanStep` / `ProcessingPlan` 没有真正的第二输入字段（overlay 是闭包捕获的 `PixelView`，没有逐端口
-  footprint、没有所有权与生命周期托管），`DrawImage` / `Watermark` / `ApplyGainMap` 仍是 barrier。下一步要打开的
-  是通用多输入执行（第二视图 + 每端口区域 + 生命周期），不是再加一个捕获式算子。
+- **多输入（Frame 版已落地，通用模型已打开）**：`PlanStep.Secondary` 记录第二视图，`ProcessingPlan.Add(op, PixelView)`
+  注入并由执行器经 `OpKernel2` 传给内核；三条 Frame 分派统一走 `PlanStep.Invoke`。`ImagePipeline.Composite/Blend/
+  DrawImage/Watermark` 已切到注入式，旧闭包重载保留并逐字节对照（三种格式）。编译器按契约的 `InputPort` 推导第二
+  端口区域；视图未知时保守记整图。仍未做：`ApplyGainMap`（格式边界）仍闭包；Stream / Region / Tile 继续拒绝 `CompositeStep`；
+  视图生命周期仍由调用方保证，库不做所有权转移或自动存活校验。
 - **统一预算（P4 部分完成）**：编译期上界总门 + `WorkspaceManager` 预留账户（计划/流窗口/resize ring/tile/编码带），
   `ProcessReport` 带预测与实测峰值，并有「预测 ≥ 实测」的对账测试（流式与物化各一）。仍缺：spool/物化缓存项、
   M2–M4 出口条件、FloatScratch/编码器内部缓冲的完整计量。

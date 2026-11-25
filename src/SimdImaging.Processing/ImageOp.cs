@@ -36,6 +36,12 @@ public sealed class ImageOp : IImageOp
             throw new ArgumentException(
                 $"The operator '{contract.Name}' changes the working format to {contract.Output.Format} but has no " +
                 "whole-image kernel.", nameof(kernels));
+
+        // A second-input kernel needs a declared port to describe what it reads; the region derivation and the plan
+        // explanation both read the port, so an undeclared second input would be an unexplained read.
+        if (kernels.SecondKernel is not null && contract.Inputs.Count < 2)
+            throw new ArgumentException(
+                $"The operator '{contract.Name}' has a second-input kernel but declares one input port.", nameof(kernels));
     }
 
     internal OperatorContract Contract { get; }

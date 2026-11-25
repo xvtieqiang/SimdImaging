@@ -538,7 +538,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 if (resize is not null)
                     throw new NotSupportedException(
                         "A region run supports operator steps before the resize only; run the rest on the returned image.");
-                steps.Add(new PlanStep(op.Operator, op.Lut));
+                steps.Add(new PlanStep(op.Operator, op.Lut, op.Second));
                 continue;
             }
 

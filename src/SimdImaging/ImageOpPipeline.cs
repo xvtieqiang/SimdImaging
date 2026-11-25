@@ -15,6 +15,11 @@ public abstract class ImageOpPipeline<TSelf> where TSelf : ImageOpPipeline<TSelf
     /// <summary>Appends one plan step and returns this pipeline.</summary>
     protected abstract TSelf Step(ImageOp op);
 
+    /// <summary>Appends one plan step with its injected second input. Only the in-memory pipeline carries one today;
+    /// the file-side transcode has no overlay surface, so the default refuses instead of dropping the view.</summary>
+    protected virtual TSelf Step(ImageOp op, PixelView second) =>
+        throw new NotSupportedException($"{GetType().Name} cannot carry a second input.");
+
     /// <summary>Brightness by <paramref name="shift"/>.</summary>
     public TSelf Brightness(float shift = 0f) => Step(PlanOps.Brightness(shift));
 

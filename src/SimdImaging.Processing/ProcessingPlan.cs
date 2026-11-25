@@ -24,6 +24,18 @@ public delegate void OpKernel(PixelView source, PixelView destination, PixelRect
     PixelRect sourceRect);
 
 /// <summary>
+/// A step kernel that reads a second input as well: the overlay view the plan carries on the step, not one captured
+/// by the closure. The executor supplies it, so the value that reaches the kernel is the one the plan recorded.
+/// </summary>
+/// <param name="source">The image being transformed.</param>
+/// <param name="second">The step's second input, as recorded by <see cref="ProcessingPlan.Add(ImageOp, PixelView)"/>.</param>
+/// <param name="destination">The buffer this call fills.</param>
+/// <param name="destinationRect">The rectangle this call must fill.</param>
+/// <param name="sourceRect">The part of <paramref name="source"/> that rectangle may read.</param>
+public delegate void OpKernel2(PixelView source, PixelView second, PixelView destination, PixelRect destinationRect,
+    PixelRect sourceRect);
+
+/// <summary>
 /// Writes <paramref name="rows"/> rows into <paramref name="destination"/> starting at
 /// <paramref name="destinationY"/>, reading from a window whose first produced row is
 /// <paramref name="sourceRowOffset"/> rows into it.
@@ -43,15 +55,43 @@ public delegate void IntoKernel(PixelView sourceWindow, PixelView destination, i
 /// </remarks>
 public readonly record struct PlanStep
 {
-    internal PlanStep(ImageOp definition, byte[]? lut = null)
+    internal PlanStep(ImageOp definition, byte[]? lut = null, PixelView? secondary = null)
     {
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
         Kernel = definition.Kernels.PlanKernel;
         Lut = lut;
+        Secondary = secondary;
     }
 
     /// <summary>The operator this step was compiled from.</summary>
     internal ImageOp Definition { get; }
+
+    /// <summary>
+    /// The step's second input, when it has one. The view is owned by the caller and must outlive the execution;
+    /// recording it on the step is what lets the executor supply it instead of a closure capturing it.
+    /// </summary>
+    internal PixelView? Secondary { get; init; }
+
+    /// <summary>The second-input kernel, when the operator was built for injection; null for a closure-captured
+    /// composite, which stays supported for callers that used the older <c>PlanOps</c> overload.</summary>
+    internal OpKernel2? SecondKernel => Definition.Kernels.SecondKernel;
+
+    /// <summary>Dispatches to the second-input kernel when the step has one, and checks that the view is present.</summary>
+    internal void Invoke(PixelView source, PixelView destination, PixelRect destinationRect, PixelRect sourceRect)
+    {
+        if (SecondKernel is not { } kernel)
+        {
+            Kernel(source, destination, destinationRect, sourceRect);
+            return;
+        }
+
+        if (Secondary is not { } second)
+            throw new InvalidOperationException(
+                $"The step '{Name}' needs its second input, which was not recorded on the step. Add it with " +
+                "ProcessingPlan.Add(operator, second) instead of Add(operator).");
+
+        kernel(source, second, destination, destinationRect, sourceRect);
+    }
 
     /// <summary>Stable name, used in diagnostics.</summary>
     public string Name => Definition.Name;
@@ -280,6 +320,39 @@ public sealed class ProcessingPlan
     public ProcessingPlan Add(ImageOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
+        if (op.Kernels.SecondKernel is not null)
+            throw new InvalidOperationException(
+                $"The step '{op.Name}' needs its second input injected; use Add(operator, second) so the plan " +
+                "records the view.");
+        return AddCore(op, secondary: null);
+    }
+
+    /// <summary>
+    /// Appends an operator whose second input is supplied here and recorded on the step. This is the injected
+    /// counterpart of the closure-captured <c>PlanOps.Composite(overlay, …)</c> overload: the executor reads the
+    /// view from the plan, the compiler derives the port's regions from the same contract, and the caller keeps
+    /// ownership — the view must stay valid until the plan finishes.
+    /// </summary>
+    /// <param name="op">The operator; it must declare a second input and an injectable kernel.</param>
+    /// <param name="second">The second input, in the format its port accepts.</param>
+    /// <exception cref="ArgumentException">The operator has no injectable second input, or the format is not accepted.</exception>
+    public ProcessingPlan Add(ImageOp op, PixelView second)
+    {
+        ArgumentNullException.ThrowIfNull(op);
+        if (op.Contract.Inputs.Count < 2 || op.Kernels.SecondKernel is null)
+            throw new ArgumentException(
+                $"The operator '{op.Name}' does not declare an injectable second input.", nameof(op));
+        if (second.Width <= 0 || second.Height <= 0)
+            throw new ArgumentException("The second input is empty.", nameof(second));
+        if (!Supports(op.Contract.Inputs[1].Formats, second.Format))
+            throw new ArgumentException(
+                $"The second input is {second.Format}, which '{op.Name}' does not accept on that port.", nameof(second));
+
+        return AddCore(op, second);
+    }
+
+    private ProcessingPlan AddCore(ImageOp op, PixelView? secondary)
+    {
         if (op.Category == OpCategory.Geometric)
             throw new NotSupportedException(
                 "A geometric step changes the image size, which a same-size plan cannot represent; run it outside the plan.");
@@ -291,10 +364,18 @@ public sealed class ProcessingPlan
             throw new InvalidOperationException(
                 "A resize ends the plan; add the steps before processing the size change, or run the resize outside.");
 
-        _steps.Add(new PlanStep(op));
+        _steps.Add(new PlanStep(op, secondary: secondary));
         _version++;
         return this;
     }
+
+    private static bool Supports(WorkingFormatMask mask, WorkingFormat format) => mask.HasFlag(format switch
+    {
+        WorkingFormat.Rgba8 => WorkingFormatMask.Rgba8,
+        WorkingFormat.Rgba16 => WorkingFormatMask.Rgba16,
+        WorkingFormat.Rgba32F => WorkingFormatMask.Rgba32F,
+        _ => WorkingFormatMask.None,
+    });
 
     /// <summary>Appends a step that also declares its own scratch. Tests and the benchmark harness use this to
     /// build plans whose operators are not in <see cref="PlanOps"/>.</summary>
@@ -523,7 +604,7 @@ public sealed class ProcessingPlan
 
                     if (step.Category is OpCategory.Global or OpCategory.Composite)
                     {
-                        step.Kernel(current, destination.View, whole, whole);
+                        step.Invoke(current, destination.View, whole, whole);
                     }
                     else
                     {
@@ -542,7 +623,7 @@ public sealed class ProcessingPlan
                             {
                                 var top = b * bandRows;
                                 var band = new PixelRect(0, top, width, Math.Min(bandRows, height - top));
-                                step.Kernel(current, destination.View, band,
+                                step.Invoke(current, destination.View, band,
                                     MapSource(band, step.HaloX, step.HaloY, width, height));
                             }
                         }
@@ -561,7 +642,7 @@ public sealed class ProcessingPlan
                                 {
                                     var top = b * stepwiseRows;
                                     var band = new PixelRect(0, top, width, Math.Min(stepwiseRows, height - top));
-                                    step.Kernel(current, destination.View, band,
+                                    step.Invoke(current, destination.View, band,
                                         MapSource(band, step.HaloX, step.HaloY, width, height));
                                 }
                             }, options.MaxDegreeOfParallelism, cancellation);

@@ -247,6 +247,60 @@ internal static class PlanSteps
         };
     }
 
+    /// <summary>The injected form of <see cref="Composite"/>: the overlay arrives as the kernel's second input.</summary>
+    public static OpKernel2 CompositeInto(int x, int y, PorterDuff mode) =>
+        (source, second, destination, _, _) =>
+        {
+            CopyRows(source, 0, destination, 0, source.Height);
+            AlphaOps.CompositeInto(destination, second, x, y, mode, destination);
+        };
+
+    /// <summary>The injected form of <see cref="BlendOverlay"/>.</summary>
+    public static OpKernel2 BlendInto(int x, int y, BlendMode mode) =>
+        (source, second, destination, _, _) =>
+        {
+            CopyRows(source, 0, destination, 0, source.Height);
+            Blend.ApplyInto(destination, second, x, y, mode, destination);
+        };
+
+    /// <summary>The injected form of <see cref="DrawImage"/>.</summary>
+    public static OpKernel2 DrawImageInto(PixelRect placement, float opacity) =>
+        (source, second, destination, _, _) =>
+        {
+            CopyRows(source, 0, destination, 0, source.Height);
+            using var scaled = Canvas.Resize(second, placement.Width, placement.Height, Resampler.Bilinear,
+                ResizeMode.Stretch, Anchor.Centre, default);
+            if (opacity >= 1f)
+            {
+                AlphaOps.CompositeInto(destination, scaled.View, placement.X, placement.Y, PorterDuff.SourceOver,
+                    destination);
+                return;
+            }
+
+            using var faded = PointOps.Opacity(scaled.View, opacity);
+            AlphaOps.CompositeInto(destination, faded.View, placement.X, placement.Y, PorterDuff.SourceOver,
+                destination);
+        };
+
+    /// <summary>The injected form of the guided filter: the guide arrives as the kernel's second input.</summary>
+    public static OpKernel2 GuidedBy(int radius, float epsilon, int bandRows) =>
+        (source, guide, destination, destinationRect, sourceRect) =>
+        {
+            var window = source.Slice(sourceRect);
+            var offsetY = destinationRect.Y - sourceRect.Y;
+
+            RowParallel.EnterNested();
+            try
+            {
+                using var result = GuidedFilterOps.GuidedFilter(window, guide, radius, epsilon, bandRows);
+                CopyRows(result.View, offsetY, destination, destinationRect.Y, destinationRect.Height);
+            }
+            finally
+            {
+                RowParallel.ExitNested();
+            }
+        };
+
     private static void CopyRows(PixelView from, int fromRow, PixelView to, int toRow, int rows)
     {
         for (var y = 0; y < rows; y++)

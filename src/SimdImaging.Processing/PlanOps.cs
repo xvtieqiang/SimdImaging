@@ -370,7 +370,7 @@ public static class PlanOps
     }
 
     /// <summary>W3C blend of <paramref name="overlay"/> at (<paramref name="x"/>, <paramref name="y"/>); same
-    /// lifetime rule as <see cref="Composite"/>.</summary>
+    /// lifetime rule as <see cref="Composite(PixelView, int, int, PorterDuff)"/>.</summary>
     public static ImageOp Blend(PixelView overlay, int x, int y, BlendMode mode)
     {
         var formats = FormatMask(overlay.Format);
@@ -382,6 +382,38 @@ public static class PlanOps
             input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true,
                 new FixedFootprint(new PixelRect(x, y, overlay.Width, overlay.Height))));
     }
+
+    /// <summary>
+    /// Porter-Duff composition whose overlay is supplied to <see cref="ProcessingPlan.Add(ImageOp, PixelView)"/>
+    /// instead of captured here. Its second port reports the whole overlay as its read region: the exact size is not
+    /// known until the plan records the view, and over-reading the port is the safe direction.
+    /// </summary>
+    public static ImageOp Composite(int x, int y, PorterDuff mode = PorterDuff.SourceOver) =>
+        Create(nameof(AlphaOps.Composite), OpCategory.Composite, WholeSourceFootprint.Instance,
+            WorkspaceModel.Of((width, _, _, _) => 2L * width * 4 * sizeof(float), WorkspaceScope.WholeImage),
+            new KernelImplementations(
+                (_, _, _, _) => throw new InvalidOperationException(
+                    $"'{nameof(AlphaOps.Composite)}' needs its overlay injected; add it with " +
+                    "ProcessingPlan.Add(operator, second)."),
+                secondKernel: PlanSteps.CompositeInto(x, y, mode)),
+            WorkingFormatMask.All, ExecutionRequirements.WholeImage,
+            input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
+            input2: new InputPort("overlay", PortRole.Overlay, WorkingFormatMask.All, Required: true,
+                WholeSourceFootprint.Instance));
+
+    /// <summary>W3C blend whose overlay is supplied at <c>Add</c> time; same port rule as the injected composite.</summary>
+    public static ImageOp Blend(int x, int y, BlendMode mode) =>
+        Create(nameof(Processing.Blend), OpCategory.Composite, WholeSourceFootprint.Instance,
+            WorkspaceModel.Of((width, _, _, _) => 2L * width * 4 * sizeof(float), WorkspaceScope.WholeImage),
+            new KernelImplementations(
+                (_, _, _, _) => throw new InvalidOperationException(
+                    $"'{nameof(Processing.Blend)}' needs its overlay injected; add it with " +
+                    "ProcessingPlan.Add(operator, second)."),
+                secondKernel: PlanSteps.BlendInto(x, y, mode)),
+            WorkingFormatMask.All, ExecutionRequirements.WholeImage,
+            input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
+            input2: new InputPort("overlay", PortRole.Overlay, WorkingFormatMask.All, Required: true,
+                WholeSourceFootprint.Instance));
 
     /// <summary>
     /// Richardson-Lucy deconvolution of a Gaussian blur. The band halo is <c>2 × ceil(3σ) × iterations</c>: each
@@ -404,7 +436,7 @@ public static class PlanOps
 
     /// <summary>
     /// Draws another image into a destination rectangle, resizing it to fit and fading it by
-    /// <paramref name="opacity"/>. Like <see cref="Composite"/>, the overlay is read when the step runs.
+    /// <paramref name="opacity"/>. Like <see cref="Composite(PixelView, int, int, PorterDuff)"/>, the overlay is read when the step runs.
     /// </summary>
     public static ImageOp DrawImage(PixelView image, PixelRect destination, float opacity = 1f)
     {
@@ -420,6 +452,23 @@ public static class PlanOps
             input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true,
                 new FixedFootprint(new PixelRect(0, 0, image.Width, image.Height))));
     }
+
+    /// <summary>Draws an injected image at <paramref name="destination"/>; the overlay arrives through
+    /// <see cref="ProcessingPlan.Add(ImageOp, PixelView)"/>.</summary>
+    public static ImageOp DrawImage(PixelRect destination, float opacity = 1f) =>
+        Create("draw-image", OpCategory.Composite, WholeSourceFootprint.Instance,
+            WorkspaceModel.Of(
+                (_, _, _, format) => (long)destination.Width * destination.Height * format.BytesPerPixel()
+                    * (opacity < 1f ? 2 : 1),
+                WorkspaceScope.WholeImage),
+            new KernelImplementations(
+                (_, _, _, _) => throw new InvalidOperationException(
+                    "'draw-image' needs its overlay injected; add it with ProcessingPlan.Add(operator, second)."),
+                secondKernel: PlanSteps.DrawImageInto(destination, opacity)),
+            WorkingFormatMask.All, ExecutionRequirements.WholeImage,
+            input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
+            input2: new InputPort("overlay", PortRole.Overlay, WorkingFormatMask.All, Required: true,
+                WholeSourceFootprint.Instance));
 
     /// <summary>
     /// Applies a gain map to the base and returns linear light in Rgba32F. The output format differs, so this is a
@@ -749,6 +798,26 @@ public static class PlanOps
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("guide", PortRole.Guide, WorkingFormatMask.All, Required: true,
                 new FixedFootprint(new PixelRect(0, 0, guide.Width, guide.Height))));
+    }
+
+    /// <summary>Guided filter whose guide is supplied at <c>Add</c> time. The port reports the whole guide until the
+    /// view is known, which is the safe direction.</summary>
+    public static ImageOp GuidedBy(int radius = 4, float epsilon = 1e-4f, int bandRows = 128)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
+        return Create("guided-by", OpCategory.Composite, new HaloFootprint(radius, radius),
+            WorkspaceModel.Of((width, height, rows, format) =>
+                ((long)(rows + (2 * radius)) * width * 20) + ((long)width * height * format.BytesPerPixel()),
+                WorkspaceScope.WholeImage),
+            new KernelImplementations(
+                (_, _, _, _) => throw new InvalidOperationException(
+                    "'guided-by' needs its guide injected; add it with ProcessingPlan.Add(operator, second)."),
+                secondKernel: PlanSteps.GuidedBy(radius, epsilon, bandRows)),
+            WorkingFormatMask.All, ExecutionRequirements.WholeImage,
+            input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
+            input2: new InputPort("guide", PortRole.Guide, WorkingFormatMask.All, Required: true,
+                WholeSourceFootprint.Instance));
     }
 
     /// <summary>

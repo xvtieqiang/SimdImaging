@@ -31,14 +31,17 @@ internal abstract class RecipeStep
 }
 
 /// <summary>A same-size operator step.</summary>
-internal sealed class OperatorStep(int index, ImageOp op, byte[]? lut = null) : RecipeStep(index, op.Name,
-    op.Contract.Geometry)
+internal sealed class OperatorStep(int index, ImageOp op, byte[]? lut = null, PixelView? second = null)
+    : RecipeStep(index, op.Name, op.Contract.Geometry)
 {
     internal ImageOp Operator { get; } = op;
 
     /// <summary>The composed byte table when the step came from <see cref="ProcessingPlan.AddPointLut"/>; the
     /// compiler passes it to <see cref="PlanStep"/> so consecutive tables still fuse.</summary>
     internal byte[]? Lut { get; } = lut;
+
+    /// <summary>The injected second input, when the step has one; it travels into the compiled steps.</summary>
+    internal PixelView? Second { get; } = second;
 }
 
 /// <summary>
@@ -136,10 +139,10 @@ internal sealed class PipelineRecipeBuilder
     /// "is there already a resize", not to edit the chain.</summary>
     internal IReadOnlyList<RecipeStep> Steps => _steps;
 
-    internal PipelineRecipeBuilder Append(ImageOp op, byte[]? lut = null)
+    internal PipelineRecipeBuilder Append(ImageOp op, byte[]? lut = null, PixelView? second = null)
     {
         ArgumentNullException.ThrowIfNull(op);
-        _steps.Add(new OperatorStep(_steps.Count, op, lut));
+        _steps.Add(new OperatorStep(_steps.Count, op, lut, second));
         _version++;
         return this;
     }

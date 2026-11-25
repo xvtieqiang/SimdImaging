@@ -107,7 +107,7 @@ public sealed partial class Image
     {
         var builder = new PipelineRecipeBuilder();
         foreach (var step in plan.Steps)
-            builder.Append(step.Definition, step.Lut);
+            builder.Append(step.Definition, step.Lut, step.Secondary);
         if (plan.ResizeSpec is { } resize)
             builder.Append(GeometrySteps.Resize(resize.Width, resize.Height, resize.Resampler));
         return builder.Build();

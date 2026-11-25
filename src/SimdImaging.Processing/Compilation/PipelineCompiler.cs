@@ -60,7 +60,7 @@ internal static class PipelineCompiler
                        op.Operator.Contract.Output.Format is null)
                 {
                     ValidateFormat(op, currentFormat);
-                    steps.Add(new PlanStep(op.Operator, op.Lut));
+                    steps.Add(new PlanStep(op.Operator, op.Lut, op.Second));
                     explanation.Add($"step {index} {op.Name}: {op.Operator.Category}, " +
                         $"{op.Operator.Contract.Footprint.Describe}, {op.Operator.Contract.Requirements.Partition}");
                     index++;

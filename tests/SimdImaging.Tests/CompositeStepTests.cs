@@ -56,6 +56,90 @@ public sealed class CompositeStepTests
 
     [Theory]
     [MemberData(nameof(Formats))]
+    public void InjectedComposite_MatchesTheClosurePlanAndTheDirectCall(WorkingFormat format)
+    {
+        using var background = TestImages.Gradient(64, 48, format);
+        using var overlay = TestImages.Gradient(20, 16, format);
+
+        using var expected = AlphaOps.Composite(background[0].Pixels.View, overlay[0].Pixels.View, 10, 8);
+        var plan = new ProcessingPlan().Add(PlanOps.Composite(10, 8), overlay[0].Pixels.View);
+        plan.Steps[0].Secondary.ShouldNotBeNull();
+
+        using var actual = plan.Execute(background[0].Pixels.View);
+        Rows(actual.View).ShouldBe(Rows(expected.View));
+    }
+
+    [Theory]
+    [MemberData(nameof(Formats))]
+    public void InjectedBlend_AndDrawImage_MatchTheirClosureForms(WorkingFormat format)
+    {
+        using var background = TestImages.Gradient(64, 48, format);
+        using var overlay = TestImages.Gradient(20, 16, format);
+
+        using var blendExpected = Blend.Apply(background[0].Pixels.View, overlay[0].Pixels.View, 10, 8,
+            BlendMode.Multiply);
+        using var blendActual = new ProcessingPlan()
+            .Add(PlanOps.Blend(10, 8, BlendMode.Multiply), overlay[0].Pixels.View)
+            .Execute(background[0].Pixels.View);
+        Rows(blendActual.View).ShouldBe(Rows(blendExpected.View));
+
+        var placement = new PixelRect(7, 5, 20, 16);
+        using var drawExpected = new ProcessingPlan()
+            .Add(PlanOps.DrawImage(overlay[0].Pixels.View, placement, 0.5f))
+            .Execute(background[0].Pixels.View);
+        using var drawActual = new ProcessingPlan()
+            .Add(PlanOps.DrawImage(placement, 0.5f), overlay[0].Pixels.View)
+            .Execute(background[0].Pixels.View);
+        Rows(drawActual.View).ShouldBe(Rows(drawExpected.View));
+    }
+
+    [Fact]
+    public void InjectedGuidedFilter_MatchesTheClosureForm()
+    {
+        using var source = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
+        using var guide = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
+
+        using var expected = new ProcessingPlan()
+            .Add(PlanOps.GuidedFilter(guide[0].Pixels.View, 4, 1e-4f, 32))
+            .Execute(source[0].Pixels.View);
+        using var actual = new ProcessingPlan()
+            .Add(PlanOps.GuidedBy(4, 1e-4f, 32), guide[0].Pixels.View)
+            .Execute(source[0].Pixels.View);
+
+        Rows(actual.View).ShouldBe(Rows(expected.View));
+    }
+
+    [Fact]
+    public void AnInjectedOverlay_IsRecordedOnTheStep()
+    {
+        using var background = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
+        using var overlay = TestImages.Gradient(11, 9, WorkingFormat.Rgba8);
+
+        var step = new ProcessingPlan().Add(PlanOps.Composite(3, 2), overlay[0].Pixels.View).Steps[0];
+
+        step.Secondary.ShouldNotBeNull();
+        step.Secondary!.Value.Width.ShouldBe(11);
+        step.Secondary!.Value.Height.ShouldBe(9);
+        step.SecondKernel.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void AddWithoutTheInjectedOverlay_IsRefused()
+    {
+        Should.Throw<InvalidOperationException>(() => new ProcessingPlan().Add(PlanOps.Composite(0, 0)));
+    }
+
+    [Fact]
+    public void AddWithASecondInput_OnAOneInputOperator_IsRefused()
+    {
+        using var overlay = TestImages.Gradient(8, 8, WorkingFormat.Rgba8);
+
+        Should.Throw<ArgumentException>(() =>
+            new ProcessingPlan().Add(PlanOps.Invert(), overlay[0].Pixels.View));
+    }
+
+    [Theory]
+    [MemberData(nameof(Formats))]
     public void PipelineComposite_DefersAndMatchesTheEagerSequence(WorkingFormat format)
     {
         using var background = TestImages.Gradient(64, 48, format);

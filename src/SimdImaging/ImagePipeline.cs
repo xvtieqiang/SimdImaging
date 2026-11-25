@@ -97,7 +97,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     {
         ArgumentNullException.ThrowIfNull(guide);
         EnsureOverlayFormat(guide);
-        return Step(PlanOps.GuidedFilter(guide[0].Pixels.View, radius, epsilon, bandRows));
+        return Step(PlanOps.GuidedBy(radius, epsilon, bandRows), guide[0].Pixels.View);
     }
 
     /// <summary>Local Laplacian. Runs whole-image; costs one intermediate.</summary>
@@ -146,6 +146,14 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     {
         ObjectDisposedException.ThrowIf(_finished, this);
         _recipe.Append(op);
+        return this;
+    }
+
+    /// <summary>Appends a step whose second input the plan records instead of a closure capturing it.</summary>
+    protected override ImagePipeline Step(ImageOp op, PixelView second)
+    {
+        ObjectDisposedException.ThrowIf(_finished, this);
+        _recipe.Append(op, second: second);
         return this;
     }
 
@@ -393,7 +401,6 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     // The block-bodied operators. They are written against the view where they can be and delegate where the logic
     // needs the image's own size or metadata; deleting the facade methods means finishing this list.
 
-    /// <summary>Alpha-composites another image over this one.</summary>
     /// <summary>Composites <paramref name="overlay"/> over the image at (<paramref name="x"/>, <paramref name="y"/>).</summary>
     /// <remarks>The overlay is read when the chain runs, not here: keep it alive until <see cref="ToImage"/>. Its
     /// format must match the image at this point in the chain.</remarks>
@@ -401,7 +408,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     {
         ArgumentNullException.ThrowIfNull(overlay);
         EnsureOverlayFormat(overlay);
-        return Step(PlanOps.Composite(overlay[0].Pixels.View, x, y, mode));
+        return Step(PlanOps.Composite(x, y, mode), overlay[0].Pixels.View);
     }
 
     /// <summary>Blends <paramref name="overlay"/> over the image at (<paramref name="x"/>, <paramref name="y"/>).</summary>
@@ -410,7 +417,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     {
         ArgumentNullException.ThrowIfNull(overlay);
         EnsureOverlayFormat(overlay);
-        return Step(PlanOps.Blend(overlay[0].Pixels.View, x, y, mode));
+        return Step(PlanOps.Blend(x, y, mode), overlay[0].Pixels.View);
     }
 
     /// <summary>The working format at the current end of the chain: the last materialised image's, then any
@@ -486,7 +493,6 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         DitherKernel kernel = DitherKernel.FloydSteinberg, float maxError = 16f / 255f) =>
         Step(PlanOps.ReduceColors(maxColors, quantizer, kernel, maxError));
 
-    /// <summary>Draws another image into a destination rectangle.</summary>
     /// <summary>Draws <paramref name="source"/> into <paramref name="destination"/>, resized to fit and faded by
     /// <paramref name="opacity"/>.</summary>
     /// <remarks>The overlay is read when the chain runs, not here: keep it alive until <see cref="ToImage"/>.</remarks>
@@ -494,7 +500,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     {
         ArgumentNullException.ThrowIfNull(source);
         EnsureOverlayFormat(source);
-        return Step(PlanOps.DrawImage(source[0].Pixels.View, destination, opacity));
+        return Step(PlanOps.DrawImage(destination, opacity), source[0].Pixels.View);
     }
 
     /// <summary>Stamps a watermark at one of the usual positions.</summary>

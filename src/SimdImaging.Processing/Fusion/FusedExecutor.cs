@@ -157,7 +157,7 @@ internal static class FusedExecutor
 
             // The last step writes the band itself; the others ping-pong between the two windows.
             PixelView destination = isLast ? outputWindow : (k & 1) == 0 ? window : next;
-            step.Kernel(previous, destination, destinationRect, previousRect);
+            step.Invoke(previous, destination, destinationRect, previousRect);
 
             if (isLast)
                 break;

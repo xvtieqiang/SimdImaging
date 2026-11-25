@@ -741,8 +741,8 @@ Region 以 `GlobalStep` 拒绝）；`MapToPalette` / `QuantizeWebSafe` 是 Point
 `2 MiB + 32/80 × width` 的保守上界，`PaletteQuantizer.BuildWith` 把三种量化器的 switch 收到一处。`Dither` /
 `DitherToPalette` 声明 `Order = SourceOrder`、`State = PerCall`：它们的结果依赖逐行推进的误差扩散，不能并行分带。
 
-`DistanceTransform` 没有迁移：它输出 `Rgba32F`，而 `PlanStep` 假设输出格式 = 输入格式。`ConvertColorSpace` /
-`IccTransform` / `ChromaResample` 也受格式或两行依赖约束，仍是 barrier；这条缺口记在 `known-gaps.md`。
+`DistanceTransform` 与 `ConvertColorSpace` 迁移到格式段；`IccTransform` / `ChromaResample` 作为 Global 步骤进入计划
+（见 §6.3.6–6.3.7），不再是 barrier。
 
 ### 6.3.6 格式变化步骤
 
@@ -757,8 +757,8 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
 会把 recipe 里尚未执行的格式步骤算进去，所以 `ConvertColorSpace(...).Composite(Rgba32F overlay, ...)` 的格式校验仍
 在调用点通过。
 
-仍是非计划步骤：`IccTransform`（同格式，LUT/配置文件）、`ChromaResample`（两行依赖）、`Glow` / `RichardsonLucy`
-（halo 分别为 `ceil(3σ)` 与 `iterations × PSF 半径`）、`ApplyGainMap` / `DrawImage` / `Watermark`（第二输入或尺寸依赖）。
+仍不是计划步骤的只剩 `ApplyGainMap` 的 gain map：它是格式边界 + 第二输入，整图内核签名还没有第二视图参数，
+注入式第二输入（§6.3.12）尚未覆盖它。
 
 ### 6.3.7 P3 收尾：反卷积、绘制与增益图
 
@@ -851,6 +851,22 @@ resize/crop/pad/flip）或 `WholeImage`（必须物化的 reshape），格式段
 requirements 与工作空间；文件侧的选路由 `ImageTranscode.Explain()` 走同一投影——只读头部、恢复可 seek 流的位置、
 不消耗一次运行，因此 `Backend.Stream` 与 `Refusals.Stream` 在编码器打开前就能看到。带 `Region` 的转码仍走
 `RegionExecutor`，没有编译计划可解释，入口显式拒绝而不是给出一份错的计划。
+
+### 6.3.12 多输入：第二视图记录在步骤上
+
+- `PlanStep.Secondary` 记录第二输入视图；`ProcessingPlan.Add(op, PixelView)` 注入并校验端口格式，`Add(op)` 对需要注入
+  的算子直接拒绝（不会等到执行时才用一个抛异常的内核）。
+- `OpKernel2` + `KernelImplementations.SecondKernel` 让执行器把记录的视图交给内核；Frame 的三条分派（融合窗口、整图
+  步骤、未融合的单步带）统一走 `PlanStep.Invoke`，所以没有哪条路径会漏掉第二输入。Recipe 与编译段携带同一个
+  `PixelView`，`Image.Apply`/`ImageTranscode` 的编译路径因此与 `ProcessingPlan` 一致。
+- 契约仍是唯一来源：`InputPort` 声明端口与 footprint，编译器按端口推导区域。注入式 `PlanOps.Composite/Blend` 在视图
+  未知时把第二端口保守记为整图（`WholeSourceFootprint`）；`DrawImage` 的 placement 已知，仍按目标矩形声明。
+- `ImagePipeline.Composite/Blend/DrawImage/Watermark` 已切到注入式；旧的 `PlanOps.Composite(PixelView, …)` /
+  `Blend(PixelView, …)` / `DrawImage(PixelView, …)` 闭包重载保留，二者逐字节等价（`CompositeStepTests` 在 Rgba8 /
+  Rgba16 / Rgba32F 三种格式上对照）。
+- 所有权仍是调用方的：视图必须活到 `ToImage` 或计划执行结束，库不做所有权转移，也没有自动的存活校验。
+- `GuidedFilter(guide)` 也已切到注入式；Stream / Region / Tile 继续以 `CompositeStep` 拒绝。仍由闭包捕获的只剩
+  `ApplyGainMap`（格式边界 + gain map）：它的整图内核还没有第二视图参数。
 
 ### 6.4 超限行为
 
