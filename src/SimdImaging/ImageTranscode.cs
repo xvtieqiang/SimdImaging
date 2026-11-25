@@ -362,45 +362,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             throw new InvalidOperationException(
                 $"The stream pre-flight accepted a plan the compiler refused ({compiled.StreamRefusal}).");
 
-        var owned = new List<IDisposable>();
-        IRowSource current = source;
-        foreach (var section in compiled.Sections)
-        {
-            if (section.Kind == CompiledSectionKind.OperatorRun)
-            {
-                var steps = new PlanStep[section.StepCount];
-                for (var i = 0; i < steps.Length; i++)
-                    steps[i] = compiled.Steps[section.FirstStep + i];
-
-                var stage = new PlanRowSource(ProcessingPlan.FromCompiled(steps, ProcessingPlan.DefaultBandRows),
-                    current, _options.Execute);
-                owned.Add(stage);
-                current = stage;
-                continue;
-            }
-
-            var geometry = (GeometryStep)recipe.Steps[section.RecipeIndex];
-            var next = geometry.Wrap!(current, _options.Region?.Pool, _options.Execute);
-            if (next is IDisposable disposable)
-                owned.Add(disposable);
-            current = next;
-        }
-
-        return owned.Count == 0 ? current : new OwnedChain(current, owned);
-    }
-
-    private sealed class OwnedChain(IRowSource inner, List<IDisposable> owned) : IRowSource, IDisposable
-    {
-        public int Width => inner.Width;
-        public int Height => inner.Height;
-        public WorkingFormat Format => inner.Format;
-        public int ReadRows(Span<byte> destination, int stride, int maxRows) =>
-            inner.ReadRows(destination, stride, maxRows);
-        public void Dispose()
-        {
-            foreach (var disposable in owned)
-                disposable.Dispose();
-        }
+        return CompiledPlanExecutor.CreateStreamChain(compiled, source, _options.Execute, _options.Region?.Pool);
     }
 
     /// <summary>
@@ -438,29 +400,11 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 Execute = _options.Execute,
             });
 
-            foreach (var section in compiled.Sections)
-            {
-                if (section.Kind == CompiledSectionKind.OperatorRun)
-                {
-                    var steps = new PlanStep[section.StepCount];
-                    for (var i = 0; i < steps.Length; i++)
-                        steps[i] = compiled.Steps[section.FirstStep + i];
-
-                    var next = current.ApplyWithOptions(
-                        ProcessingPlan.FromCompiled(steps, ProcessingPlan.DefaultBandRows), _options.Execute);
-                    current.Dispose();
-                    current = next;
-                    continue;
-                }
-
-                var geometry = (GeometryStep)recipe.Steps[section.RecipeIndex];
-                var reshaped = current.ReplaceBuffer(
-                    geometry.Reshape(current[0].Pixels.View, _options.Region?.Pool));
-                current.Dispose();
-                current = reshaped;
-            }
-
-            return current;
+            var buffer = CompiledPlanExecutor.ExecuteFrame(compiled, current[0].Pixels.View,
+                _options.Region?.Pool, _options.Execute);
+            var result = current.ReplaceBuffer(buffer);
+            current.Dispose();
+            return result;
         }
         catch
         {

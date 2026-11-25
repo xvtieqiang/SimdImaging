@@ -103,8 +103,9 @@ internal static class PipelineCompiler
         explanation.Add(sizeKnown ? $"output: {width}x{height}" : "output: size depends on content");
 
         var workspace = WorkspacePlanner.Estimate(recipe, steps, sections, backend, options, width, height);
+        var bandRows = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
         return new CompiledExecutionPlan(recipe, steps, sections, backend, streamRefusal, regionRefusal,
-            tileRefusal, width, height, sizeKnown, workspace, explanation);
+            tileRefusal, width, height, sizeKnown, bandRows, workspace, explanation);
     }
 
     /// <summary>

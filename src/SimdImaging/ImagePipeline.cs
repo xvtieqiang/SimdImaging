@@ -605,31 +605,13 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         };
 
         var compiled = PipelineCompiler.Compile(recipe, options);
-        foreach (var section in compiled.Sections)
-        {
-            if (section.Kind == CompiledSectionKind.OperatorRun)
-            {
-                var steps = new PlanStep[section.StepCount];
-                for (var i = 0; i < steps.Length; i++)
-                    steps[i] = compiled.Steps[section.FirstStep + i];
+        var buffer = CompiledPlanExecutor.ExecuteFrame(compiled, input[0].Pixels.View, _pool);
+        var result = input.ReplaceBuffer(buffer);
+        if (!ReferenceEquals(input, _source))
+            input.Dispose();
 
-                var plan = ProcessingPlan.FromCompiled(steps, _bandRows);
-                var next = input.Apply(plan, _pool);
-                if (!ReferenceEquals(input, _source))
-                    input.Dispose();
-                input = next;
-                continue;
-            }
-
-            var geometry = (GeometryStep)recipe.Steps[section.RecipeIndex];
-            var reshaped = input.ReplaceBuffer(geometry.Reshape(input[0].Pixels.View, _pool));
-            if (!ReferenceEquals(input, _source))
-                input.Dispose();
-            input = reshaped;
-        }
-
-        _current = input;
-        return input;
+        _current = result;
+        return result;
     }
 }
 

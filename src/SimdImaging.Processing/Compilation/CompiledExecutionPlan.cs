@@ -72,6 +72,7 @@ internal sealed class CompiledExecutionPlan
         int width,
         int height,
         bool sizeKnown,
+        int bandRows,
         WorkspacePlan workspace,
         IReadOnlyList<string> explanation)
     {
@@ -85,6 +86,7 @@ internal sealed class CompiledExecutionPlan
         Width = width;
         Height = height;
         SizeKnown = sizeKnown;
+        BandRows = bandRows;
         Workspace = workspace;
         Explanation = Array.AsReadOnly(explanation.ToArray());
     }
@@ -114,6 +116,9 @@ internal sealed class CompiledExecutionPlan
 
     /// <summary>False when a geometry step's size depends on the content (trim, seam carve).</summary>
     internal bool SizeKnown { get; }
+
+    /// <summary>Rows per band the sections will run with.</summary>
+    internal int BandRows { get; }
 
     /// <summary>What the plan is predicted to hold, and what the engine cannot see. Report only.</summary>
     internal WorkspacePlan Workspace { get; }

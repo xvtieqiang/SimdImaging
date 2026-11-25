@@ -102,7 +102,9 @@ internal static class GeometrySteps
         new($"pad {left},{top},{right},{bottom}", new RelativeRule(
                 (width, height) => (width + left + right, height + top + bottom),
                 $"pad {left},{top},{right},{bottom}"),
-            (view, pool) => Transforms.Pad(view, left, top, right, bottom, background, pool));
+            (view, pool) => Transforms.Pad(view, left, top, right, bottom, background, pool),
+            (source, pool, _) => new PadRowSource(source, left, top, right, bottom, background),
+            Kind: GeometryKind.Pad);
 
     internal static GeometryDescriptor Affine(AffineMatrix forward, int width, int height, RgbaColor background) =>
         new($"affine {width}x{height}", new FixedSizeRule(width, height),
