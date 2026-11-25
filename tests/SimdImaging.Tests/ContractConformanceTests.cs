@@ -101,6 +101,17 @@ public sealed class ContractConformanceTests
         new("oilpaint", () => PlanOps.OilPaint(2), WorkingFormatMask.All, InputFootprintKind.Halo, 2),
 
         // Whole-image steps: the ones that read the whole picture declare it; the position-local ones say so.
+        new("tone-map", () => PlanOps.ToneMap(), WorkingFormatMask.All, InputFootprintKind.WholeSource),
+        new("dither", () => PlanOps.Dither(4), WorkingFormatMask.All, InputFootprintKind.WholeSource),
+        new("quantize", () => PlanOps.Quantize(16), WorkingFormatMask.All, InputFootprintKind.WholeSource,
+            Pass: PassModel.GatherThenApply),
+        new("reduce-colors", () => PlanOps.ReduceColors(16), WorkingFormatMask.All,
+            InputFootprintKind.WholeSource, Pass: PassModel.GatherThenApply),
+        new("dither-to-palette", () => PlanOps.DitherToPalette(PaletteQuantizer.WebSafe), WorkingFormatMask.All,
+            InputFootprintKind.WholeSource),
+        new("map-to-palette", () => PlanOps.MapToPalette(PaletteQuantizer.WebSafe), WorkingFormatMask.All,
+            InputFootprintKind.Identity),
+        new("quantize-websafe", () => PlanOps.QuantizeWebSafe(), WorkingFormatMask.All, InputFootprintKind.Identity),
         new("noise", () => PlanOps.Noise(), WorkingFormatMask.All, InputFootprintKind.Identity),
         new("vignette", () => PlanOps.Vignette(), WorkingFormatMask.All, InputFootprintKind.Identity),
         new("clahe", () => PlanOps.Clahe(), WorkingFormatMask.All, InputFootprintKind.WholeSource,
@@ -139,10 +150,10 @@ public sealed class ContractConformanceTests
             contract.Inputs[0].Formats.ShouldBe(expected.Formats, $"{expected.Name}: input port formats");
             contract.Output.SameSize.ShouldBeTrue($"{expected.Name}: plan steps are same-size");
             contract.Requirements.Partition.ShouldBe(
-                expected.Footprint is InputFootprintKind.BlockAligned ? Partitioning.WholeImage
-                : expected.Name is "noise" or "vignette" or "clahe" or "local-laplacian" or "normalize"
-                    or "adaptive" or "dehaze" or "equalize" ? Partitioning.WholeImage
-                : Partitioning.RowBands,
+                contract.Category is OpCategory.Global or OpCategory.Composite
+                    || expected.Footprint is InputFootprintKind.BlockAligned
+                    ? Partitioning.WholeImage
+                    : Partitioning.RowBands,
                 $"{expected.Name}: partitioning");
         }
     }

@@ -714,6 +714,18 @@ section 的全局起点重映射回调索引，每个算子步都真的被看到
 `DitherToPalette` / `MapToPalette`（调色板构建或顺序抖动）、`ApplyGainMap` / `DrawImage` / `Watermark`（第二输入）。
 它们逐个进入下一批，不需要新的执行模型。
 
+### 6.3.5 P3 批次 2：全局统计与量化
+
+`ToneMap` / `Quantize` / `ReduceColors` / `Dither` / `DitherToPalette` 进入计划，全部是 Global（Frame only；Stream /
+Region 以 `GlobalStep` 拒绝）；`MapToPalette` / `QuantizeWebSafe` 是 Point，可融合、可流式。
+
+声明来自实现：ToneMap 一行 float（自动曝光两行）、抖动 `64 × width`（(MaxDy+1) 个误差行 + 当前行）、调色板构建按
+`2 MiB + 32/80 × width` 的保守上界，`PaletteQuantizer.BuildWith` 把三种量化器的 switch 收到一处。`Dither` /
+`DitherToPalette` 声明 `Order = SourceOrder`、`State = PerCall`：它们的结果依赖逐行推进的误差扩散，不能并行分带。
+
+`DistanceTransform` 没有迁移：它输出 `Rgba32F`，而 `PlanStep` 假设输出格式 = 输入格式。`ConvertColorSpace` /
+`IccTransform` / `ChromaResample` 也受格式或两行依赖约束，仍是 barrier；这条缺口记在 `known-gaps.md`。
+
 ### 6.4 超限行为
 
 - `MaxWorkingBytes` 不够 → 先尝试降档（Rgba32F → Rgba16，若算子是精确整数语义）→ 仍不够则抛，**不静默改精度**。

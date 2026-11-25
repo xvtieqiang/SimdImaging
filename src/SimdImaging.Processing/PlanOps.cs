@@ -448,6 +448,19 @@ public static class PlanOps
         Point(nameof(ColorBlindnessOps.ColorBlindness),
             v => ColorBlindnessOps.ColorBlindness(v, kind, severity, correct));
 
+    /// <summary>Maps every pixel to the nearest colour in <paramref name="palette"/>.</summary>
+    public static ImageOp MapToPalette(ColorPalette palette)
+    {
+        ArgumentNullException.ThrowIfNull(palette);
+        Func<PixelView, WorkingBuffer> op = v => PaletteQuantizer.Apply(v, palette);
+        return Create("map-to-palette", OpCategory.Point, IdentityFootprint.Instance,
+            WorkspaceModel.Of((width, _, _, _) => 32768L + (16L * width)),
+            new KernelImplementations(PlanSteps.Point(op), op));
+    }
+
+    /// <summary>Maps to the 216-colour web-safe palette.</summary>
+    public static ImageOp QuantizeWebSafe() => MapToPalette(PaletteQuantizer.WebSafe);
+
     /// <summary>Prewitt gradient magnitude; one row and one column.</summary>
     public static ImageOp Prewitt(bool bt709 = false) =>
         Neighborhood(nameof(FilterOps.Prewitt), 1, v => FilterOps.Prewitt(v, bt709));
@@ -467,6 +480,50 @@ public static class PlanOps
             throw new ArgumentException("A 3x3 kernel needs 9 weights.", nameof(kernel));
         var weights = kernel.ToArray();
         return Neighborhood(nameof(FilterOps.Convolve3x3), 1, v => FilterOps.Convolve3x3(v, weights, bias));
+    }
+
+    /// <summary>HDR tone mapping. Auto-exposure needs the whole image's geometric mean first.</summary>
+    public static ImageOp ToneMap(ToneMapCurve curve = ToneMapCurve.Aces, float exposure = 0f,
+        float whitePoint = 1f, bool autoExposure = false, float targetLuminance = 0.18f) =>
+        Global(nameof(HdrOps.ToneMap),
+            v => HdrOps.ToneMap(v, curve, exposure, whitePoint, autoExposure, targetLuminance),
+            (width, _, _, _) => (long)width * 16 * (autoExposure ? 2 : 1),
+            pass: autoExposure ? PassModel.GatherThenApply : PassModel.Single,
+            state: autoExposure ? StateScope.PerImage : StateScope.None);
+
+    /// <summary>Error-diffusion or ordered dithering to <paramref name="bits"/> per channel; order matters.</summary>
+    public static ImageOp Dither(int bits, DitherKernel kernel = DitherKernel.FloydSteinberg) =>
+        Global(nameof(DitherOps.Dither), v => DitherOps.Dither(v, bits, kernel),
+            (width, _, _, _) => 64L * width,
+            state: StateScope.PerCall,
+            order: ExecutionOrder.SourceOrder);
+
+    /// <summary>Builds a palette from the whole image and maps every pixel to it.</summary>
+    public static ImageOp Quantize(int maxColors, Quantizer quantizer = Quantizer.MedianCut) =>
+        Global("quantize",
+            v => PaletteQuantizer.Apply(v, PaletteQuantizer.BuildWith(v, maxColors, quantizer)),
+            (width, _, _, _) => (2L << 20) + (32L * width),
+            pass: PassModel.GatherThenApply,
+            state: StateScope.PerImage);
+
+    /// <summary>Builds a palette from the whole image, then dithers to it.</summary>
+    public static ImageOp ReduceColors(int maxColors, Quantizer quantizer = Quantizer.MedianCut,
+        DitherKernel kernel = DitherKernel.FloydSteinberg, float maxError = 16f / 255f) =>
+        Global("reduce-colors",
+            v => PaletteQuantizer.Dither(v, PaletteQuantizer.BuildWith(v, maxColors, quantizer), kernel, maxError),
+            (width, _, _, _) => (2L << 20) + (80L * width),
+            pass: PassModel.GatherThenApply,
+            state: StateScope.PerImage);
+
+    /// <summary>Dithers to a caller-supplied palette; order matters.</summary>
+    public static ImageOp DitherToPalette(ColorPalette palette,
+        DitherKernel kernel = DitherKernel.FloydSteinberg, float maxError = 16f / 255f)
+    {
+        ArgumentNullException.ThrowIfNull(palette);
+        return Global("dither-to-palette", v => PaletteQuantizer.Dither(v, palette, kernel, maxError),
+            (width, _, _, _) => 32768L + (64L * width),
+            state: StateScope.PerCall,
+            order: ExecutionOrder.SourceOrder);
     }
 
     /// <summary>

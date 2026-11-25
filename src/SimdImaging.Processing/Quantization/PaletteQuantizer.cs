@@ -16,6 +16,15 @@ public static class PaletteQuantizer
 
     /// <summary>Builds a palette of at most <paramref name="maxColors"/> colours.</summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxColors"/> is outside 2..256.</exception>
+    /// <summary>Builds a palette with the caller's chosen algorithm; the one place the switch lives.</summary>
+    internal static ColorPalette BuildWith(PixelView source, int maxColors, Quantizer quantizer) => quantizer switch
+    {
+        Quantizer.MedianCut => Build(source, maxColors),
+        Quantizer.Wu => WuQuantizer.Build(source, maxColors),
+        Quantizer.Octree => OctreeQuantizer.Build(source, maxColors),
+        _ => throw new ArgumentOutOfRangeException(nameof(quantizer), quantizer, "Unknown quantizer."),
+    };
+
     public static ColorPalette Build(PixelView source, int maxColors)
     {
         if (maxColors is < 2 or > 256)

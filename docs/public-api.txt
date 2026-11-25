@@ -927,6 +927,8 @@
   SimdImaging.Processing.PlanOps.Dehaze(System.Int32 patchRadius, System.Single omega, System.Single tMin, System.Int32 refineRadius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Delinearize(SimdImaging.Processing.TransferCurve curve) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dilate3x3() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Dither(System.Int32 bits, SimdImaging.Processing.DitherKernel kernel) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.DitherToPalette(SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Processing.DitherKernel kernel, System.Single maxError) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Emboss(System.Single strength) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Equalize() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Erode3x3() -> SimdImaging.Processing.ImageOp
@@ -942,6 +944,7 @@
   SimdImaging.Processing.PlanOps.Lightness(System.Single factor) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Linearize(SimdImaging.Processing.TransferCurve curve) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.LocalLaplacian(System.Int32 levels, System.Int32 samples) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.MapToPalette(SimdImaging.Abstractions.ColorPalette palette) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Median(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Median3x3() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Morph(System.Int32 radius, SimdImaging.Abstractions.Morphology kind) -> SimdImaging.Processing.ImageOp
@@ -958,6 +961,9 @@
   SimdImaging.Processing.PlanOps.Posterize(System.Int32 levels) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Premultiply() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Prewitt(System.Boolean bt709) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Quantize(System.Int32 maxColors, SimdImaging.Processing.Quantizer quantizer) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.QuantizeWebSafe() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.ReduceColors(System.Int32 maxColors, SimdImaging.Processing.Quantizer quantizer, SimdImaging.Processing.DitherKernel kernel, System.Single maxError) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Saturation(System.Single amount, System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Scharr(System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Sepia(System.Single amount) -> SimdImaging.Processing.ImageOp
@@ -966,6 +972,7 @@
   SimdImaging.Processing.PlanOps.Temperature(System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Threshold(System.Single threshold, System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Tint(SimdImaging.Abstractions.RgbaColor tint, System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.ToneMap(SimdImaging.Processing.ToneMapCurve curve, System.Single exposure, System.Single whitePoint, System.Boolean autoExposure, System.Single targetLuminance) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Unpremultiply() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Vibrance(System.Single amount, System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Vignette(System.Single radius, System.Single strength) -> SimdImaging.Processing.ImageOp

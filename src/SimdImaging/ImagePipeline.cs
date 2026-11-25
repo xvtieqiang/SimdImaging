@@ -326,7 +326,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ToneMap(ToneMapCurve curve = ToneMapCurve.Aces, float exposure = 0f, float whitePoint = 1f, bool autoExposure = false, float targetLuminance = 0.18f) =>
-        Reshape(v => HdrOps.ToneMap(v, curve, exposure, whitePoint, autoExposure, targetLuminance, _pool));
+        Step(PlanOps.ToneMap(curve, exposure, whitePoint, autoExposure, targetLuminance));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline EqualizeHistogram() =>
@@ -426,11 +426,10 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Dither(int bits, DitherKernel kernel = DitherKernel.FloydSteinberg) =>
-        Reshape(v => DitherOps.Dither(v, bits, kernel, _pool));
+        Step(PlanOps.Dither(bits, kernel));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
-    public ImagePipeline QuantizeWebSafe() =>
-        Reshape(v => PaletteQuantizer.Apply(v, PaletteQuantizer.WebSafe, _pool));
+    public ImagePipeline QuantizeWebSafe() => Step(PlanOps.QuantizeWebSafe());
 
     // The block-bodied operators. They are written against the view where they can be and delegate where the logic
     // needs the image's own size or metadata; deleting the facade methods means finishing this list.
@@ -468,12 +467,12 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>Maps to a caller-supplied palette.</summary>
     public ImagePipeline MapToPalette(ColorPalette palette) =>
-        Reshape(v => PaletteQuantizer.Apply(v, palette, _pool));
+        Step(PlanOps.MapToPalette(palette));
 
     /// <summary>Maps to a palette with dithering.</summary>
     public ImagePipeline DitherToPalette(ColorPalette palette, DitherKernel kernel = DitherKernel.FloydSteinberg,
         float maxError = 16f / 255f) =>
-        Reshape(v => PaletteQuantizer.Dither(v, palette, kernel, maxError, _pool));
+        Step(PlanOps.DitherToPalette(palette, kernel, maxError));
 
     /// <summary>Resize preserving the aspect ratio, by width.</summary>
     public ImagePipeline ResizeToWidth(int width, Resampler resampler = Resampler.Bicubic) =>
@@ -499,21 +498,12 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>Reduces to at most <paramref name="maxColors"/> colours.</summary>
     public ImagePipeline Quantize(int maxColors, Quantizer quantizer = Quantizer.MedianCut) =>
-        Reshape(v => PaletteQuantizer.Apply(v, BuildPalette(v, maxColors, quantizer), _pool));
+        Step(PlanOps.Quantize(maxColors, quantizer));
 
     /// <summary>Quantizes with dithering.</summary>
     public ImagePipeline ReduceColors(int maxColors, Quantizer quantizer = Quantizer.MedianCut,
         DitherKernel kernel = DitherKernel.FloydSteinberg, float maxError = 16f / 255f) =>
-        Reshape(v => PaletteQuantizer.Dither(v, BuildPalette(v, maxColors, quantizer), kernel, maxError, _pool));
-
-    /// <summary>Palette construction, dispatched by quantizer; the operators themselves take a palette.</summary>
-    private static ColorPalette BuildPalette(PixelView view, int maxColors, Quantizer quantizer) => quantizer switch
-    {
-        Quantizer.MedianCut => PaletteQuantizer.Build(view, maxColors),
-        Quantizer.Wu => WuQuantizer.Build(view, maxColors),
-        Quantizer.Octree => OctreeQuantizer.Build(view, maxColors),
-        _ => throw new ArgumentOutOfRangeException(nameof(quantizer), quantizer, "Unknown quantizer."),
-    };
+        Step(PlanOps.ReduceColors(maxColors, quantizer, kernel, maxError));
 
     /// <summary>Draws another image into a destination rectangle.</summary>
     public ImagePipeline DrawImage(Image source, PixelRect destination, float opacity = 1f) =>
