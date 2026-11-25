@@ -287,6 +287,8 @@
   SimdImaging.Image.Metadata : Sdcb.SimdCodecs.Abstractions.ImageMetadata { get; }
   SimdImaging.Image.MinMax() -> System.ValueTuple<SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange>
   SimdImaging.Image.Mutate(System.Action<SimdImaging.ImagePipeline> steps, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
+  SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Abstractions.IRegionSink sink, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.IPixelPool? pool) -> System.Void
+  SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Image.Psnr(SimdImaging.Image other) -> System.Double
   SimdImaging.Image.RadialGradient(Sdcb.SimdCodecs.Abstractions.PixelRect rect, System.Single centreX, System.Single centreY, System.Single radius, SimdImaging.Abstractions.RgbaColor inner, SimdImaging.Abstractions.RgbaColor outer) -> System.Void
   SimdImaging.Image.SamplePixel(System.Single x, System.Single y, SimdImaging.Processing.Resampler resampler) -> SimdImaging.Abstractions.RgbaColor
@@ -918,6 +920,7 @@
   SimdImaging.Processing.PlanOps.BoxBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Brightness(System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.ChannelSwap(System.Int32 redSource, System.Int32 greenSource, System.Int32 blueSource) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.ChromaResample(SimdImaging.Processing.ChromaSubsampling mode, SimdImaging.Processing.YCbCrStandard ycbcr, System.Boolean limitedRange, System.Int32 bandRows) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Clahe(System.Int32 tilesX, System.Int32 tilesY, System.Single clipLimit) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Clamp(System.Single low, System.Single high) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Close3x3() -> SimdImaging.Processing.ImageOp
@@ -947,6 +950,7 @@
   SimdImaging.Processing.PlanOps.Grayscale(System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.HueRotate(System.Single degrees) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.IccTransform(System.ReadOnlySpan<System.Byte> sourceProfile, System.ReadOnlySpan<System.Byte> destinationProfile) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Invert() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Laplacian(System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Levels(System.Single inputBlack, System.Single inputWhite, System.Single gamma, System.Single outputBlack, System.Single outputWhite) -> SimdImaging.Processing.ImageOp

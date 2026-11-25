@@ -265,16 +265,12 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         Step(PlanOps.ConvertColorSpace(target, ycbcr, limitedRange, white, adaptation));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
-    public ImagePipeline IccTransform(ReadOnlySpan<byte> sourceProfile, ReadOnlySpan<byte> destinationProfile = default)
-    {
-        var from = sourceProfile.ToArray();
-        var to = destinationProfile.ToArray();
-        return Reshape(v => IccTransformOps.Transform(v, from, to, _pool));
-    }
+    public ImagePipeline IccTransform(ReadOnlySpan<byte> sourceProfile, ReadOnlySpan<byte> destinationProfile = default) =>
+        Step(PlanOps.IccTransform(sourceProfile, destinationProfile));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ChromaResample(ChromaSubsampling mode, YCbCrStandard ycbcr = YCbCrStandard.Bt601, bool limitedRange = false, int bandRows = 128) =>
-        Reshape(v => ColorConversionOps.ChromaResample(v, mode, ycbcr, limitedRange, bandRows, _pool));
+        Step(PlanOps.ChromaResample(mode, ycbcr, limitedRange, bandRows));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Convolve3x3(ReadOnlySpan<float> kernel, float bias = 0f) =>

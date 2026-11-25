@@ -41,11 +41,21 @@ internal static class CompiledPlanExecutor
                     // The whole-image form is the only one that can allocate a buffer in another format. The
                     // contract guarantees it exists for a step that declares an output format.
                     var formatStep = (OperatorStep)plan.Recipe.Steps[section.RecipeIndex];
+                    var output = formatStep.Operator.Contract.Output.Format!.Value;
+                    CheckBudget(options, (long)current.Width * current.Height * output.BytesPerPixel(),
+                        $"the format step '{formatStep.Name}'");
                     next = formatStep.Operator.Kernels.WholeImage!(current);
                 }
                 else
                 {
                     var geometry = (GeometryStep)plan.Recipe.Steps[section.RecipeIndex];
+                    if (geometry.Geometry.SizeKnown)
+                    {
+                        var (width, height) = geometry.Geometry.Map(current.Width, current.Height);
+                        CheckBudget(options, (long)width * height * current.Format.BytesPerPixel(),
+                            $"the geometry step '{geometry.Name}'");
+                    }
+
                     next = geometry.Reshape(current, pool);
                 }
 
@@ -125,6 +135,13 @@ internal static class CompiledPlanExecutor
         }
 
         return owned.Count == 0 ? current : new OwnedRowChain(current, owned);
+    }
+
+    private static void CheckBudget(ExecuteOptions options, long bytes, string what)
+    {
+        if (options.MaxWorkingBytes > 0 && bytes > options.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"{what} needs {bytes} bytes, above ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
     }
 
     private static PlanStep[] Slice(IReadOnlyList<PlanStep> steps, int first, int count)

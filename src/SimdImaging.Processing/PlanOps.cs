@@ -580,6 +580,38 @@ public static class PlanOps
             (width, _, _, _) => 16L * width, IdentityFootprint.Instance, WorkingFormat.Rgba32F, PassModel.Single,
             PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
 
+    /// <summary>
+    /// ICC profile conversion. The profiles are parsed once for the whole image, so this is a Global step; its
+    /// scratch is the parser's tables, declared conservatively as eight mebibytes plus a float row.
+    /// </summary>
+    public static ImageOp IccTransform(ReadOnlySpan<byte> sourceProfile, ReadOnlySpan<byte> destinationProfile = default)
+    {
+        var from = sourceProfile.ToArray();
+        var to = destinationProfile.ToArray();
+        return Global("icc-transform", v => IccTransformOps.Transform(v, from, to),
+            (width, _, _, _) => (8L << 20) + (16L * width),
+            footprint: IdentityFootprint.Instance);
+    }
+
+    /// <summary>
+    /// Chroma subsampling (4:2:2 / 4:2:0). The operator bands internally and needs rows from the next chroma cell,
+    /// so the plan step runs it whole rather than feeding it a band whose edges would clamp.
+    /// </summary>
+    public static ImageOp ChromaResample(ChromaSubsampling mode, YCbCrStandard ycbcr = YCbCrStandard.Bt601,
+        bool limitedRange = false, int bandRows = 128)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
+        return Global("chroma-resample",
+            v => ColorConversionOps.ChromaResample(v, mode, ycbcr, limitedRange, bandRows),
+            (width, _, _, _) =>
+            {
+                var chromaWidth = (width + 1) / 2;
+                var capacity = ((bandRows / 2) + 2) * chromaWidth;
+                return (2L * capacity * sizeof(float)) + (2L * chromaWidth * sizeof(double))
+                    + (chromaWidth * sizeof(int)) + (16L * width);
+            });
+    }
+
     /// <summary>HDR tone mapping. Auto-exposure needs the whole image's geometric mean first.</summary>
     public static ImageOp ToneMap(ToneMapCurve curve = ToneMapCurve.Aces, float exposure = 0f,
         float whitePoint = 1f, bool autoExposure = false, float targetLuminance = 0.18f) =>

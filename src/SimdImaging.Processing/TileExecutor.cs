@@ -32,6 +32,12 @@ internal static class TileExecutor
         if (source.Format != sink.Format)
             throw new ArgumentException($"The sink is {sink.Format}, the source is {source.Format}.");
 
+        var tileBytes = (long)tileWidth * tileHeight * source.Format.BytesPerPixel();
+        if (options.MaxWorkingBytes > 0 && tileBytes > options.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"A {tileWidth}x{tileHeight} tile needs {tileBytes} bytes, above " +
+                $"ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
+
         var refusal = RegionExecutor.Classify(plan.Steps, plan.HasResize, out var refusingStep);
         if (refusal != RegionRefusal.None)
             throw new InvalidOperationException(
