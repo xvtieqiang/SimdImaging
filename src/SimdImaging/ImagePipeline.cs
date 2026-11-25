@@ -444,13 +444,12 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
             throw new ArgumentException($"The overlay is {overlay.Format} but this image is {format}.", nameof(overlay));
     }
 
-    /// <summary>Applies a gain map, as an HDR image carries alongside its base.</summary>
     /// <summary>Applies a gain map to the base, producing linear light in Rgba32F.</summary>
     /// <remarks>The gain map is read when the chain runs; keep it alive until <see cref="ToImage"/>.</remarks>
     public ImagePipeline ApplyGainMap(Image gainMap, float headroom = 4f, float weight = 1f)
     {
         ArgumentNullException.ThrowIfNull(gainMap);
-        return Step(PlanOps.ApplyGainMap(gainMap[0].Pixels.View, headroom, weight));
+        return Step(PlanOps.ApplyGainMap(headroom, weight), gainMap[0].Pixels.View);
     }
 
     /// <summary>Maps to a caller-supplied palette.</summary>

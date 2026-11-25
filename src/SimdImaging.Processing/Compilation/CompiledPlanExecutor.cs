@@ -44,7 +44,9 @@ internal static class CompiledPlanExecutor
                     var output = formatStep.Operator.Contract.Output.Format!.Value;
                     CheckBudget(options, (long)current.Width * current.Height * output.BytesPerPixel(),
                         $"the format step '{formatStep.Name}'");
-                    next = formatStep.Operator.Kernels.WholeImage!(current);
+                    next = formatStep.Second is { } second && formatStep.Operator.Kernels.WholeImageSecond is { } two
+                        ? two(current, second)
+                        : formatStep.Operator.Kernels.WholeImage!(current);
                 }
                 else
                 {

@@ -1100,6 +1100,7 @@
   SimdImaging.Processing.PlanOps.AdaptiveThreshold(System.Int32 radius, System.Single offset) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.AlphaThreshold(System.Single threshold) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.ApplyGainMap(SimdImaging.Abstractions.PixelView gainMap, System.Single headroom, System.Single weight) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.ApplyGainMap(System.Single headroom, System.Single weight) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Bilateral(System.Int32 radius, System.Single sigmaRange) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Bilateral(System.Int32 radius, System.Single sigmaSpace, System.Single sigmaRange) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BlackWhite(System.Single threshold, System.Boolean bt709) -> SimdImaging.Processing.ImageOp

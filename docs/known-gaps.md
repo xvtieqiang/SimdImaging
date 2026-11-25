@@ -1267,8 +1267,9 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 - **多输入（Frame 版已落地，通用模型已打开）**：`PlanStep.Secondary` 记录第二视图，`ProcessingPlan.Add(op, PixelView)`
   注入并由执行器经 `OpKernel2` 传给内核；三条 Frame 分派统一走 `PlanStep.Invoke`。`ImagePipeline.Composite/Blend/
   DrawImage/Watermark` 已切到注入式，旧闭包重载保留并逐字节对照（三种格式）。编译器按契约的 `InputPort` 推导第二
-  端口区域；视图未知时保守记整图。仍未做：`ApplyGainMap`（格式边界）仍闭包；Stream / Region / Tile 继续拒绝 `CompositeStep`；
-  视图生命周期仍由调用方保证，库不做所有权转移或自动存活校验。
+  端口区域；视图未知时保守记整图。所有内置第二输入（Composite/Blend/DrawImage/Watermark/GuidedFilter/ApplyGainMap）都已注入；仍未做：
+  Stream / Region / Tile 继续拒绝 `CompositeStep` / `FormatChange`；视图生命周期仍由调用方保证，库不做所有权
+  转移或自动存活校验。
 - **统一预算（P4 部分完成）**：编译期上界总门 + `WorkspaceManager` 预留账户（计划/流窗口/resize ring/tile/编码带），
   `ProcessReport` 带预测与实测峰值，并有「预测 ≥ 实测」的对账测试（流式与物化各一）。仍缺：spool/物化缓存项、
   M2–M4 出口条件、FloatScratch/编码器内部缓冲的完整计量。
@@ -1285,8 +1286,8 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。公开入口：
   `Image.ProcessTiles` 的缓冲与 Sink 两个重载、`Image.ProcessTilesTo(IRegionSource, Stream, …)`（编码器端 sink：
   持一条 `tileHeight` 行的带、行填满即写、`ProcessMode.Tiled`）与 `ProcessTilesTo(path, path, …)`（TIFF 区域源）。
-  未做：公开的通用文件级区域源（目前只有 TIFF 内部实现）、tile 吞吐基准条目；tile 计划不能带几何步（含尾部 resize），
-  编译期以 `NotTileable` 拒绝。
+  未做：公开的通用文件级区域源（目前只有 TIFF 内部实现）；tile 吞吐已有两个基准条目（`tile invert` / `tile gaussian`，
+  512×512 tile、4K 源），但还没有版本化基线。tile 计划不能带几何步（含尾部 resize），编译期以 `NotTileable` 拒绝。
 - **需求选路（P1 补完）**：`StateScope.PerCall` / `ExecutionOrder.SourceOrder` 现在参与 Stream/Region 拒绝
   （`StatefulStep`），并由 `RequirementsSelectionTests` 用一个合成的行可分步验证；`PassModel` 与 `Determinism`
   仍只用于解释与预算，不改变后端选择（当前非默认项都是 Global，分类已被 Category 拦下）。

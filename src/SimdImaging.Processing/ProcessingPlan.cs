@@ -320,7 +320,7 @@ public sealed class ProcessingPlan
     public ProcessingPlan Add(ImageOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
-        if (op.Kernels.SecondKernel is not null)
+        if (op.Kernels.SecondKernel is not null || op.Kernels.WholeImageSecond is not null)
             throw new InvalidOperationException(
                 $"The step '{op.Name}' needs its second input injected; use Add(operator, second) so the plan " +
                 "records the view.");
@@ -339,7 +339,8 @@ public sealed class ProcessingPlan
     public ProcessingPlan Add(ImageOp op, PixelView second)
     {
         ArgumentNullException.ThrowIfNull(op);
-        if (op.Contract.Inputs.Count < 2 || op.Kernels.SecondKernel is null)
+        if (op.Contract.Inputs.Count < 2 ||
+            (op.Kernels.SecondKernel is null && op.Kernels.WholeImageSecond is null))
             throw new ArgumentException(
                 $"The operator '{op.Name}' does not declare an injectable second input.", nameof(op));
         if (second.Width <= 0 || second.Height <= 0)

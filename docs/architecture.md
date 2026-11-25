@@ -680,8 +680,8 @@ Tile 的验收是逐字节：`TileExecutionTests` 在 3 种格式、3 组 tile �
 `StreamFrameEncoder.WriteRows`，最后 `Complete()` 断言没有截断。它不解码整图，只多一条宽的带（`width × tileHeight`
 × bpp，计入 Workspace 与 `MaxWorkingBytes`），报告 `ProcessMode.Tiled`、`PeakWorkingBytes` 与
 `PredictedWorkingBytes`。路径重载 `ProcessTilesTo(path, path, …)` 用 `TiffRegionSource` 打开可区域读取的 TIFF；计划里
-的几何步（含尾部 resize）会进入 recipe 并被编译器以 `NotTileable` 拒绝，而不是被静默忽略。tile 吞吐基线仍未录入
-`benchmarks`。
+的几何步（含尾部 resize）会进入 recipe 并被编译器以 `NotTileable` 拒绝，而不是被静默忽略。tile 吞吐有两个基准条目（`tile invert 512x512` / `tile gaussian 512x512`，4K 源），
+尚未录入版本化基线。
 
 ### 6.3.3 代表算子闭环（P2）
 
@@ -757,8 +757,7 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
 会把 recipe 里尚未执行的格式步骤算进去，所以 `ConvertColorSpace(...).Composite(Rgba32F overlay, ...)` 的格式校验仍
 在调用点通过。
 
-仍不是计划步骤的只剩 `ApplyGainMap` 的 gain map：它是格式边界 + 第二输入，整图内核签名还没有第二视图参数，
-注入式第二输入（§6.3.12）尚未覆盖它。
+至此没有算子只存在于 barrier 里：连 `ApplyGainMap` 的 gain map 也走注入式第二输入（§6.3.12），以整图格式段执行。
 
 ### 6.3.7 P3 收尾：反卷积、绘制与增益图
 
@@ -865,8 +864,8 @@ requirements 与工作空间；文件侧的选路由 `ImageTranscode.Explain()` 
   `Blend(PixelView, …)` / `DrawImage(PixelView, …)` 闭包重载保留，二者逐字节等价（`CompositeStepTests` 在 Rgba8 /
   Rgba16 / Rgba32F 三种格式上对照）。
 - 所有权仍是调用方的：视图必须活到 `ToImage` 或计划执行结束，库不做所有权转移，也没有自动的存活校验。
-- `GuidedFilter(guide)` 也已切到注入式；Stream / Region / Tile 继续以 `CompositeStep` 拒绝。仍由闭包捕获的只剩
-  `ApplyGainMap`（格式边界 + gain map）：它的整图内核还没有第二视图参数。
+- `GuidedFilter(guide)` 与 `ApplyGainMap`（格式边界，整图内核）也已切到注入式；所有内置第二输入都记录在步骤上。
+  Stream / Region / Tile 继续以 `CompositeStep` / `FormatChange` 拒绝。
 
 ### 6.4 超限行为
 

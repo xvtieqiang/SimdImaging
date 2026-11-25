@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging;
 using SimdImaging.Abstractions;
 using SimdImaging.Benchmarks;
@@ -71,6 +72,22 @@ Measure("resize 4K->1080p lanczos3", () =>
 Measure("crop 1000x1000", () =>
 {
     using var result = source.Pipe().Crop(new Sdcb.SimdCodecs.Abstractions.PixelRect(100, 100, 1000, 1000)).ToImage();
+    return result.Width * result.Height;
+});
+
+// Tile throughput. The point of the backend is that it does not hold the frame, so the reading to watch is
+// how much slower per pixel it is than the frame path rather than its absolute time.
+Measure("tile invert 512x512", () =>
+{
+    using var result = Image.ProcessTiles(new BenchmarkRegionSource(source[0].Pixels.View),
+        new ProcessingPlan().Add(PlanOps.Invert()), 512, 512);
+    return result.Width * result.Height;
+});
+
+Measure("tile gaussian 512x512", () =>
+{
+    using var result = Image.ProcessTiles(new BenchmarkRegionSource(source[0].Pixels.View),
+        new ProcessingPlan().Add(PlanOps.GaussianBlur(3f)), 512, 512);
     return result.Width * result.Height;
 });
 
@@ -457,4 +474,22 @@ static byte[] BuildLut16Profile(byte grid)
             System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(tag.Slice(offset, 2), (ushort)(i * 257));
 
     return profile;
+}
+
+/// <summary>A whole image presented as a region source, for the tile benchmarks.</summary>
+sealed class BenchmarkRegionSource(PixelView view) : IRegionSource
+{
+    public int Width => view.Width;
+    public int Height => view.Height;
+    public WorkingFormat Format => view.Format;
+
+    public void ReadRegion(PixelRect region, PixelView destination)
+    {
+        var bytes = view.Format.BytesPerPixel();
+        for (var y = 0; y < region.Height; y++)
+        {
+            view.Row(region.Y + y).Slice(region.X * bytes, region.Width * bytes)
+                .CopyTo(destination.Row(y));
+        }
+    }
 }

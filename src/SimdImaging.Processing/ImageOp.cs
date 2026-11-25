@@ -32,14 +32,14 @@ public sealed class ImageOp : IImageOp
 
         // A format-changing step is executed as a whole-image reshape; a plan kernel writes into a destination of
         // the source format and cannot change it. Refuse the combination at construction instead of at a boundary.
-        if (contract.Output.Format is not null && kernels.WholeImage is null)
+        if (contract.Output.Format is not null && kernels.WholeImage is null && kernels.WholeImageSecond is null)
             throw new ArgumentException(
                 $"The operator '{contract.Name}' changes the working format to {contract.Output.Format} but has no " +
                 "whole-image kernel.", nameof(kernels));
 
         // A second-input kernel needs a declared port to describe what it reads; the region derivation and the plan
         // explanation both read the port, so an undeclared second input would be an unexplained read.
-        if (kernels.SecondKernel is not null && contract.Inputs.Count < 2)
+        if ((kernels.SecondKernel is not null || kernels.WholeImageSecond is not null) && contract.Inputs.Count < 2)
             throw new ArgumentException(
                 $"The operator '{contract.Name}' has a second-input kernel but declares one input port.", nameof(kernels));
     }

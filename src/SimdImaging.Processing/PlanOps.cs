@@ -481,6 +481,25 @@ public static class PlanOps
             second: new InputPort("gain-map", PortRole.Overlay, WorkingFormatMask.All, Required: true,
                 new FixedFootprint(new PixelRect(0, 0, gainMap.Width, gainMap.Height))));
 
+    /// <summary>
+    /// Applies an injected gain map and returns linear light in <see cref="WorkingFormat.Rgba32F"/>. The gain map
+    /// travels through <see cref="ProcessingPlan.Add(ImageOp, PixelView)"/> like every other second input; the step
+    /// is a format boundary, so only the compiled executor runs it.
+    /// </summary>
+    public static ImageOp ApplyGainMap(float headroom = 4f, float weight = 1f) =>
+        Create("apply-gain-map", OpCategory.Composite, WholeSourceFootprint.Instance,
+            WorkspaceModel.Of((width, _, _, _) => 32L * width, WorkspaceScope.WholeImage),
+            new KernelImplementations(
+                (_, _, _, _) => throw new NotSupportedException(
+                    "'apply-gain-map' changes the working format; run it through a compiled recipe."),
+                wholeImageSecond: (v, gain) => HdrOps.ApplyGainMap(v, gain, headroom, weight)),
+            WorkingFormatMask.All, ExecutionRequirements.WholeImage, PassModel.Single,
+            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded },
+            input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
+            input2: new InputPort("gain-map", PortRole.Overlay, WorkingFormatMask.All, Required: true,
+                WholeSourceFootprint.Instance),
+            outputFormat: WorkingFormat.Rgba32F);
+
     /// <summary>Thresholded bloom. The highlights and the blurred copy are both full frames, so this is a whole-image
     /// step (Frame only) rather than a banded one.</summary>
     public static ImageOp Glow(float threshold = 0.7f, float sigma = 8f, float amount = 0.6f) =>

@@ -56,12 +56,14 @@ internal sealed class KernelImplementations
     internal KernelImplementations(OpKernel planKernel,
         Func<PixelView, WorkingBuffer>? wholeImage = null,
         IntoKernel? into = null,
-        OpKernel2? secondKernel = null)
+        OpKernel2? secondKernel = null,
+        Func<PixelView, PixelView, WorkingBuffer>? wholeImageSecond = null)
     {
         PlanKernel = planKernel ?? throw new ArgumentNullException(nameof(planKernel));
         WholeImage = wholeImage;
         Into = into;
         SecondKernel = secondKernel;
+        WholeImageSecond = wholeImageSecond;
     }
 
     /// <summary>The band kernel every plan step uses.</summary>
@@ -75,4 +77,8 @@ internal sealed class KernelImplementations
 
     /// <summary>The second-input form, when the operator takes its overlay from the plan rather than a closure.</summary>
     internal OpKernel2? SecondKernel { get; }
+
+    /// <summary>The whole-image second-input form: a format-changing composite whose output leaves the plan's
+    /// working format, so it can only run as a compiled format section.</summary>
+    internal Func<PixelView, PixelView, WorkingBuffer>? WholeImageSecond { get; }
 }
