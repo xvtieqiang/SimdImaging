@@ -121,6 +121,10 @@ internal readonly record struct ExecutionRequirements(
     ThreadSafety Threading,
     Determinism Determinism)
 {
+    /// <summary>True when the step's footprint is local enough for <see cref="TileExecutor"/> to supply the halo.
+    /// Global, Composite, whole-source and block-aligned steps are not tileable.</summary>
+    internal bool SupportsTiles { get; init; }
+
     /// <summary>The common case: independent rows, no state, order-free, deterministic by coordinates.</summary>
     internal static ExecutionRequirements RowBands { get; } = new(
         Partitioning.RowBands, StateScope.None, ExecutionOrder.Any, ThreadSafety.Concurrent,

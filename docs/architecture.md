@@ -671,8 +671,9 @@ tile 交给 `RegionExecutor` 读取含 halo 的源区域、执行步骤、再把
 
 Tile 的验收是逐字节：`TileExecutionTests` 在 3 种格式、3 组 tile 尺寸下与 Frame 结果比较，并断言 tile 恰好覆盖每个
 像素一次。公开入口是 `Image.ProcessTiles(source, plan, tileW, tileH)`（返回缓冲）与
-`Image.ProcessTiles(source, sink, plan, …)`（写自定义 Sink）。编码器端的 `IRegionSink` 实现、以及算子显式声明
-`Partitioning.Tiles`，仍留给后续。
+`Image.ProcessTiles(source, sink, plan, …)`（写自定义 Sink）。可 tile 性由契约的 `Requirements.SupportsTiles` 显式声明：
+Point / 局部 Neighborhood 为 true，Global / Composite / 整图 / 块对齐为 false，编译器按声明拒绝。编码器端的
+`IRegionSink` 实现仍留给后续；内存侧有 `TileExecution_HoldsWellUnderOneFrame` 钉住「一块 tile + halo」的峰值。
 
 ### 6.3.3 代表算子闭环（P2）
 
@@ -774,8 +775,11 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
 格式段的输出帧、几何步的 reshape 目标、tile 执行器的一块 tile。现在它们都在分配前比较字节数，超出就抛出带步骤名和
 上限的 `InvalidOperationException`。
 
-这仍然是**逐阶段**检查，不是单一全局跟踪器：各段串行执行，前一段释放后下一段才开始，所以逐段检查等价于给峰值设上限；
-真正的全局账户（spool/物化缓存、跨阶段并发）留给 P4 后续。
+编译期还有一道总门：`PipelineCompiler.Compile` 用 `WorkspacePlan.BoundedBytes`（顺序项之和，上界）与
+`MaxWorkingBytes` 比较，超出即拒绝；执行期的逐项检查仍然保留，因为调用方可以在执行时才给出不同的预算。
+
+这仍然是**逐阶段 + 编译期上界**，不是单一执行期跟踪器：各段串行，前一段释放后下一段才开始；真正的全局账户
+（spool/物化缓存、实际峰值与预测的对账）留给 P4 后续。
 
 ### 6.4 超限行为
 

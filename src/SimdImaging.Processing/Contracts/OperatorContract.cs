@@ -131,9 +131,13 @@ internal sealed class OperatorContract
                 $"The '{name}' operator declares a second input but is {category}; only a Composite step reads two.",
                 nameof(input2));
 
-        var resolvedRequirements = requirements ?? (category is OpCategory.Global or OpCategory.Composite
+        var resolvedRequirements = (requirements ?? (category is OpCategory.Global or OpCategory.Composite
             ? ExecutionRequirements.WholeImage
-            : ExecutionRequirements.RowBands);
+            : ExecutionRequirements.RowBands)) with
+        {
+            SupportsTiles = category is OpCategory.Point or OpCategory.Neighborhood
+                && footprint.Kind is not (InputFootprintKind.WholeSource or InputFootprintKind.BlockAligned),
+        };
 
         if (category is OpCategory.Global or OpCategory.Composite &&
             resolvedRequirements.Partition != Partitioning.WholeImage)

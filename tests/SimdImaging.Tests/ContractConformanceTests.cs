@@ -254,6 +254,20 @@ public sealed class ContractConformanceTests
     }
 
     [Fact]
+    public void LocalPointAndNeighbourhoodStepsDeclareTileSupport()
+    {
+        PlanOps.Invert().Contract.Requirements.SupportsTiles.ShouldBeTrue();
+        PlanOps.GaussianBlur(1f).Contract.Requirements.SupportsTiles.ShouldBeTrue();
+        PlanOps.RichardsonLucy(1f, 1).Contract.Requirements.SupportsTiles.ShouldBeTrue();
+
+        PlanOps.Equalize().Contract.Requirements.SupportsTiles.ShouldBeFalse();
+        PlanOps.Pixelate(8).Contract.Requirements.SupportsTiles.ShouldBeFalse();
+        PlanOps.Convolve(new float[9], 1, BorderMode.Mirror).Contract.Requirements.SupportsTiles
+            .ShouldBeFalse();
+        PlanOps.DistanceTransform().Contract.Requirements.SupportsTiles.ShouldBeFalse();
+    }
+
+    [Fact]
     public void EveryOperatorWithAWholeImageForm_MatchesThroughAPlan()
     {
         foreach (var expected in Ops)

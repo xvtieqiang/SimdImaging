@@ -89,6 +89,20 @@ public sealed class TileExecutionTests
     }
 
     [Fact]
+    public void TileExecution_HoldsWellUnderOneFrame()
+    {
+        var plan = new ProcessingPlan().Add(PlanOps.Invert()).Add(PlanOps.GaussianBlur(1f));
+        using var image = TestImages.Gradient(512, 512, WorkingFormat.Rgba8);
+        var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
+
+        Image.ProcessTiles(new BufferRegionSource(image[0].Pixels.View), new DiscardSink(512, 512),
+            plan, 64, 64, pool: pool);
+
+        pool.PeakBytes.ShouldBeLessThan(512L * 512 * 4 / 2,
+            $"a 64x64 tile should not need half a 512x512 frame; peaked at {pool.PeakBytes}");
+    }
+
+    [Fact]
     public void TheTilesCoverEveryPixelExactlyOnce()
     {
         var recipe = Recipe(PlanOps.Invert());
@@ -181,6 +195,19 @@ public sealed class TileExecutionTests
                 view.Row(region.Y + y).Slice(region.X * bpp, region.Width * bpp)
                     .CopyTo(destination.Row(y));
             }
+        }
+    }
+
+    private sealed class DiscardSink(int width, int height) : IRegionSink
+    {
+        public int Width => width;
+        public int Height => height;
+        public WorkingFormat Format => WorkingFormat.Rgba8;
+
+        public void WriteRegion(PixelRect region, PixelView source)
+        {
+            if (region.Width != source.Width || region.Height != source.Height)
+                throw new ArgumentException("The source view is not the region's size.");
         }
     }
 

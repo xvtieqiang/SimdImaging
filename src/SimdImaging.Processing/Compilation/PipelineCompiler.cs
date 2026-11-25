@@ -133,6 +133,14 @@ internal static class PipelineCompiler
         explanation.Add(sizeKnown ? $"output: {width}x{height}" : "output: size depends on content");
 
         var workspace = WorkspacePlanner.Estimate(recipe, steps, sections, backend, options, width, height);
+        if (options.Execute.MaxWorkingBytes > 0 && workspace.BoundedBytes > options.Execute.MaxWorkingBytes)
+        {
+            throw new InvalidOperationException(
+                $"The plan's working set is at most {workspace.BoundedBytes} bytes, above " +
+                $"ExecuteOptions.MaxWorkingBytes = {options.Execute.MaxWorkingBytes}. Lower the band height, split " +
+                "the chain, or raise the limit.");
+        }
+
         var bandRows = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
         return new CompiledExecutionPlan(recipe, steps, sections, backend, streamRefusal, regionRefusal,
             tileRefusal, width, height, sizeKnown, bandRows, workspace, explanation);
@@ -275,6 +283,12 @@ internal static class PipelineCompiler
                 return TileRefusal.GlobalStep;
             if (op.Operator.Category == OpCategory.Composite)
                 return TileRefusal.CompositeStep;
+            if (!op.Operator.Contract.Requirements.SupportsTiles)
+            {
+                return op.Operator.Contract.Footprint.CoversWholeImage
+                    ? TileRefusal.WholeSourceStep
+                    : TileRefusal.NotTileable;
+            }
 
             planSteps.Add(new PlanStep(op.Operator));
         }
