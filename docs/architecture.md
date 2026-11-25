@@ -670,7 +670,9 @@ tile 交给 `RegionExecutor` 读取含 halo 的源区域、执行步骤、再把
 | `NotTileable` | 其余不可矩形执行的情况（几何步等） |
 
 Tile 的验收是逐字节：`TileExecutionTests` 在 3 种格式、3 组 tile 尺寸下与 Frame 结果比较，并断言 tile 恰好覆盖每个
-像素一次。编码器端的 `IRegionSink` 实现、以及算子显式声明 `Partitioning.Tiles`，仍留给后续。
+像素一次。公开入口是 `Image.ProcessTiles(source, plan, tileW, tileH)`（返回缓冲）与
+`Image.ProcessTiles(source, sink, plan, …)`（写自定义 Sink）。编码器端的 `IRegionSink` 实现、以及算子显式声明
+`Partitioning.Tiles`，仍留给后续。
 
 ### 6.3.3 代表算子闭环（P2）
 
@@ -761,7 +763,17 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
   16 字节声明，Stream / Region 以 `GlobalStep` 拒绝。
 - `Perspective`：补成 GeometryStep，之前是唯一还在 `Reshape` 的几何重载。
 
-剩余 barrier：`IccTransform`（同格式 LUT/配置文件，scratch 无法从外部准确推导）、`ChromaResample`（两行色度依赖）。
+`IccTransform` 与 `ChromaResample` 随后也作为 Global 步骤进入计划：前者整图解析一次 profile，scratch 按 8 MiB + 一行
+声明；后者自行内部分带、需要下一行色度，所以整图执行、不交给 band 适配器。至此没有算子还停在 `Reshape` barrier 上。
+
+### 6.3.8 预算强制：编译执行器自己分配的那几帧
+
+计划段、流窗口和 resize ring 早就各自检查 `MaxWorkingBytes`；编译器自己分配的三类缓冲此前没有：
+格式段的输出帧、几何步的 reshape 目标、tile 执行器的一块 tile。现在它们都在分配前比较字节数，超出就抛出带步骤名和
+上限的 `InvalidOperationException`。
+
+这仍然是**逐阶段**检查，不是单一全局跟踪器：各段串行执行，前一段释放后下一段才开始，所以逐段检查等价于给峰值设上限；
+真正的全局账户（spool/物化缓存、跨阶段并发）留给 P4 后续。
 
 ### 6.4 超限行为
 

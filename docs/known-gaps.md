@@ -1262,20 +1262,22 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 
 ## 几何执行（M18）
 
-- **剩余的非计划步骤（P3 收尾）**：`IccTransform` 的 LUT/配置文件还没有进入契约，`ChromaResample` 依赖两行色度。
-  两者仍是 barrier；`Glow` 已作为 Global 步骤进入计划，其余算子（含反卷积、DrawImage、ApplyGainMap、Watermark）也都
-  已进入计划或格式段。反卷积的 halo 已修正为 `2 × PSF 半径 × iterations`（旧的 `1 ×` 在 Frame vs Stream 下会露缝）。
+**P3 已无计划外算子**：`IccTransform` 与 `ChromaResample` 作为 Global 步骤进入计划；反卷积的 halo 修正为
+`2 × PSF 半径 × iterations`；`Glow`、`DrawImage`、`ApplyGainMap`、`Watermark` 也都已进入计划或格式段。
 - **多输入（Frame 版已落地，通用模型仍缺）**：`PlanOps.Composite` / `PlanOps.Blend` 以 `OpCategory.Composite`
   和两个端口进入计划，Frame 由内核捕获的 overlay 视图执行；`ImagePipeline.Composite/Blend` 已从 barrier 迁成步骤，
   overlay 必须活到 `ToImage`（xmldoc 写明），格式在调用时校验。Stream / Region 仍以 `CompositeStep` 拒绝。
   未做的部分：`PlanStep` / `ProcessingPlan` 没有真正的第二输入字段（overlay 是闭包捕获的 `PixelView`，没有逐端口
   footprint、没有所有权与生命周期托管），`DrawImage` / `Watermark` / `ApplyGainMap` 仍是 barrier。下一步要打开的
   是通用多输入执行（第二视图 + 每端口区域 + 生命周期），不是再加一个捕获式算子。
+- **统一预算（P4 未完成）**：计划段、流窗口、resize ring，以及新补的格式帧 / 几何目标 / tile 缓冲都已检查
+  `MaxWorkingBytes`，但仍是逐阶段检查；没有跨阶段的单一账户，也没有把 spool/物化缓存纳入。下一步是把这些项汇总到一个
+  执行期预算对象，并记录实际峰值与预测值的偏差。
 - **Tile 后端（P5 第一刀已落地）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。未做：编码器端
   的 `IRegionSink` 实现（目前只有测试里的内存 Sink）、算子显式声明 `Partitioning.Tiles`（当前以 RowBands + halo 判定
-  可 tile）、以及 tile 的内存/吞吐基线。`IRegionSink` 目前只有测试实现，也还没有公开的入口（`ProcessTiles` 一类）；
-  公开入口需要先决定 Recipe/Compiler 是否成为公开 API。
+  可 tile）、以及 tile 的内存/吞吐基线。公开入口已提供：`Image.ProcessTiles` 的缓冲与 Sink 两个重载；编码器端的
+  `IRegionSink` 实现仍未做（目前是内存 Sink）。
 - **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 19 MiB
   （ring + staging + 输出批 + worker 行，一个账本；超限先缩 chunk 再拒绝）。
 - **一次流水线只支持一个缩放**：`ResizeTo(..., plan, after)` 覆盖「计划 → 缩放 → 计划」；两次缩放连用仍要分两次调用
