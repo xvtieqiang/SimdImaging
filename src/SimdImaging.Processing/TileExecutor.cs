@@ -38,6 +38,7 @@ internal static class TileExecutor
                 $"A {tileWidth}x{tileHeight} tile needs {tileBytes} bytes, above " +
                 $"ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
 
+        using var workspaceLease = options.Workspace?.Reserve(tileBytes, "tile");
         var refusal = RegionExecutor.Classify(plan.Steps, plan.HasResize, out var refusingStep);
         if (refusal != RegionRefusal.None)
             throw new InvalidOperationException(

@@ -28,6 +28,7 @@
   SimdImaging.Abstractions.ExecuteOptions.MaxDegreeOfParallelism : System.Int32 { get; set; }
   SimdImaging.Abstractions.ExecuteOptions.MaxWorkingBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.ExecuteOptions.ToString() -> System.String
+  SimdImaging.Abstractions.ExecuteOptions.Workspace : SimdImaging.Abstractions.WorkspaceManager { get; set; }
   SimdImaging.Abstractions.ExecuteOptions.op_Equality(SimdImaging.Abstractions.ExecuteOptions? left, SimdImaging.Abstractions.ExecuteOptions? right) -> System.Boolean
   SimdImaging.Abstractions.ExecuteOptions.op_Inequality(SimdImaging.Abstractions.ExecuteOptions? left, SimdImaging.Abstractions.ExecuteOptions? right) -> System.Boolean
   SimdImaging.Abstractions.GainMapParameters.#ctor(System.Double GainMapMin, System.Double GainMapMax, System.Double Gamma, System.Double OffsetSdr, System.Double OffsetHdr, System.Double HdrCapacityMin, System.Double HdrCapacityMax, System.Boolean BaseRenditionIsHdr)
@@ -215,6 +216,11 @@
   SimdImaging.Abstractions.WorkingFormatMask.Rgba16 = 2
   SimdImaging.Abstractions.WorkingFormatMask.Rgba32F = 4
   SimdImaging.Abstractions.WorkingFormatMask.Rgba8 = 1
+  SimdImaging.Abstractions.WorkspaceManager.#ctor(System.Int64 limitBytes)
+  SimdImaging.Abstractions.WorkspaceManager.LimitBytes : System.Int64 { get; }
+  SimdImaging.Abstractions.WorkspaceManager.OutstandingBytes : System.Int64 { get; }
+  SimdImaging.Abstractions.WorkspaceManager.PeakBytes : System.Int64 { get; }
+  SimdImaging.Abstractions.WorkspaceManager.Reserve(System.Int64 bytes, System.String name) -> System.IDisposable
   SimdImaging.GainMappedImage.#ctor(SimdImaging.Image baseImage, SimdImaging.Image gainMap, SimdImaging.Abstractions.GainMapParameters? parameters)
   SimdImaging.GainMappedImage.Affine(SimdImaging.Processing.Geometry.AffineMatrix forward, System.Int32 width, System.Int32 height, SimdImaging.Abstractions.RgbaColor baseBackground, SimdImaging.Abstractions.RgbaColor gainBackground, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.GainMappedImage
   SimdImaging.GainMappedImage.AffineWithOptions(SimdImaging.Processing.Geometry.AffineMatrix forward, System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor baseBackground, SimdImaging.Abstractions.RgbaColor gainBackground, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.GainMappedImage
@@ -263,6 +269,7 @@
   SimdImaging.Image.DrawPath(SimdImaging.Processing.PixelPath path, SimdImaging.Abstractions.RgbaColor color, SimdImaging.Processing.StrokeOptions options) -> System.Void
   SimdImaging.Image.DrawRect(Sdcb.SimdCodecs.Abstractions.PixelRect rect, SimdImaging.Abstractions.RgbaColor color, System.Int32 thickness) -> System.Void
   SimdImaging.Image.Encode(SimdImaging.Image image, Sdcb.SimdCodecs.Abstractions.ImageFormat format, SimdImaging.Abstractions.SaveOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Byte[]
+  SimdImaging.Image.Explain(SimdImaging.Processing.ProcessingPlan plan, Sdcb.SimdCodecs.Abstractions.PixelRect? region) -> System.Collections.Generic.IReadOnlyList<SimdImaging.PlanStepExplanation>
   SimdImaging.Image.Fill(SimdImaging.Abstractions.RgbaColor color) -> System.Void
   SimdImaging.Image.FillEllipse(Sdcb.SimdCodecs.Abstractions.PixelRect bounds, SimdImaging.Abstractions.RgbaColor color) -> System.Void
   SimdImaging.Image.FillPath(SimdImaging.Processing.PixelPath path, SimdImaging.Abstractions.RgbaColor color, SimdImaging.Processing.PathFillRule rule) -> System.Void
@@ -451,6 +458,33 @@
   SimdImaging.NormalizedWarp.BeginInvoke(System.Single u, System.Single v, System.Single& sourceU, System.Single& sourceV, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
   SimdImaging.NormalizedWarp.EndInvoke(System.Single& sourceU, System.Single& sourceV, System.IAsyncResult result) -> System.Void
   SimdImaging.NormalizedWarp.Invoke(System.Single u, System.Single v, System.Single& sourceU, System.Single& sourceV) -> System.Void
+  SimdImaging.PlanSourceRegion.#ctor(System.Int32 Port, Sdcb.SimdCodecs.Abstractions.PixelRect Region)
+  SimdImaging.PlanSourceRegion.Deconstruct(System.Int32& Port, Sdcb.SimdCodecs.Abstractions.PixelRect& Region) -> System.Void
+  SimdImaging.PlanSourceRegion.Equals(SimdImaging.PlanSourceRegion other) -> System.Boolean
+  SimdImaging.PlanSourceRegion.Equals(System.Object obj) -> System.Boolean
+  SimdImaging.PlanSourceRegion.GetHashCode() -> System.Int32
+  SimdImaging.PlanSourceRegion.Port : System.Int32 { get; set; }
+  SimdImaging.PlanSourceRegion.Region : Sdcb.SimdCodecs.Abstractions.PixelRect { get; set; }
+  SimdImaging.PlanSourceRegion.ToString() -> System.String
+  SimdImaging.PlanSourceRegion.op_Equality(SimdImaging.PlanSourceRegion left, SimdImaging.PlanSourceRegion right) -> System.Boolean
+  SimdImaging.PlanSourceRegion.op_Inequality(SimdImaging.PlanSourceRegion left, SimdImaging.PlanSourceRegion right) -> System.Boolean
+  SimdImaging.PlanStepExplanation.#ctor(System.String Name, System.Boolean IsGeometry, System.Int32 Width, System.Int32 Height, SimdImaging.Abstractions.WorkingFormat Format, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSourceRegion> SourceRegions, System.Int64 SourceArea, System.Int64 OutputArea)
+  SimdImaging.PlanStepExplanation.Amplification : System.Double { get; }
+  SimdImaging.PlanStepExplanation.Deconstruct(System.String& Name, System.Boolean& IsGeometry, System.Int32& Width, System.Int32& Height, SimdImaging.Abstractions.WorkingFormat& Format, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSourceRegion>& SourceRegions, System.Int64& SourceArea, System.Int64& OutputArea) -> System.Void
+  SimdImaging.PlanStepExplanation.Equals(SimdImaging.PlanStepExplanation? other) -> System.Boolean
+  SimdImaging.PlanStepExplanation.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.PlanStepExplanation.Format : SimdImaging.Abstractions.WorkingFormat { get; set; }
+  SimdImaging.PlanStepExplanation.GetHashCode() -> System.Int32
+  SimdImaging.PlanStepExplanation.Height : System.Int32 { get; set; }
+  SimdImaging.PlanStepExplanation.IsGeometry : System.Boolean { get; set; }
+  SimdImaging.PlanStepExplanation.Name : System.String { get; set; }
+  SimdImaging.PlanStepExplanation.OutputArea : System.Int64 { get; set; }
+  SimdImaging.PlanStepExplanation.SourceArea : System.Int64 { get; set; }
+  SimdImaging.PlanStepExplanation.SourceRegions : System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSourceRegion> { get; set; }
+  SimdImaging.PlanStepExplanation.ToString() -> System.String
+  SimdImaging.PlanStepExplanation.Width : System.Int32 { get; set; }
+  SimdImaging.PlanStepExplanation.op_Equality(SimdImaging.PlanStepExplanation? left, SimdImaging.PlanStepExplanation? right) -> System.Boolean
+  SimdImaging.PlanStepExplanation.op_Inequality(SimdImaging.PlanStepExplanation? left, SimdImaging.PlanStepExplanation? right) -> System.Boolean
   SimdImaging.ProcessMode.Materialized = 1
   SimdImaging.ProcessMode.Streamed = 0
   SimdImaging.ProcessOptions.#ctor()
@@ -475,6 +509,8 @@
   SimdImaging.ProcessReport.Height : System.Int32 { get; set; }
   SimdImaging.ProcessReport.MetadataCarried : System.Boolean { get; set; }
   SimdImaging.ProcessReport.Mode : SimdImaging.ProcessMode { get; set; }
+  SimdImaging.ProcessReport.PeakWorkingBytes : System.Int64 { get; set; }
+  SimdImaging.ProcessReport.PredictedWorkingBytes : System.Int64 { get; set; }
   SimdImaging.ProcessReport.ReaderIsStreaming : System.Boolean { get; set; }
   SimdImaging.ProcessReport.Refusal : SimdImaging.Processing.StreamRefusal { get; set; }
   SimdImaging.ProcessReport.RowsWritten : System.Int32 { get; set; }
@@ -1237,6 +1273,7 @@ class SimdImaging.Abstractions.LoadOptions
 class SimdImaging.Abstractions.SaveOptions
 class SimdImaging.Abstractions.WorkingBuffer
 class SimdImaging.Abstractions.WorkingFormatExtensions
+class SimdImaging.Abstractions.WorkspaceManager
 class SimdImaging.GainMappedImage
 class SimdImaging.Image
 class SimdImaging.ImageFrame
@@ -1244,6 +1281,7 @@ class SimdImaging.ImageOpPipeline`1
 class SimdImaging.ImagePipeline
 class SimdImaging.ImagePipelineExtensions
 class SimdImaging.ImageTranscode
+class SimdImaging.PlanStepExplanation
 class SimdImaging.ProcessOptions
 class SimdImaging.Processing.AlphaOps
 class SimdImaging.Processing.AnalysisOps
@@ -1351,6 +1389,7 @@ struct SimdImaging.Abstractions.PixelPoint
 struct SimdImaging.Abstractions.PixelView
 struct SimdImaging.Abstractions.RgbaColor
 struct SimdImaging.Abstractions.SampleOptions
+struct SimdImaging.PlanSourceRegion
 struct SimdImaging.ProcessReport
 struct SimdImaging.Processing.BandContext
 struct SimdImaging.Processing.ChannelRange

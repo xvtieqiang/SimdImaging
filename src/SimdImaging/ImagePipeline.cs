@@ -40,6 +40,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     private readonly Image _source;
     private readonly IPixelPool? _pool;
     private PipelineRecipeBuilder _recipe = new();
+    private ImageOrientation _orientation;
     private Image? _current;
     private int _bandRows = ProcessingPlan.DefaultBandRows;
     private bool _finished;
@@ -48,6 +49,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     {
         _source = source;
         _pool = pool;
+        _orientation = source.Info.Orientation;
     }
 
     /// <summary>Rows per band; smaller bands trade bookkeeping for less working memory.</summary>
@@ -82,40 +84,9 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     /// <summary>Mirrors top to bottom. Ends the current band pass.</summary>
     public ImagePipeline FlipVertical() => AppendGeometry(GeometrySteps.FlipVertical());
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     /// <summary>Edge-preserving bilateral filter.</summary>
     public ImagePipeline Bilateral(int radius = 2, float sigmaSpace = 0f, float sigmaRange = 0.1f) =>
         Step(PlanOps.Bilateral(radius, sigmaSpace, sigmaRange));
-
-
 
     /// <summary>Guided filter.</summary>
     public ImagePipeline GuidedFilter(int radius = 4, float epsilon = 1e-4f, int bandRows = 128) =>
@@ -129,19 +100,10 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         return Step(PlanOps.GuidedFilter(guide[0].Pixels.View, radius, epsilon, bandRows));
     }
 
-
-
-
-
     /// <summary>Local Laplacian. Runs whole-image; costs one intermediate.</summary>
     public ImagePipeline LocalLaplacian(int levels = 5, int samples = 32, float alpha = 0.25f, float beta = 1f,
         float sigmaR = 0.15f) =>
         Step(PlanOps.LocalLaplacian(levels, samples, alpha, beta, sigmaR));
-
-
-
-
-
 
     /// <summary>
     /// Runs the chain and returns a new image. The source is not modified; the result belongs to the caller.
@@ -197,9 +159,8 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     }
 
     /// <summary>
-    /// Ends the current pass, runs a whole-image operator over its result, and starts a fresh pass on that. The
-    /// counterpart of <see cref="Geometry"/> for operators that take a view and return a buffer: it is what lets the
-    /// pipeline call the operator directly instead of calling back into the facade.
+    /// Ends the current pass, runs a whole-image operator over its result, and starts a fresh pass on that. It is
+    /// what lets the pipeline call a view-to-buffer operator directly instead of calling back into the facade.
     /// </summary>
     private ImagePipeline Reshape(Func<PixelView, WorkingBuffer> reshape)
     {
@@ -326,11 +287,16 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     public ImagePipeline EqualizeHistogram() => Step(PlanOps.Equalize());
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
-    public ImagePipeline AutoOrient() =>
-        Geometry(image => image.ReplaceBuffer(
-            Orientation.AutoOrient(image[0].Pixels.View, image.Info.Orientation, _pool),
-            image.Metadata,
-            ImageOrientation.Normal));
+    public ImagePipeline AutoOrient()
+    {
+        ObjectDisposedException.ThrowIf(_finished, this);
+        if (_orientation == ImageOrientation.Normal)
+            return this;
+
+        _recipe.Append(GeometrySteps.AutoOrient(_orientation));
+        _orientation = ImageOrientation.Normal;
+        return this;
+    }
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Pad(int margin, RgbaColor background) =>
@@ -555,22 +521,6 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         return DrawImage(mark, new PixelRect(x, y, mark.Width, mark.Height), opacity);
     }
 
-    /// <summary>Ends the current pass, applies geometry, and starts a fresh pass on the result.</summary>
-    private ImagePipeline Geometry(Func<Image, Image> reshape)
-    {
-        ObjectDisposedException.ThrowIf(_finished, this);
-        var input = Flush();
-        var reshaped = reshape(input);
-
-        // The pass just ended: its output is no longer reachable and is not the caller's source, so it goes back
-        // to the pool now rather than at the next collection. Reshape returns a new image, never its input.
-        if (!ReferenceEquals(input, _source))
-            input.Dispose();
-
-        _current = reshaped;
-        return this;
-    }
-
     /// <summary>
     /// Runs the recipe so far and returns the image it produced. Geometry steps are applied in recipe order; a run
     /// of operators between them is one compiled section, executed through the same <see cref="ProcessingPlan"/>
@@ -612,7 +562,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
         var compiled = PipelineCompiler.Compile(recipe, options);
         var buffer = CompiledPlanExecutor.ExecuteFrame(compiled, input[0].Pixels.View, _pool);
-        var result = input.ReplaceBuffer(buffer);
+        var result = input.ReplaceBuffer(buffer, input.Metadata, _orientation);
         if (!ReferenceEquals(input, _source))
             input.Dispose();
 

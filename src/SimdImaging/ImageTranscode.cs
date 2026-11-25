@@ -48,6 +48,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
     private readonly PipelineRecipeBuilder _recipe = new();
     private PixelRect? _region;
     private TranscodeOptions _options = TranscodeOptions.Default;
+    private long _predictedBytes;
     private bool _ran;
 
     private ImageTranscode(string? path, Stream? stream)
@@ -253,11 +254,36 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
     private ProcessReport Execute(string? destinationPath, Stream? destination, ImageFormat format,
         CancellationToken cancellationToken)
     {
+        // Each run accounts for its reservations; a caller-supplied account is used as-is, otherwise one is created
+        // with the same ceiling so the report can carry the peak.
+        var saved = _options;
+        var workspace = saved.Execute.Workspace ?? new WorkspaceManager(saved.Execute.MaxWorkingBytes);
+        _predictedBytes = 0;
+        _options = saved with { Execute = saved.Execute with { Workspace = workspace } };
+        try
+        {
+            var report = ExecuteCore(destinationPath, destination, format, cancellationToken);
+            return report with
+            {
+                PeakWorkingBytes = workspace.PeakBytes,
+                PredictedWorkingBytes = _predictedBytes,
+            };
+        }
+        finally
+        {
+            _options = saved;
+        }
+    }
+
+    private ProcessReport ExecuteCore(string? destinationPath, Stream? destination, ImageFormat format,
+        CancellationToken cancellationToken)
+    {
         var recipe = _recipe.Build();
 
         if (_region is { } region)
         {
             using var image = ToRegionCore(region, cancellationToken);
+            using var materialized = ReserveImage(image);
             return Write(image, destinationPath, destination, format, StreamRefusal.None, cancellationToken);
         }
 
@@ -267,6 +293,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         if (refusal != StreamRefusal.None)
         {
             using var image = ToImageCore(cancellationToken);
+            using var materialized = ReserveImage(image);
             return Write(image, destinationPath, destination, format, refusal, cancellationToken);
         }
 
@@ -275,6 +302,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         if (_stream is not null && !_stream.CanSeek && Image.RequiresWholeInput(_options.Load))
         {
             using var image = ToImageCore(cancellationToken);
+            using var materialized = ReserveImage(image);
             return Write(image, destinationPath, destination, format, StreamRefusal.DecodeNeedsWholeInput,
                 cancellationToken);
         }
@@ -307,6 +335,9 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         return Image.ProcessChain(_stream!, destination!, format, SizeOf, BuildChain, ProcessOptions(),
             cancellationToken);
     }
+
+    private IDisposable? ReserveImage(Image image) => _options.Execute.Workspace?.Reserve(
+        (long)image.Width * image.Height * image.Format.BytesPerPixel(), "materialized image");
 
     private ProcessReport Write(Image image, string? destinationPath, Stream? destination, ImageFormat format,
         StreamRefusal refusal, CancellationToken cancellationToken)
@@ -362,6 +393,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             throw new InvalidOperationException(
                 $"The stream pre-flight accepted a plan the compiler refused ({compiled.StreamRefusal}).");
 
+        _predictedBytes = compiled.Workspace.BoundedBytes;
         return CompiledPlanExecutor.CreateStreamChain(compiled, source, _options.Execute, _options.Region?.Pool);
     }
 
@@ -400,6 +432,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 Execute = _options.Execute,
             });
 
+            _predictedBytes = compiled.Workspace.BoundedBytes;
             var buffer = CompiledPlanExecutor.ExecuteFrame(compiled, current[0].Pixels.View,
                 _options.Region?.Pool, _options.Execute);
             var result = current.ReplaceBuffer(buffer);
@@ -427,7 +460,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 if (resize is not null)
                     throw new NotSupportedException(
                         "A region run supports operator steps before the resize only; run the rest on the returned image.");
-                steps.Add(new PlanStep(op.Operator));
+                steps.Add(new PlanStep(op.Operator, op.Lut));
                 continue;
             }
 

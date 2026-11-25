@@ -36,6 +36,9 @@ public sealed record ExecuteOptions
     /// </remarks>
     public bool AllowUnestimatedScratch { get; init; }
 
+    /// <summary>Optional reservation account for engine-managed working memory; null disables it.</summary>
+    public WorkspaceManager? Workspace { get; init; }
+
     /// <summary>
     /// Allow same-size steps to run fused in band windows (fewer full-size intermediates).
     /// <c>false</c> forces the historical step-by-step ping-pong; the reason is recorded in the

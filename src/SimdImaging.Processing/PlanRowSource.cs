@@ -17,6 +17,7 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
     private readonly ProcessingPlan _plan;
     private readonly IRowSource _source;
     private readonly ExecuteOptions _options;
+    private IDisposable? _workspaceLease;
     private readonly int _width;
     private readonly int _height;
     private readonly int _bandRows;
@@ -72,12 +73,24 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
         WorkingSetBudget.Ensure(steps, options, _width, _height, _width, maxWindowRows, source.Format, windows,
             extraBytes: 0, pathName: "Streaming");
 
-        _cache = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
-        _output = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
-        if (steps.Count > 1)
+        // Reserve before the allocations: a reservation refused after them would leave the buffers nobody can
+        // release, because a throwing constructor has no Dispose.
+        var windowBytes = (long)windows * _width * maxWindowRows * source.Format.BytesPerPixel();
+        _workspaceLease = options.Workspace?.Reserve(windowBytes, "stream windows");
+        try
         {
-            _scratchA = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
-            _scratchB = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
+            _cache = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
+            _output = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
+            if (steps.Count > 1)
+            {
+                _scratchA = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
+                _scratchB = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
+            }
+        }
+        catch
+        {
+            _workspaceLease?.Dispose();
+            throw;
         }
     }
 
@@ -185,6 +198,7 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
 
     public void Dispose()
     {
+        _workspaceLease?.Dispose();
         if (_disposed)
             return;
         _disposed = true;

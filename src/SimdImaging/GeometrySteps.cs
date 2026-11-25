@@ -45,12 +45,27 @@ internal static class GeometrySteps
                 new PixelRect(destination.X + region.X, destination.Y + region.Y, destination.Width,
                     destination.Height)).Clamp(sourceWidth, sourceHeight));
 
+    /// <summary>Applies the EXIF orientation as a geometry step; the metadata is set by the pipeline.</summary>
+    internal static GeometryDescriptor AutoOrient(ImageOrientation orientation) =>
+        new("auto-orient", (int)orientation >= 5 ? new SwappedSizeRule() : GeometryRule.SameSize,
+            (view, pool) => Orientation.AutoOrient(view, orientation, pool));
+
     internal static GeometryDescriptor Rotate90(bool clockwise) =>
         new("rotate90", new SwappedSizeRule(),
-            (view, pool) => Transforms.Rotate90(view, clockwise, pool));
+            (view, pool) => Transforms.Rotate90(view, clockwise, pool),
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
+                clockwise
+                    ? new PixelRect(destination.Y, sourceHeight - (destination.X + destination.Width),
+                        destination.Height, destination.Width)
+                    : new PixelRect(sourceWidth - (destination.Y + destination.Height), destination.X,
+                        destination.Height, destination.Width)).Clamp(sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor Rotate180() =>
-        new("rotate180", GeometryRule.SameSize, (view, pool) => Transforms.Rotate180(view, pool));
+        new("rotate180", GeometryRule.SameSize, (view, pool) => Transforms.Rotate180(view, pool),
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
+                new PixelRect(sourceWidth - (destination.X + destination.Width),
+                    sourceHeight - (destination.Y + destination.Height), destination.Width,
+                    destination.Height)).Clamp(sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor FlipHorizontal() =>
         new("flip-horizontal", GeometryRule.SameSize,
@@ -61,7 +76,10 @@ internal static class GeometrySteps
                     destination.Width, destination.Height)).Clamp(sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor FlipVertical() =>
-        new("flip-vertical", GeometryRule.SameSize, (view, pool) => Transforms.FlipVertical(view, pool));
+        new("flip-vertical", GeometryRule.SameSize, (view, pool) => Transforms.FlipVertical(view, pool),
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
+                new PixelRect(destination.X, sourceHeight - (destination.Y + destination.Height),
+                    destination.Width, destination.Height)).Clamp(sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor ResizeCanvas(int width, int height, Anchor anchor, RgbaColor background) =>
         new($"canvas {width}x{height}", new FixedSizeRule(width, height),

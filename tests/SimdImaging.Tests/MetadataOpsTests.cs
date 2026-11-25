@@ -118,6 +118,33 @@ public class MetadataOpsTests
     }
 
     [Fact]
+    public void AutoOrient_TwiceTurnsOnce()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"simd-orient-twice-{Guid.NewGuid():N}.jpg");
+        try
+        {
+            using (var source = Indexed(3, 2))
+            using (var stamped = source.WithMetadata(new ImageMetadata { Exif = ExifWithOrientation(6) }))
+            {
+                Image.Save(stamped, path);
+            }
+
+            using var loaded = Image.Load(path);
+            using var once = loaded.Pipe().AutoOrient().ToImage();
+            using var twice = loaded.Pipe().AutoOrient().AutoOrient().ToImage();
+
+            twice.Info.Orientation.ShouldBe(ImageOrientation.Normal);
+            twice.Width.ShouldBe(2);
+            twice.Height.ShouldBe(3);
+            twice.WritablePixels.ToArray().ShouldBe(once.WritablePixels.ToArray());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void AutoOrient_LeavesANormalImageAlone()
     {
         using var source = Indexed(4, 3);

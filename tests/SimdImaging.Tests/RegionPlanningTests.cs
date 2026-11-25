@@ -59,6 +59,39 @@ public sealed class RegionPlanningTests
     }
 
     [Fact]
+    public void Rotate90_MapsTheRegionToTheOtherAxis()
+    {
+        var recipe = Recipe(GeometrySteps.Rotate90(clockwise: true));
+        var plan = Compile(recipe, new CompileOptions
+        {
+            SourceWidth = 40,
+            SourceHeight = 30,
+            SourceFormat = WorkingFormat.Rgba8,
+            Region = new PixelRect(5, 4, 10, 8),
+        });
+
+        plan.StepInfo[0].SourceRegions[0].Region.ShouldBe(new PixelRect(4, 15, 8, 10));
+    }
+
+    [Fact]
+    public void Rotate180AndFlipVertical_MirrorBothOrOneAxis()
+    {
+        var rotate = Compile(Recipe(GeometrySteps.Rotate180()), new CompileOptions
+        {
+            SourceWidth = 40, SourceHeight = 30, SourceFormat = WorkingFormat.Rgba8,
+            Region = new PixelRect(5, 4, 10, 8),
+        });
+        rotate.StepInfo[0].SourceRegions[0].Region.ShouldBe(new PixelRect(25, 18, 10, 8));
+
+        var flip = Compile(Recipe(GeometrySteps.FlipVertical()), new CompileOptions
+        {
+            SourceWidth = 40, SourceHeight = 30, SourceFormat = WorkingFormat.Rgba8,
+            Region = new PixelRect(5, 4, 10, 8),
+        });
+        flip.StepInfo[0].SourceRegions[0].Region.ShouldBe(new PixelRect(5, 18, 10, 8));
+    }
+
+    [Fact]
     public void Pixelate_ReadsWholeBlocks()
     {
         var recipe = Recipe(PlanOps.Pixelate(8));
@@ -155,6 +188,20 @@ public sealed class RegionPlanningTests
         });
 
         plan.Explanation.ShouldContain(line => line.Contains("source port 0 7,7 14x14"));
+    }
+
+    [Fact]
+    public void ThePublicExplanation_ReportsTheRegionAndAmplification()
+    {
+        using var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
+        var plan = new ProcessingPlan().Add(PlanOps.GaussianBlur(1f));
+
+        var info = image.Explain(plan, new PixelRect(10, 10, 8, 8));
+
+        info.Count.ShouldBe(1);
+        info[0].Name.ShouldBe("GaussianBlur");
+        info[0].SourceRegions[0].Region.ShouldBe(new PixelRect(7, 7, 14, 14));
+        info[0].Amplification.ShouldBe(196.0 / 64.0, 1e-9);
     }
 
     private static PipelineRecipe Recipe(params object[] steps)

@@ -86,14 +86,25 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
         _chunkRows = workspace.ChunkRows;
         _ringRows = workspace.RingRows;
 
-        if (!workspace.IsNearest)
-        {
-            _ring = FloatScratch.Rent(checked(_ringRows * _destStride));
-            _staging = ArrayPool<byte>.Shared.Rent(checked(_chunkRows * _srcRowBytes));
-        }
-
-        _ready = WorkingBuffer.Rent(width, workspace.ReadyRows, _format);
+        // Reserve before the allocations: a reservation refused after them would leave the buffers nobody can
+        // release, because a throwing constructor has no Dispose.
         ResidentBytes = workspace.TotalBytes;
+        _workspaceLease = options.Workspace?.Reserve(ResidentBytes, "resize ring");
+        try
+        {
+            if (!workspace.IsNearest)
+            {
+                _ring = FloatScratch.Rent(checked(_ringRows * _destStride));
+                _staging = ArrayPool<byte>.Shared.Rent(checked(_chunkRows * _srcRowBytes));
+            }
+
+            _ready = WorkingBuffer.Rent(width, workspace.ReadyRows, _format);
+        }
+        catch
+        {
+            _workspaceLease?.Dispose();
+            throw;
+        }
     }
 
     public int Width => _destWidth;
@@ -103,6 +114,8 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
     /// <summary>Bytes this instance holds at once: ring, staging, output batch, source row and worker rows. The
     /// constructor sizes the chunk so this figure fits the budget; tests pin that invariant.</summary>
     internal long ResidentBytes { get; private set; }
+
+    private IDisposable? _workspaceLease;
 
     public WorkingFormat Format => _format;
 
@@ -289,6 +302,7 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
 
     public void Dispose()
     {
+        _workspaceLease?.Dispose();
         if (_disposed)
             return;
         _disposed = true;

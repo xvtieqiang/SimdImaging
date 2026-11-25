@@ -767,7 +767,8 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
 `IccTransform` 与 `ChromaResample` 作为 Global 步骤进入计划：前者整图解析一次 profile，scratch 按 8 MiB + 一行声明；
 后者自行内部分带、需要下一行色度，所以整图执行、不交给 band 适配器。`Bilateral`（含 `sigmaSpace` 重载）、
 `LocalLaplacian`（完整参数）、`EqualizeHistogram`、`ReplaceBackground` 与带 guide 的 `GuidedFilter`（Composite 步骤）也
-已迁移。唯一剩下的 `Geometry` barrier 是 `AutoOrient`：它需要 `Image` 的方向元数据，不是 view 的纯函数。
+已迁移。`AutoOrient` 也已离开 `Geometry` barrier：按当前方向追加一个 GeometryStep，pipeline 包装结果时把
+orientation 复位（§6.3.10）。
 
 ### 6.3.8 预算强制：编译执行器自己分配的那几帧
 
@@ -789,8 +790,9 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
   （默认 32）时收敛为总包围盒；`Clamp` 裁到图像内。
 - `IInputFootprint.MapSourceRegions` 取代单一 `MapSourceRect` 作为推导入口；Identity / Halo / WholeSource /
   BlockAligned / Fixed 五种。
-- 几何步带 `MapRegions`：Resize（按缩放比例 + 重采样核支持半径）、Crop（偏移）、Pad（负偏移）、FlipHorizontal
-  （镜像）；Rotate / Transpose / Warp / Affine / Perspective / 内容派生尺寸仍保守返回整图。
+- 几何步带 `MapRegions`：Resize（按缩放比例 + 重采样核支持半径）、Crop（偏移）、Pad（负偏移）、
+  FlipHorizontal / FlipVertical（镜像）、Rotate90 / Rotate180（换轴 + 镜像）；Transpose / RotateFlip / Rotate /
+  Warp / Affine / Perspective / 内容派生尺寸仍保守返回整图。
 - 每个 `OperatorStep` 的端口分别推导：主输入用算子 footprint，第二端口用 `InputPort.Footprint`（Composite / Blend /
   DrawImage / ApplyGainMap / GuidedFilter 已声明 Fixed）。
 - 编译器把每步的 `CompiledStepInfo`（输出尺寸/格式、各端口源矩形、读取面积、放大比）放进
@@ -798,8 +800,24 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
 - `RegionCost` 汇总整条链的源读取面积 / 输出面积；`CompileOptions.MaxRegionReadAmplification` 超限时把 Region
   后端拒绝为 `RegionRefusal.RegionCost`。
 
-仍保守的地方：Warp/Affine/旋转按整图；区域集合目前实际只产生单矩形（模型支持多矩形）；成本只用于拒绝 Region，
-没有拿它和 Frame/Stream/Tile 做成本比较；解释仍是内部字符串。
+仍保守的地方：Warp/Affine/Rotate 按整图；区域集合目前实际只产生单矩形（模型支持多矩形）；成本只用于拒绝 Region，
+没有拿它和 Frame/Stream/Tile 做成本比较。解释有两条出口：内部 `Explanation` 字符串，以及公开的
+`Image.Explain(plan, region)`，后者把同一份 `CompiledStepInfo` 投影成 `PlanStepExplanation`（尺寸、格式、每端口源矩形、
+读取面积与放大比）。
+
+### 6.3.10 编译入口、AutoOrient 与 WorkspaceManager
+
+- `Image.Apply` / `ApplyWithOptions` 现在把 `ProcessingPlan` 转成 Recipe（保留 `AddPointLut` 的表，尾部 resize 成为
+  GeometryStep），由 Compiler 生成段后交给 `CompiledPlanExecutor`。旧的 `ProcessingPlan.Execute` 仍作为公共 API 保留，
+  但两个 Apply 入口已统一。
+- `AutoOrient` 不再是 `Geometry` barrier：它按当前方向追加一个 GeometryStep，pipeline 在包装结果时把 orientation
+  置为 Normal。至此所有 view 算子都在计划/几何/格式步里。
+- `WorkspaceManager`（公开）是执行期预留账户：`Reserve(bytes, name)` 返回租约，记录并发峰值并在超过 limit 时拒绝。
+  `ExecuteOptions.Workspace` 传入；计划、流窗口、resize ring、tile 各自预留；`ImageTranscode` 使用调用方给的账户，
+  没有就为本次运行自建一个，`ProcessReport` 带 `PeakWorkingBytes` 与 `PredictedWorkingBytes`（编译期上界）。
+
+仍未统一：`Image.ProcessTo` / `ProcessRegion` / `ResizeRegion` 仍走 `ProcessingPlan`/`RegionExecutor`；WorkspaceManager
+没有 spool/物化缓存项，也没有把 M2–M4 的出口条件补验。
 
 ### 6.4 超限行为
 

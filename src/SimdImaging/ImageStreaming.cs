@@ -72,6 +72,14 @@ public enum ProcessMode : byte
 public readonly record struct ProcessReport(ProcessMode Mode, StreamRefusal Refusal, bool ReaderIsStreaming,
     bool EncoderIsStreaming, int Width, int Height, int RowsWritten, bool MetadataCarried)
 {
+    /// <summary>The peak engine-managed working set the run reserved; 0 when the run did not measure one. When the
+    /// caller supplied <see cref="ExecuteOptions.Workspace"/> through the transcode options, this is that account's
+    /// peak, which includes reservations made before the run.</summary>
+    public long PeakWorkingBytes { get; init; }
+
+    /// <summary>The compiler's upper-bound working-set prediction for the run; 0 when no compiled plan was involved.</summary>
+    public long PredictedWorkingBytes { get; init; }
+
     /// <summary>Every layer streamed: the plan, the decoder and the encoder.</summary>
     public bool FullyStreamed => Mode == ProcessMode.Streamed && ReaderIsStreaming && EncoderIsStreaming;
 }

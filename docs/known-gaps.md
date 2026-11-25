@@ -1262,21 +1262,23 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 
 ## 几何执行（M18）
 
-**P3 已完成**：除 `AutoOrient`（需要方向元数据，仍是 `Geometry` barrier）外，所有窗口算子都在计划、格式段或 Composite
-步骤里；反卷积的 halo 修正为 `2 × PSF 半径 × iterations`。
+**P3 已完成**：所有窗口算子都在计划、格式段或 Composite 步骤里，`AutoOrient` 也以 GeometryStep 进入 recipe
+（方向元数据在 pipeline 包装结果时复位）；反卷积的 halo 修正为 `2 × PSF 半径 × iterations`。
 - **多输入（Frame 版已落地，通用模型仍缺）**：`PlanOps.Composite` / `PlanOps.Blend` 以 `OpCategory.Composite`
   和两个端口进入计划，Frame 由内核捕获的 overlay 视图执行；`ImagePipeline.Composite/Blend` 已从 barrier 迁成步骤，
   overlay 必须活到 `ToImage`（xmldoc 写明），格式在调用时校验。Stream / Region 仍以 `CompositeStep` 拒绝。
   未做的部分：`PlanStep` / `ProcessingPlan` 没有真正的第二输入字段（overlay 是闭包捕获的 `PixelView`，没有逐端口
   footprint、没有所有权与生命周期托管），`DrawImage` / `Watermark` / `ApplyGainMap` 仍是 barrier。下一步要打开的
   是通用多输入执行（第二视图 + 每端口区域 + 生命周期），不是再加一个捕获式算子。
-- **统一预算（P4 部分完成）**：编译期用 `WorkspacePlan.BoundedBytes` 上界做第一道总门；执行期计划段、流窗口、
-  resize ring、格式帧、几何目标、tile 缓冲各自检查 `MaxWorkingBytes`。仍缺：跨阶段的单一执行期账户、spool/物化缓存、
-  以及实际峰值与预测值的报告对账。下一步是把这些项汇总到一个执行期预算对象。
-- **区域推导（P1 部分完成）**：已有 `SourceRegionSet`、反向逐段推导、Resize/Crop/Pad/Flip 反向映射、每个输入端口
-  的 footprint、区域成本与 `RegionCost` 拒绝、每步解释。仍缺：Warp/Affine/旋转的区域反推（当前整图）、真实的
-  多矩形集合、成本驱动的后端比较/切分、公开的结构化解释；`Image.Apply/ProcessTo/ProcessRegion` 仍走旧
-  `ProcessingPlan` 路径，没有统一到 Compiler。
+- **统一预算（P4 部分完成）**：编译期上界总门 + `WorkspaceManager` 预留账户（计划/流窗口/resize ring/tile），
+  `ProcessReport` 带预测与实测峰值。仍缺：spool/物化缓存项、M2–M4 出口条件、所有分配路径（FloatScratch/编码器）
+  的完整计量。
+- **区域推导（P1 部分完成）**：已有 `SourceRegionSet`、反向逐段推导、Resize/Crop/Pad/FlipVertical/FlipHorizontal/
+  Rotate90/Rotate180 反向映射、每个输入端口的 footprint、区域成本与 `RegionCost` 拒绝、公开的
+  `Image.Explain`（`PlanStepExplanation`：尺寸、格式、每端口源矩形、放大比）。仍缺：Transpose/RotateFlip/任意角
+  Rotate/Warp/Affine/Perspective 的区域反推（当前整图）、真实的多矩形集合、成本驱动的后端比较/切分；
+  `Image.Apply/ApplyWithOptions` 已统一到 Compiler，`ProcessTo/ProcessRegion/ResizeRegion` 仍走旧
+  `ProcessingPlan` 路径。
 - **Tile 后端（P5 第一刀已落地）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。未做：编码器端
   的 `IRegionSink` 实现（目前只有测试里的内存 Sink）、算子显式声明 `Partitioning.Tiles`（当前以 RowBands + halo 判定

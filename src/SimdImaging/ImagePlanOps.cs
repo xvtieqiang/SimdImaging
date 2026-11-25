@@ -1,6 +1,8 @@
 using System.ComponentModel;
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Compilation;
 
 namespace SimdImaging;
 
@@ -53,7 +55,7 @@ public sealed partial class Image
     {
         ArgumentNullException.ThrowIfNull(plan);
         ThrowIfMultiFrame();
-        return ReplaceBuffer(plan.Execute(this[0].Pixels.View, pool, observe));
+        return ApplyCompiled(plan, new ExecuteOptions(), pool, observe);
     }
 
     /// <summary>
@@ -74,7 +76,71 @@ public sealed partial class Image
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(options);
         ThrowIfMultiFrame();
-        return ReplaceBuffer(plan.ExecuteWithOptions(this[0].Pixels.View, options, pool, observe));
+        return ApplyCompiled(plan, options, pool, observe);
+    }
+
+    /// <summary>
+    /// The compiler's per-step explanation for this image and plan: output size/format, the source rectangles each
+    /// input port must read, and the read amplification. It compiles without executing.
+    /// </summary>
+    public IReadOnlyList<PlanStepExplanation> Explain(ProcessingPlan plan, PixelRect? region = null)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ThrowIfMultiFrame();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(plan.BandRows);
+
+        var compiled = PipelineCompiler.Compile(BuildRecipe(plan), new CompileOptions
+        {
+            SourceWidth = Width,
+            SourceHeight = Height,
+            SourceFormat = Format,
+            Sink = SinkCapabilities.None,
+            BandRows = plan.BandRows,
+            Region = region,
+            Execute = new ExecuteOptions(),
+        });
+
+        return compiled.StepInfo.Select(info => new PlanStepExplanation(
+            info.Name,
+            info.IsGeometry,
+            info.Width,
+            info.Height,
+            info.Format,
+            info.SourceRegions.Select(port => new PlanSourceRegion(port.Port, port.Region)).ToArray(),
+            info.SourceArea,
+            info.OutputArea)).ToArray();
+    }
+
+    private PipelineRecipe BuildRecipe(ProcessingPlan plan)
+    {
+        var builder = new PipelineRecipeBuilder();
+        foreach (var step in plan.Steps)
+            builder.Append(step.Definition, step.Lut);
+        if (plan.ResizeSpec is { } resize)
+            builder.Append(GeometrySteps.Resize(resize.Width, resize.Height, resize.Resampler));
+        return builder.Build();
+    }
+
+    /// <summary>
+    /// The one compiled entry behind both Apply overloads: the plan's steps become a Recipe, a trailing resize
+    /// becomes a geometry step, and the compiler produces the sections the frame executor runs. LUT steps keep their
+    /// table so consecutive point tables still fuse.
+    /// </summary>
+    private Image ApplyCompiled(ProcessingPlan plan, ExecuteOptions options, IPixelPool? pool, PlanObserver? observe)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(plan.BandRows);
+        var compiled = PipelineCompiler.Compile(BuildRecipe(plan), new CompileOptions
+        {
+            SourceWidth = Width,
+            SourceHeight = Height,
+            SourceFormat = Format,
+            Sink = SinkCapabilities.None,
+            BandRows = plan.BandRows,
+            Execute = options,
+            ObserveSteps = observe is not null,
+        });
+
+        return ReplaceBuffer(CompiledPlanExecutor.ExecuteFrame(compiled, this[0].Pixels.View, pool, options, observe));
     }
 
     /// <summary>

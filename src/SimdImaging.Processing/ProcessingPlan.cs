@@ -165,6 +165,10 @@ public sealed class ProcessingPlan
     /// <summary>Whether the plan ends with a size change.</summary>
     public bool HasResize => _resizeWidth > 0;
 
+    /// <summary>The trailing resize, for the compiled path; null when there is none.</summary>
+    internal (int Width, int Height, Resampler Resampler)? ResizeSpec =>
+        HasResize ? (_resizeWidth, _resizeHeight, _resizeResampler) : null;
+
     /// <summary>
     /// Ends the plan with a resize. Steps before it run at the source size, the resize changes it, and nothing may be
     /// added after — a plan with a resize <em>between</em> steps is not expressible yet (§6.7).
@@ -458,7 +462,8 @@ public sealed class ProcessingPlan
             : shape.HasCategoryBoundary ? FusionFallbackReason.CategoryBoundary
             : FusionFallbackReason.None;
 
-        if (options.MaxWorkingBytes > 0)
+        IDisposable? workspaceLease = null;
+        if (options.MaxWorkingBytes > 0 || options.Workspace is not null)
         {
             // One formula, shared with the public estimator: the previous private version counted only the buffers
             // the executor rents and never looked at PlanStep.Scratch, so a ceiling could pass a plan whose
@@ -466,17 +471,23 @@ public sealed class ProcessingPlan
             var estimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, execution,
                 bandRows, fused, options.MaxDegreeOfParallelism);
 
-            if (estimate.UndeclaredSteps > 0 && !options.AllowUnestimatedScratch)
-                throw new InvalidOperationException(
-                    $"The plan sets a {options.MaxWorkingBytes}-byte ceiling but {estimate.UndeclaredSteps} of its "
-                    + $"{execution.Count} steps declare no scratch, so the estimate ({estimate.PeakBytes} bytes) is "
-                    + "a lower bound and cannot enforce that ceiling. Declare the operator's scratch, raise the "
-                    + "ceiling, drop it, or set ExecuteOptions.AllowUnestimatedScratch to accept the lower bound.");
+            if (options.MaxWorkingBytes > 0)
+            {
+                if (estimate.UndeclaredSteps > 0 && !options.AllowUnestimatedScratch)
+                    throw new InvalidOperationException(
+                        $"The plan sets a {options.MaxWorkingBytes}-byte ceiling but {estimate.UndeclaredSteps} of " +
+                        $"its {execution.Count} steps declare no scratch, so the estimate ({estimate.PeakBytes} " +
+                        "bytes) is a lower bound and cannot enforce that ceiling. Declare the operator's scratch, " +
+                        "raise the ceiling, drop it, or set ExecuteOptions.AllowUnestimatedScratch to accept the " +
+                        "lower bound.");
 
-            if (estimate.PeakBytes > options.MaxWorkingBytes)
-                throw new InvalidOperationException(
-                    $"The plan would need an estimated {estimate.PeakBytes} bytes of working set, above the " +
-                    $"{options.MaxWorkingBytes}-byte ceiling in ExecuteOptions.MaxWorkingBytes.");
+                if (estimate.PeakBytes > options.MaxWorkingBytes)
+                    throw new InvalidOperationException(
+                        $"The plan would need an estimated {estimate.PeakBytes} bytes of working set, above the " +
+                        $"{options.MaxWorkingBytes}-byte ceiling in ExecuteOptions.MaxWorkingBytes.");
+            }
+
+            workspaceLease = options.Workspace?.Reserve(estimate.PeakBytes, "plan");
         }
 
         var counting = options.Diagnostics ? new CountingPool(pool ?? ArrayPixelPool.Shared) : null;
@@ -578,9 +589,11 @@ public sealed class ProcessingPlan
             pending = null;
             owned?.Dispose();
             owned = null;
+            workspaceLease?.Dispose();
             throw;
         }
 
+        workspaceLease?.Dispose();
         if (options.Diagnostics)
         {
             report = new PlanReport
