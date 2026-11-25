@@ -202,10 +202,8 @@ public sealed class CompiledBackendsTests
     [Fact]
     public void CompositeSteps_AreRefusedByStreamAndRegion()
     {
-        var composite = new ProcessingPlan()
-            .Add("composite", OpCategory.Composite, (_, _, _, _) => { })
-            .Steps[0].Definition;
-        var recipe = Recipe(composite);
+        using var overlay = TestImages.Gradient(8, 8, WorkingFormat.Rgba8);
+        var recipe = Recipe(PlanOps.Composite(overlay[0].Pixels.View, 2, 2));
 
         var stream = Compile(recipe, 32, 32, WorkingFormat.Rgba8, stream: true);
         stream.StreamRefusal.ShouldBe(StreamRefusal.CompositeStep);

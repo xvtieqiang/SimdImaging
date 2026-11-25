@@ -444,23 +444,31 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     // needs the image's own size or metadata; deleting the facade methods means finishing this list.
 
     /// <summary>Alpha-composites another image over this one.</summary>
+    /// <summary>Composites <paramref name="overlay"/> over the image at (<paramref name="x"/>, <paramref name="y"/>).</summary>
+    /// <remarks>The overlay is read when the chain runs, not here: keep it alive until <see cref="ToImage"/>. Its
+    /// format must match the image at this point in the chain.</remarks>
     public ImagePipeline Composite(Image overlay, int x, int y, PorterDuff mode = PorterDuff.SourceOver)
     {
         ArgumentNullException.ThrowIfNull(overlay);
-        return Reshape(v =>
-        {
-            if (v.Format != overlay.Format)
-                throw new ArgumentException($"The overlay is {overlay.Format} but this image is {v.Format}.", nameof(overlay));
-
-            return mode == PorterDuff.SourceOver
-                ? AlphaOps.Composite(v, overlay[0].Pixels.View, x, y, _pool)
-                : AlphaOps.Composite(v, overlay[0].Pixels.View, x, y, mode, _pool);
-        });
+        EnsureOverlayFormat(overlay);
+        return Step(PlanOps.Composite(overlay[0].Pixels.View, x, y, mode));
     }
 
-    /// <summary>Blends another image over this one at an offset.</summary>
-    public ImagePipeline Blend(Image overlay, int x, int y, BlendMode mode) =>
-        Reshape(v => Processing.Blend.Apply(v, overlay[0].Pixels.View, x, y, mode, _pool));
+    /// <summary>Blends <paramref name="overlay"/> over the image at (<paramref name="x"/>, <paramref name="y"/>).</summary>
+    /// <remarks>Same lifetime and format rules as <see cref="Composite"/>.</remarks>
+    public ImagePipeline Blend(Image overlay, int x, int y, BlendMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(overlay);
+        EnsureOverlayFormat(overlay);
+        return Step(PlanOps.Blend(overlay[0].Pixels.View, x, y, mode));
+    }
+
+    private void EnsureOverlayFormat(Image overlay)
+    {
+        var format = _current?.Format ?? _source.Format;
+        if (overlay.Format != format)
+            throw new ArgumentException($"The overlay is {overlay.Format} but this image is {format}.", nameof(overlay));
+    }
 
     /// <summary>Applies a gain map, as an HDR image carries alongside its base.</summary>
     public ImagePipeline ApplyGainMap(Image gainMap, float headroom = 4f, float weight = 1f) =>

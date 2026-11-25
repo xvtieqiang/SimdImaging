@@ -26,9 +26,9 @@ public static class PlanOps
         WorkspaceModel workspace, KernelImplementations kernels,
         WorkingFormatMask formats = WorkingFormatMask.All, ExecutionRequirements? requirements = null,
         PassModel pass = PassModel.Single, PixelSemantics? semantics = null,
-        int? haloX = null, int? haloY = null) =>
+        int? haloX = null, int? haloY = null, InputPort? input = null, InputPort? input2 = null) =>
         new(OperatorContract.Create(name, category, formats, footprint, workspace, requirements, pass, semantics,
-                haloX: haloX, haloY: haloY),
+                input: input, input2: input2, haloX: haloX, haloY: haloY),
             kernels);
 
     /// <summary>
@@ -124,6 +124,14 @@ public static class PlanOps
         format == WorkingFormat.Rgba16 && (long)width * height >= PointOps.Lut16PixelFloor
             ? 4L * 65536 * sizeof(ushort)
             : 0L;
+
+    private static WorkingFormatMask FormatMask(WorkingFormat format) => format switch
+    {
+        WorkingFormat.Rgba8 => WorkingFormatMask.Rgba8,
+        WorkingFormat.Rgba16 => WorkingFormatMask.Rgba16,
+        WorkingFormat.Rgba32F => WorkingFormatMask.Rgba32F,
+        _ => WorkingFormatMask.None,
+    };
 
     /// <summary>
     /// A neighbourhood step that keeps a number of float planes proportional to its halo: the separable blurs
@@ -320,6 +328,34 @@ public static class PlanOps
             : Neighborhood(nameof(FilterOps.Morph), radius, v => FilterOps.Morph(v, radius, kind == Abstractions.Morphology.Erode),
             // The separable passes hold the horizontal result plus its transpose: two extra frames.
             (width, height, _, _) => 2L * width * height * 4);
+
+    /// <summary>
+    /// Porter-Duff composition of <paramref name="overlay"/> at (<paramref name="x"/>, <paramref name="y"/>).
+    /// The overlay is read when the step runs, so it must stay alive until the plan or pipeline executes.
+    /// </summary>
+    public static ImageOp Composite(PixelView overlay, int x, int y, PorterDuff mode = PorterDuff.SourceOver)
+    {
+        var formats = FormatMask(overlay.Format);
+        return Create(nameof(AlphaOps.Composite), OpCategory.Composite, WholeSourceFootprint.Instance,
+            WorkspaceModel.Of((_, _, _, _) => 2L * overlay.Width * 4 * sizeof(float), WorkspaceScope.WholeImage),
+            new KernelImplementations(PlanSteps.Composite(overlay, x, y, mode)),
+            formats, ExecutionRequirements.WholeImage,
+            input: new InputPort("source", PortRole.Source, formats, Required: true),
+            input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true));
+    }
+
+    /// <summary>W3C blend of <paramref name="overlay"/> at (<paramref name="x"/>, <paramref name="y"/>); same
+    /// lifetime rule as <see cref="Composite"/>.</summary>
+    public static ImageOp Blend(PixelView overlay, int x, int y, BlendMode mode)
+    {
+        var formats = FormatMask(overlay.Format);
+        return Create(nameof(Processing.Blend), OpCategory.Composite, WholeSourceFootprint.Instance,
+            WorkspaceModel.Of((_, _, _, _) => 2L * overlay.Width * 4 * sizeof(float), WorkspaceScope.WholeImage),
+            new KernelImplementations(PlanSteps.BlendOverlay(overlay, x, y, mode)),
+            formats, ExecutionRequirements.WholeImage,
+            input: new InputPort("source", PortRole.Source, formats, Required: true),
+            input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true));
+    }
 
     /// <summary>Warm or cool shift.</summary>
     /// <param name="amount">Positive warms, negative cools.</param>

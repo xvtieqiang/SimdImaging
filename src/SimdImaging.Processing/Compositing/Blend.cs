@@ -15,11 +15,21 @@ public static class Blend
     public static WorkingBuffer Apply(PixelView background, PixelView overlay, int x, int y, BlendMode mode,
         IPixelPool? pool = null)
     {
-        if (x < 0 || y < 0 || x + overlay.Width > background.Width || y + overlay.Height > background.Height)
-            throw new ArgumentException(
-                $"A {overlay.Width}x{overlay.Height} overlay at ({x},{y}) does not fit in {background.Width}x{background.Height}.", nameof(overlay));
-
+        ValidateOverlay(background, overlay, x, y);
         var destination = Transforms.Copy(background, pool);
+        ApplyInto(background, overlay, x, y, mode, destination.View);
+        return destination;
+    }
+
+    /// <summary>
+    /// The same blend written into <paramref name="destination"/>, whose bytes outside the overlay rectangle are
+    /// expected to already hold the background. The plan adapter seeds the destination first, so no transient full
+    /// frame is needed. <paramref name="background"/> and <paramref name="destination"/> may be the same view.
+    /// </summary>
+    internal static void ApplyInto(PixelView background, PixelView overlay, int x, int y, BlendMode mode,
+        PixelView destination)
+    {
+        ValidateOverlay(background, overlay, x, y);
         var bytesPerPixel = background.Format.BytesPerPixel();
         var overlayRow = new float[overlay.Width * 4];
         var backgroundRow = new float[overlay.Width * 4];
@@ -28,7 +38,7 @@ public static class Blend
         for (var row = 0; row < overlay.Height; row++)
         {
             Pixels.ReadRowRaw(overlay.Row(row), overlay.Width, overlay.Format, overlayRow);
-            var destinationBytes = destination.View.Row(y + row).Slice(x * bytesPerPixel, overlay.Width * bytesPerPixel);
+            var destinationBytes = destination.Row(y + row).Slice(x * bytesPerPixel, overlay.Width * bytesPerPixel);
             Pixels.ReadRowRaw(destinationBytes, overlay.Width, background.Format, backgroundRow);
 
             for (var i = 0; i < overlay.Width * 4; i += 4)
@@ -59,8 +69,14 @@ public static class Blend
 
             Pixels.WriteRowRaw(backgroundRow, overlay.Width, background.Format, destinationBytes);
         }
+    }
 
-        return destination;
+    private static void ValidateOverlay(PixelView background, PixelView overlay, int x, int y)
+    {
+        if (x < 0 || y < 0 || x + overlay.Width > background.Width || y + overlay.Height > background.Height)
+            throw new ArgumentException(
+                $"A {overlay.Width}x{overlay.Height} overlay at ({x},{y}) does not fit in " +
+                $"{background.Width}x{background.Height}.", nameof(overlay));
     }
 
     private static void BlendPixel(BlendMode mode, ReadOnlySpan<float> backdrop, ReadOnlySpan<float> source, Span<float> result)

@@ -90,6 +90,7 @@ internal sealed class OperatorContract
         PassModel pass = PassModel.Single,
         PixelSemantics? semantics = null,
         InputPort? input = null,
+        InputPort? input2 = null,
         OutputPort? output = null,
         GeometryRule? geometry = null,
         int? haloX = null,
@@ -124,6 +125,11 @@ internal sealed class OperatorContract
                 $"The point operator '{name}' reads a {footprint.Describe} footprint; a point step reads one pixel.",
                 nameof(footprint));
 
+        if (input2 is not null && category != OpCategory.Composite)
+            throw new ArgumentException(
+                $"The '{name}' operator declares a second input but is {category}; only a Composite step reads two.",
+                nameof(input2));
+
         var resolvedRequirements = requirements ?? (category is OpCategory.Global or OpCategory.Composite
             ? ExecutionRequirements.WholeImage
             : ExecutionRequirements.RowBands);
@@ -146,11 +152,14 @@ internal sealed class OperatorContract
                 "crosses band boundaries, so no constant window is correct until a block-aware executor exists.",
                 nameof(requirements));
 
+        var primary = input ?? new InputPort("source", PortRole.Source, formats, Required: true);
+        var inputs = input2 is { } overlay ? new[] { primary, overlay } : new[] { primary };
+
         return new OperatorContract(
             name,
             category,
             formats,
-            [input ?? new InputPort("source", PortRole.Source, formats, Required: true)],
+            inputs,
             output ?? new OutputPort("output", SameSize: true, SameFormat: true),
             geometry ?? GeometryRule.SameSize,
             footprint,

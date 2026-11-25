@@ -67,11 +67,22 @@ public static class AlphaOps
     public static WorkingBuffer Composite(PixelView background, PixelView overlay, int x, int y, PorterDuff mode,
         IPixelPool? pool = null)
     {
-        if (x < 0 || y < 0 || x + overlay.Width > background.Width || y + overlay.Height > background.Height)
-            throw new ArgumentException(
-                $"A {overlay.Width}x{overlay.Height} overlay at ({x},{y}) does not fit in {background.Width}x{background.Height}.", nameof(overlay));
-
+        ValidateOverlay(background, overlay, x, y);
         var destination = Transforms.Copy(background, pool);
+        CompositeInto(background, overlay, x, y, mode, destination.View);
+        return destination;
+    }
+
+    /// <summary>
+    /// The same composition written into <paramref name="destination"/>, whose bytes outside the overlay rectangle
+    /// are expected to already hold the background. A plan step seeds the destination with the source and calls
+    /// this, so it does not need a transient full frame. <paramref name="background"/> and
+    /// <paramref name="destination"/> may be the same view.
+    /// </summary>
+    internal static void CompositeInto(PixelView background, PixelView overlay, int x, int y, PorterDuff mode,
+        PixelView destination)
+    {
+        ValidateOverlay(background, overlay, x, y);
         var bytesPerPixel = background.Format.BytesPerPixel();
         var overlayRow = new float[overlay.Width * 4];
         var backgroundRow = new float[overlay.Width * 4];
@@ -79,7 +90,7 @@ public static class AlphaOps
         for (var row = 0; row < overlay.Height; row++)
         {
             Pixels.ReadRowPremultiplied(overlay.Row(row), overlay.Width, overlay.Format, overlayRow);
-            var destinationBytes = destination.View.Row(y + row).Slice(x * bytesPerPixel, overlay.Width * bytesPerPixel);
+            var destinationBytes = destination.Row(y + row).Slice(x * bytesPerPixel, overlay.Width * bytesPerPixel);
             Pixels.ReadRowPremultiplied(destinationBytes, overlay.Width, background.Format, backgroundRow);
 
             for (var i = 0; i < overlay.Width * 4; i += 4)
@@ -96,8 +107,14 @@ public static class AlphaOps
 
             Pixels.WriteRowUnpremultiplied(backgroundRow, overlay.Width, background.Format, destinationBytes);
         }
+    }
 
-        return destination;
+    private static void ValidateOverlay(PixelView background, PixelView overlay, int x, int y)
+    {
+        if (x < 0 || y < 0 || x + overlay.Width > background.Width || y + overlay.Height > background.Height)
+            throw new ArgumentException(
+                $"A {overlay.Width}x{overlay.Height} overlay at ({x},{y}) does not fit in " +
+                $"{background.Width}x{background.Height}.", nameof(overlay));
     }
 
     private static (float Source, float Destination) Factors(PorterDuff mode, float sa, float da) => mode switch

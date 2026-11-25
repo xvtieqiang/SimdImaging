@@ -198,6 +198,30 @@ internal static class PlanSteps
         };
     }
 
+    /// <summary>
+    /// Adapts a Porter-Duff composition. The executor's destination starts uninitialised, and composition reads
+    /// the background, so the source is copied into it first and the overlay rectangle is blended in place.
+    /// Composite steps are whole-image (never banded), which is why one full copy is the correct cost here.
+    /// </summary>
+    public static OpKernel Composite(PixelView overlay, int x, int y, PorterDuff mode)
+    {
+        return (source, destination, _, _) =>
+        {
+            CopyRows(source, 0, destination, 0, source.Height);
+            AlphaOps.CompositeInto(destination, overlay, x, y, mode, destination);
+        };
+    }
+
+    /// <summary>The same adapter for a W3C blend mode.</summary>
+    public static OpKernel BlendOverlay(PixelView overlay, int x, int y, BlendMode mode)
+    {
+        return (source, destination, _, _) =>
+        {
+            CopyRows(source, 0, destination, 0, source.Height);
+            Blend.ApplyInto(destination, overlay, x, y, mode, destination);
+        };
+    }
+
     private static void CopyRows(PixelView from, int fromRow, PixelView to, int toRow, int rows)
     {
         for (var y = 0; y < rows; y++)

@@ -1262,12 +1262,12 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 
 ## 几何执行（M18）
 
-- **Alpha Composite / 多输入（P2 缺口）**：`OperatorContract.Inputs` 能声明第二个端口，但 `PlanStep` /
-  `ProcessingPlan` / 三个执行器都只有一个源。`ImagePipeline.Composite` / `Blend` / `DrawImage` 仍是 barrier（它们
-  需要一个 `Image` 活到执行时）。编译器对 `OpCategory.Composite` 的步骤在 Stream / Region 都返回 `CompositeStep`，
-  Frame 也没有执行体；`CompiledBackendsTests.CompositeSteps_AreRefusedByStreamAndRegion` 是这条缺口的标记。
-  下一步：给 `PlanStep` 一个第二输入（`PixelView` + 生命周期）、一个多输入 kernel 形状，先在 Frame 落地
-  `Composite` / `Blend`，再把它们从 barrier 迁进 recipe。
+- **多输入（Frame 版已落地，通用模型仍缺）**：`PlanOps.Composite` / `PlanOps.Blend` 以 `OpCategory.Composite`
+  和两个端口进入计划，Frame 由内核捕获的 overlay 视图执行；`ImagePipeline.Composite/Blend` 已从 barrier 迁成步骤，
+  overlay 必须活到 `ToImage`（xmldoc 写明），格式在调用时校验。Stream / Region 仍以 `CompositeStep` 拒绝。
+  未做的部分：`PlanStep` / `ProcessingPlan` 没有真正的第二输入字段（overlay 是闭包捕获的 `PixelView`，没有逐端口
+  footprint、没有所有权与生命周期托管），`DrawImage` / `Watermark` / `ApplyGainMap` 仍是 barrier。下一步要打开的
+  是通用多输入执行（第二视图 + 每端口区域 + 生命周期），不是再加一个捕获式算子。
 - **Tile 后端未实现（P1 只拒绝）**：编译器已能识别 Tile 请求并给出 `TileRefusal`（`NoRegionSink` /
   `BlockAlignedOperator` / `GlobalStep` / `CompositeStep` / `NotTileable`），但没有任何 Sink 实现
   `RandomRegionWrite`，也没有算子声明 `Partitioning.Tiles`。复访条件：先定义 `IRegionSink`（随机区域写入 + 生命周期），

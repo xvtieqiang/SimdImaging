@@ -906,11 +906,13 @@
   SimdImaging.Processing.PlanObserver.Invoke(System.Int32 index, System.String name, SimdImaging.Abstractions.PixelView result) -> System.Void
   SimdImaging.Processing.PlanOps.AdaptiveThreshold(System.Int32 radius, System.Single offset) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Bilateral(System.Int32 radius, System.Single sigmaRange) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Blend(SimdImaging.Abstractions.PixelView overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.BlendMode mode) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BokehBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BoxBlur(System.Int32 radius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Brightness(System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Clahe(System.Int32 tilesX, System.Int32 tilesY, System.Single clipLimit) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Close3x3() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Composite(SimdImaging.Abstractions.PixelView overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.PorterDuff mode) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Contrast(System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Convolve(System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Curves(System.ReadOnlySpan<SimdImaging.Processing.CurvePoint> points) -> SimdImaging.Processing.ImageOp
