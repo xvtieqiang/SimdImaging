@@ -68,6 +68,8 @@ public sealed class ContractConformanceTests
         new("delinearize", () => PlanOps.Delinearize(), WorkingFormatMask.All, InputFootprintKind.Identity),
         new("color-blindness", () => PlanOps.ColorBlindness(severity: 0.8f), WorkingFormatMask.All,
             InputFootprintKind.Identity),
+        new("replace-background", () => PlanOps.ReplaceBackground(new RgbaColor(0, 0, 0, 255),
+            new RgbaColor(255, 255, 255, 255)), WorkingFormatMask.All, InputFootprintKind.Identity),
 
         // Neighbourhood: a constant halo, except the general convolution, which also needs the whole image for
         // its Mirror/Wrap borders while still widening the band by its radius.

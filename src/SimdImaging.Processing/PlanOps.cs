@@ -488,6 +488,12 @@ public static class PlanOps
     public static ImageOp ChannelSwap(int redSource, int greenSource, int blueSource) =>
         Point(nameof(PointOps.ChannelSwap), v => PointOps.ChannelSwap(v, redSource, greenSource, blueSource));
 
+    /// <summary>Replaces pixels near <paramref name="background"/> with <paramref name="replacement"/>.</summary>
+    public static ImageOp ReplaceBackground(RgbaColor background, RgbaColor replacement, float tolerance = 0.1f,
+        float feather = 0.05f) =>
+        Point(nameof(BackgroundOps.ReplaceBackground),
+            v => BackgroundOps.ReplaceBackground(v, background, replacement, tolerance, feather));
+
     /// <summary>Luma threshold to black and white.</summary>
     public static ImageOp BlackWhite(float threshold = 0.5f, bool bt709 = false) =>
         Point(nameof(PointOps.BlackWhite), v => PointOps.BlackWhite(v, threshold, bt709));
@@ -695,7 +701,12 @@ public static class PlanOps
 
     /// <summary>Edge-preserving bilateral filter; its window is the radius.</summary>
     public static ImageOp Bilateral(int radius, float sigmaRange = 0.1f) =>
-        Neighborhood(nameof(FilterOps.Bilateral), radius, v => FilterOps.Bilateral(v, radius, 0f, sigmaRange));
+        Bilateral(radius, 0f, sigmaRange);
+
+    /// <summary>Bilateral with an explicit spatial sigma; the support is still the radius.</summary>
+    public static ImageOp Bilateral(int radius, float sigmaSpace, float sigmaRange) =>
+        Neighborhood(nameof(FilterOps.Bilateral), radius,
+            v => FilterOps.Bilateral(v, radius, sigmaSpace, sigmaRange));
 
     /// <summary>Directional blur; its taps span half the length either side.</summary>
     public static ImageOp MotionBlur(int length, float angleDegrees = 0f) =>
@@ -712,6 +723,25 @@ public static class PlanOps
             // it makes up front. Both terms are read off GuidedFilterOps, not assumed.
             (width, height, rows, format) =>
                 ((long)(rows + (2 * radius)) * width * 20) + ((long)width * height * format.BytesPerPixel()));
+
+    /// <summary>
+    /// Guided filter with an explicit guide image. The guide is read when the step runs, so keep it alive until the
+    /// chain executes; the step is a Composite one and only Frame runs it.
+    /// </summary>
+    public static ImageOp GuidedFilter(PixelView guide, int radius = 4, float epsilon = 1e-4f, int bandRows = 128)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
+        return Create("guided-by", OpCategory.Composite, new HaloFootprint(radius, radius),
+            WorkspaceModel.Of((width, height, rows, format) =>
+                ((long)(rows + (2 * radius)) * width * 20) + ((long)width * height * format.BytesPerPixel()),
+                WorkspaceScope.WholeImage),
+            new KernelImplementations(PlanSteps.Neighborhood(
+                v => GuidedFilterOps.GuidedFilter(v, guide, radius, epsilon, bandRows), radius, radius)),
+            WorkingFormatMask.All, ExecutionRequirements.WholeImage,
+            input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
+            input2: new InputPort("guide", PortRole.Guide, WorkingFormatMask.All, Required: true));
+    }
 
     /// <summary>
     /// Non-local means. Each output compares patches of radius <paramref name="patchRadius"/> inside a search
@@ -746,8 +776,10 @@ public static class PlanOps
             pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 
     /// <summary>Local Laplacian: a pyramid, so every band would need the whole image anyway.</summary>
-    public static ImageOp LocalLaplacian(int levels = 5, int samples = 32) =>
-        Global(nameof(LocalLaplacianOps.LocalLaplacian), v => LocalLaplacianOps.LocalLaplacian(v, levels, samples),
+    public static ImageOp LocalLaplacian(int levels = 5, int samples = 32, float alpha = 0.25f, float beta = 1f,
+        float sigmaR = 0.15f) =>
+        Global(nameof(LocalLaplacianOps.LocalLaplacian),
+            v => LocalLaplacianOps.LocalLaplacian(v, levels, samples, alpha, beta, sigmaR),
             (width, height, _, _) => LocalLaplacianOps.ScratchBytes(width, height, levels, samples),
             pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 

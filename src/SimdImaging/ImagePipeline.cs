@@ -113,7 +113,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>Edge-preserving bilateral filter.</summary>
     public ImagePipeline Bilateral(int radius = 2, float sigmaSpace = 0f, float sigmaRange = 0.1f) =>
-        Reshape(v => FilterOps.Bilateral(v, radius, sigmaSpace, sigmaRange, _pool));
+        Step(PlanOps.Bilateral(radius, sigmaSpace, sigmaRange));
 
 
 
@@ -125,7 +125,8 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     public ImagePipeline GuidedFilter(Image guide, int radius = 4, float epsilon = 1e-4f, int bandRows = 128)
     {
         ArgumentNullException.ThrowIfNull(guide);
-        return Reshape(v => GuidedFilterOps.GuidedFilter(v, guide[0].Pixels.View, radius, epsilon, bandRows, _pool));
+        EnsureOverlayFormat(guide);
+        return Step(PlanOps.GuidedFilter(guide[0].Pixels.View, radius, epsilon, bandRows));
     }
 
 
@@ -135,7 +136,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     /// <summary>Local Laplacian. Runs whole-image; costs one intermediate.</summary>
     public ImagePipeline LocalLaplacian(int levels = 5, int samples = 32, float alpha = 0.25f, float beta = 1f,
         float sigmaR = 0.15f) =>
-        Reshape(v => LocalLaplacianOps.LocalLaplacian(v, levels, samples, alpha, beta, sigmaR, _pool));
+        Step(PlanOps.LocalLaplacian(levels, samples, alpha, beta, sigmaR));
 
 
 
@@ -322,8 +323,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         Step(PlanOps.ToneMap(curve, exposure, whitePoint, autoExposure, targetLuminance));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
-    public ImagePipeline EqualizeHistogram() =>
-        Reshape(v => HistogramOps.Equalize(v, _pool));
+    public ImagePipeline EqualizeHistogram() => Step(PlanOps.Equalize());
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline AutoOrient() =>
@@ -411,7 +411,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ReplaceBackground(RgbaColor background, RgbaColor replacement, float tolerance = 0.1f, float feather = 0.05f) =>
-        Reshape(v => BackgroundOps.ReplaceBackground(v, background, replacement, tolerance, feather, _pool));
+        Step(PlanOps.ReplaceBackground(background, replacement, tolerance, feather));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ColorBlindness(ColorVisionDeficiency kind = ColorVisionDeficiency.Protanopia, float severity = 1f, bool correct = false) =>

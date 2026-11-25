@@ -133,6 +133,18 @@ public sealed class CompositeStepTests
     }
 
     [Fact]
+    public void GuidedFilterWithAGuide_MatchesTheDirectCall()
+    {
+        using var source = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
+        using var guide = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
+
+        using var expected = GuidedFilterOps.GuidedFilter(source[0].Pixels.View, guide[0].Pixels.View, 2);
+        using var actual = source.Pipe().GuidedFilter(guide, 2).ToImage();
+
+        Rows(actual[0].Pixels.View).ShouldBe(Rows(expected.View));
+    }
+
+    [Fact]
     public void DrawImageAsAPlanStep_MatchesTheDirectChain()
     {
         using var background = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
