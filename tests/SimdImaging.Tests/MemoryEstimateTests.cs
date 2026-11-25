@@ -1,4 +1,5 @@
 using SimdImaging.Processing;
+using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Tests;
 
@@ -165,6 +166,42 @@ public class MemoryEstimateTests : IDisposable
         fused.PlanScratchBytes.ShouldBe(2 * workers * window);
         fused.PeakBytes.ShouldBe(full + full + 2 * workers * window);
         fused.PeakBytes.ShouldBeGreaterThan(unfused.PeakBytes);
+    }
+
+    [Theory]
+    [InlineData(0, 2)]
+    [InlineData(20, 10)]
+    public void Dehaze_DeclaresAtLeastWhatItRents(int refineRadius, int planes)
+    {
+        // The declaration is the only thing standing between MaxWorkingBytes and a lie, and nothing checked it
+        // against the rentals. Dehaze's said three planes while its refinement held ten, so a 1080p plan under a
+        // 64 MiB ceiling could pass the estimate and then use 58 MiB more than it promised.
+        const int width = 160;
+        const int height = 120;
+
+        using var image = Image.Create(width, height, WorkingFormat.Rgba8);
+        var op = PlanOps.Dehaze(refineRadius: refineRadius);
+        var declared = op.Scratch!(width, height, height, WorkingFormat.Rgba8);
+        declared.ShouldBeGreaterThanOrEqualTo(planes * (long)width * height * sizeof(float));
+
+        // One thread and one pool: FloatScratch is thread-local, so a worker's rent is invisible to this reading.
+        var previousDegree = RowParallel.DegreeOverride;
+        RowParallel.DegreeOverride = 1;
+        try
+        {
+            MemoryBudget.Trim();
+            FloatScratch.ResetForTests();
+            using var result = new ProcessingPlan().Add(op).Execute(image[0].Pixels.View);
+
+            FloatScratch.PeakLiveBytes.ShouldBeGreaterThanOrEqualTo(planes * (long)width * height * sizeof(float));
+            declared.ShouldBeGreaterThanOrEqualTo(FloatScratch.PeakLiveBytes,
+                $"declared {declared}, rented {FloatScratch.PeakLiveBytes}");
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previousDegree;
+            MemoryBudget.ResetForTests();
+        }
     }
 
     [Fact]

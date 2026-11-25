@@ -489,7 +489,10 @@ Save:
 | 3×3 ×3 | 0.41× | 0.35× | 0.37× | 0.50× | 同上 |
 | 模糊 σ=3 + 2 点 | 1.10× | 0.99× | 0.94× | 1.32× | 算术是主成本；8K 慢 32%，但省下 127 MiB |
 
-规则：**含小核（halo ≤ 2，即 3×3 家族）就融合**；否则只在「逐步要物化的整图中转超过 64 MiB」时融合。
+规则：**没有 halo 的链直接融合**（没有窗口要重算，只省一张整图）；有 halo 的链只在「同一执行段内被融合省下的整图中转、
+按源格式每像素字节计，超过 64 MiB」时融合。两个乘数都曾经写错：字节数固定按 4 算（`Rgba16` 少算一半、`Rgba32F` 少算
+四分之三），中间图数按 `步数 − 1` 算（`Global` 步会把链切开、每段各自融合，只有段内步数才算数）。2026-11-25 起按
+连续可带步骤段（与 `FusionPlanner` 同一规则，但不分配分段表）和 `source.Format.BytesPerPixel()` 计算。
 不融合时按**核数**而非融合窗口切带（`StepwiseBandCount`），否则 360 行的图只切出 3 带、只用 3 个核。
 
 峰值与总分配量实测（`peakmem` 模式，独立子进程，`ForceFusion=true` vs `AllowFusion=false`，三次取中位）。
@@ -866,7 +869,8 @@ sourcePeak   ≈ 一个段缓冲（复用）
 `ImageTranscode.From(sourcePath).Resize(width, height, resampler)`：**只有一步 resize**，不碰 plan。
 
 - 输出与 `Load → Resize` 逐字节相同（同一权重表、同一 clamp、同一累加序）。
-- 内存：`(taps+2) × destW × 4` 的 ring + 一个带的字节暂存，与源高度无关。
+- 内存：ring（`taps + chunk + 2` 行目标宽浮点）+ staging（`chunk` 行源字节）+ 输出批 + 一行源 + 每 worker 一行浮点，
+  与源高度无关；预算是一个账本，超出时先缩 chunk 再拒绝（见 §6.7.3）。
 - 判据：8K→1080p 峰值 ≤ 64 MiB，吞吐 ≥ `Resize` 的 0.8×；达不到就说明并行喂料没做对，先修它再谈 plan。
 - 通过后再做尺寸变换与 plan 接线（M18 主体）。
 
@@ -878,15 +882,19 @@ sourcePeak   ≈ 一个段缓冲（复用）
 |---|---|
 | 逐字节 | 4 尺寸 × 2 深度 × 5 滤波器共 **40 组**，全部与 `Resample.Resize` 相同；8K→1080p 的 PNG 文件也逐字节相同 |
 | 8K→1080p bicubic | 流式 **390 ms** vs 整图 **426 ms**（**0.92×**，门槛 1.25×） |
-| 工作集 | ring `212×1920×16B ≈ 6.5 MiB` + 暂存 `204×30 KB ≈ 6 MiB` + band `0.5 MiB`，与源高度无关 |
-| 拒绝 | 4000² → 4000×4 的极端降采样 ring 需 64 MiB，直接抛并说明预算 |
+| 工作集 | ring `264×1920×16B ≈ 7.7 MiB` + 暂存 `256×30 KB ≈ 7.5 MiB` + 输出批 64 行 `1.9 MiB` + 16 个 worker 行 `1.9 MiB` ≈ **19 MiB**，与源高度无关；账本超限时先缩小 chunk |
+| 拒绝 | 4000² → 4000×4 的极端降采样：`taps+2` 行目标宽的 ring 底数就超过剩余预算，直接抛并逐项说明（ring / staging / 输出批 / worker 行） |
 | AOT | `resize.stream` 进 `REQUIRED`，三档 sha 相同，条目内部断言与整图一致 |
+
+源是 `Stream` 时，`Run(path)` 与 `Run(stream, format)` 走同一条行链（2026-11-25 修）：此前只有路径源会进
+`ProcessChain`，`Stream` 源的目标即使是路径也会被 `ToImageCore` 物化，而报告只能写 `Refusal=None`——字节相同，
+所以只有报告能看出差别。现在两个入口都打开目标文件流后交给同一个 `ProcessChain`，`Mode` 如实报告 `Streamed`。
 
 缩放按调用顺序出现在链里（`GaussianBlur(1f).Resize(...)`）：带泵产出的行直接交给 `ResizeRowSource`，链中间
 不出现整图。实测 8K→1080p：纯缩放 **390 vs 426 ms（0.92×）**、`blur → 缩放 → sharpen` **835 vs 791 ms（1.06×）**，
 逐字节相同。链上不流式的算子（`Global`）会物化执行，报告里 `Mode=Materialized`。
 
-并行喂料：每带把源行按预算切块（8K 下 204 行）读进字节暂存，水平遍按行并行、垂直遍按 `ForBands` 并行；带之间顺序。
+并行喂料：每带把源行按预算切块（8K 下 256 行）读进字节暂存，水平遍按行并行、垂直遍按 `ForBands` 并行；带之间顺序。
 `ForBands` 而不是 `For`：4× 降采样时一次只完成十几行目的行，低于 `For` 的 64 K 像素门限，会被静默串行。
 
 区域 + 几何：`ImageTranscode.From(path).Region(rect).Resize(w, h)` 只解码相交的 strip/tile，按带喂给

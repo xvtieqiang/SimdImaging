@@ -413,8 +413,19 @@ public static class PlanOps
     /// <summary>Dehaze: the dark channel and the atmospheric light both need the whole picture.</summary>
     public static ImageOp Dehaze(int patchRadius = 7, float omega = 0.95f, float tMin = 0.1f, int refineRadius = 20) =>
         Global(nameof(DehazeOps.Dehaze), v => DehazeOps.Dehaze(v, patchRadius, omega, tMin, refineRadius),
-            // Two single-channel float planes (dark channel, transmission) plus one more for the box refinement.
-            (width, _, rows, _) => 3L * width * rows * 4);
+            // Counted from DehazeOps' rentals, not from the algorithm's description: dark + transmission, then —
+            // when the transmission is refined — the luma guide, the guided filter's six planes and the box
+            // mean's temporary, all alive at once. Ten planes, not three: the earlier declaration charged the
+            // whole refinement as "one more plane" and under-reported the 1080p peak by 58 MiB.
+            (width, _, rows, _) =>
+            {
+                var planes = refineRadius > 0 ? 10 : 2;
+                var ringRows = Math.Min(rows, (2 * patchRadius) + 1);
+                return (planes * (long)width * rows * sizeof(float))
+                    + ((long)ringRows * width * sizeof(float))
+                    + ((long)width * sizeof(float))
+                    + (2L * width * 4 * sizeof(float));
+            });
 
     /// <summary>Histogram equalisation needs the whole image to build its transfer curve.</summary>
     public static ImageOp Equalize() =>

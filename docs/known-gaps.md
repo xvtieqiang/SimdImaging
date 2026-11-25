@@ -396,7 +396,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 | LL 契约 | Paris remap（`α=β=1` 为恒等）；**按层选样**（第 l 层用输入 G 金字塔第 l 层的强度挑最近样本，用全分辨率选样会让粗层选错、出阶梯）；**基带用原始 G_{L-1}**，不是 remap 后的残差——否则常数图会被最近的采样强度拖走；8/16-bit 用按 code value 索引的每样本表（与直算逐字节一致，有 `ForceDirectRemap` 对拍），Rgba32F 逐像素 `Math.Pow`；层原生存储 |
 | LL 增益与量测 | 细节增益由「采样间距 / σr」决定：默认 32 样本、σr=0.15、α=0.3 实测 **1.5×** 纹波放大（`BoostsLocalContrastWithoutMovingTheMean` 的阈值按此定 1.3×）。**未做样本间线性插值**——它能把量化台阶抹平，但不会显著提高斜率；提高增益的现实手段是加 `samples` 或降 `σr`，两者都写在 xmldoc |
 | LL 内存与耗时 | 层原生（4/3 张图）而不是每层整幅。1080p 实测 **1.81 s / 分配 139.7 MB**（`SimdImaging.Benchmarks`，默认 L=5/S=32）；4K 未实测，按面积外推约 560 MB。每层整幅会到 2.9 GB 且结果一样。算子自带 `MaxScratchBytes = 2 GiB` 硬上限，超了抛 |
-| ⚠ `MaxWorkingBytes` 盲区 | `ProcessingPlan.EstimateWorkingBytes` 只算 plan 自己的缓冲，**看不到算子内部 scratch**（`Glow` 早已如此）。`ExecuteOptions.MaxWorkingBytes` 对 NLM/LL 不构成真实约束，只有算子内部的 2 GiB 上限生效。**M14 已修机制**：`Add(..., haloX, haloY, scratch)` 加了一个 6 参重载（旧的 5 参签名原样保留，快照 0 改写），`MemoryEstimator` 把它算进每 worker 项。剩下的欠账是**给 `Glow/GuidedFilter/NLM/LL` 各补一个 `ScratchBytes` 声明**——机制在、接线未全 |
+| ⚠ `MaxWorkingBytes` 盲区 | `MemoryEstimator` 只算 plan 自己的缓冲 + `PlanStep.Scratch`；算子内部的池化 scratch（`FloatScratch`）与进程级缓存（权重表、像素池）由 `MemoryBudget` 单独记账，不在这个上限里。**M14 已修机制**（`Add(..., scratch)` → 每 worker 项），**2026-11-25 补齐接线并加对拍**：`PlanOps` 的每个工厂都声明；审计时发现 Dehaze 声明 3 个平面、实际峰值 10 个（dark + transmission + luma guide + guided filter 6 + box mean 临时），1080p 少报 58 MiB，已按 `refineRadius` 分支修正；`FloatScratch.PeakLiveBytes` 让测试能断言「声明 ≥ 实际租用」，`Dehaze_DeclaresAtLeastWhatItRents` 守这条线。LL / RL 用堆数组而非 `FloatScratch`，仍靠自述公式 + LL 的 2 GiB 硬上限 |
 | 跨 ISA | `Math.Exp`（NLM 权重）与 `Math.Pow`（LL remap）沿用 EWA 口径：x64 实测位模式稳定，ARM 未在硬件执行——不宣称跨架构已验 |
 
 ## M12 反卷积与内容感知缩放（完成，2026-11-14）
@@ -1262,7 +1262,8 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 
 ## 几何执行（M18）
 
-- **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 15 MiB。
+- **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 19 MiB
+  （ring + staging + 输出批 + worker 行，一个账本；超限先缩 chunk 再拒绝）。
 - **一次流水线只支持一个缩放**：`ResizeTo(..., plan, after)` 覆盖「计划 → 缩放 → 计划」；两次缩放连用仍要分两次调用
   （中间落一张整图）。真正的多级流水线需要 plan 自带尺寸变换，见 `architecture.md` §6.7。
 - **编码器尺寸仍由门面给出**：`ResizeTo` 的 width/height 是参数；计划自己改变尺寸（不经过门面参数）还不支持。

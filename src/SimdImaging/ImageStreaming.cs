@@ -45,7 +45,7 @@ public enum ProcessMode : byte
     /// <summary>The plan ran over decoded rows: the source was never held whole.</summary>
     Streamed = 0,
 
-    /// <summary>The plan cannot stream, so the image was decoded, processed and encoded in full.</summary>
+    /// <summary>The result was produced whole: the plan cannot stream, or a region was selected.</summary>
     Materialized,
 }
 
@@ -57,7 +57,9 @@ public enum ProcessMode : byte
 /// indistinguishable from a real stream.
 /// </remarks>
 /// <param name="Mode">Whether the plan ran over rows or over a whole image.</param>
-/// <param name="Refusal">Why the plan was materialised; <see cref="StreamRefusal.None"/> when it streamed.</param>
+/// <param name="Refusal">Why the plan was materialised; <see cref="StreamRefusal.None"/> when it streamed. A region
+/// run also reports <see cref="StreamRefusal.None"/>: it is materialised because the caller selected a rectangle,
+/// not because the plan refused rows. The two are told apart by the entry point that was called.</param>
 /// <param name="ReaderIsStreaming">The decoder produced rows as the input arrived.</param>
 /// <param name="EncoderIsStreaming">The encoder wrote the file as rows arrived (false for WebP lossless, palette
 /// quantisation, or a TIFF writer whose stream cannot seek).</param>
@@ -76,6 +78,13 @@ public readonly record struct ProcessReport(ProcessMode Mode, StreamRefusal Refu
 
 public sealed partial class Image
 {
+    /// <summary>
+    /// Whether the decode options need the whole input before a row can be produced: a codec-negotiated scale is
+    /// chosen from the header, and a row reader has to be opened with its size already settled.
+    /// </summary>
+    internal static bool RequiresWholeInput(LoadOptions load) =>
+        load.PreferNativeScale && (load.ScaleDenominator ?? 1) > 1;
+
     /// <summary>
     /// Decodes <paramref name="sourcePath"/>, runs <paramref name="plan"/> over the rows and encodes the result to
     /// <paramref name="destinationPath"/>, holding one band of rows instead of the whole image.
@@ -195,7 +204,7 @@ public sealed partial class Image
         // PreferNativeScale negotiates the output size from the whole header before decoding; a row reader has to be
         // opened with its format and size already settled, so this one goes through the whole-image path — which is
         // exactly the Load the caller asked for.
-        var refusal = plan is not null && load.PreferNativeScale && (load.ScaleDenominator ?? 1) > 1
+        var refusal = plan is not null && RequiresWholeInput(load)
             ? StreamRefusal.DecodeNeedsWholeInput
             : plan?.CanStream() ?? StreamRefusal.None;
         if (refusal == StreamRefusal.None)

@@ -157,6 +157,71 @@ public class ImageTranscodeTests
     }
 
     [Fact]
+    public void AStreamSourceToAPath_StreamsAndMatchesThePathForm()
+    {
+        // The entry point used to decode the whole image for this shape: Run(string) only opened a row chain when
+        // the SOURCE was a path, so From(stream).Run(path) materialised while From(stream).Run(stream) streamed.
+        // Bytes were equal, which is why nothing caught it — the report was the only witness, and it said None.
+        var source = Temp(".png");
+        var fromStream = Temp(".png");
+        var fromPath = Temp(".png");
+        try
+        {
+            using (var image = TestImages.Gradient(160, 120, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+
+            using var input = File.OpenRead(source);
+            var report = ImageTranscode.From(input).GaussianBlur(1f).Contrast(1.1f).Resize(61, 41).Run(fromStream);
+
+            ImageTranscode.From(source).GaussianBlur(1f).Contrast(1.1f).Resize(61, 41).Run(fromPath);
+
+            report.Mode.ShouldBe(ProcessMode.Streamed);
+            report.Refusal.ShouldBe(StreamRefusal.None);
+            report.Width.ShouldBe(61);
+            report.RowsWritten.ShouldBe(41);
+            File.ReadAllBytes(fromStream).ShouldBe(File.ReadAllBytes(fromPath));
+        }
+        finally
+        {
+            foreach (var path in new[] { source, fromStream, fromPath })
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AForwardOnlyStream_WithAWholeInputDecode_MaterialisesOnce()
+    {
+        // A codec-negotiated scale is settled from the header, so ProcessChain would have to rewind a source that
+        // cannot seek. The facade reads such a stream exactly once instead of turning the call into a throw.
+        var source = Temp(".png");
+        var destination = Temp(".png");
+        try
+        {
+            using (var image = TestImages.Gradient(64, 64, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+
+            using var input = new ForwardOnlyStream(File.OpenRead(source));
+            var report = ImageTranscode.From(input).GaussianBlur(1f)
+                .WithOptions(new TranscodeOptions
+                {
+                    Load = new LoadOptions { PreferNativeScale = true, ScaleDenominator = 2 },
+                })
+                .Run(destination);
+
+            report.Mode.ShouldBe(ProcessMode.Materialized);
+            report.Refusal.ShouldBe(StreamRefusal.DecodeNeedsWholeInput);
+            report.Width.ShouldBe(32);
+            report.Height.ShouldBe(32);
+            File.Exists(destination).ShouldBeTrue();
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
+    [Fact]
     public void AnOperatorBeyondTheOldShortcuts_WorksOnTheFileSide()
     {
         var source = Temp(".png");

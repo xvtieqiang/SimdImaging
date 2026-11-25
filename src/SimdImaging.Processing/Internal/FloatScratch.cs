@@ -57,6 +57,26 @@ internal static class FloatScratch
     [ThreadStatic]
     private static long _evictions;
 
+    [ThreadStatic]
+    private static long _liveBytes;
+
+    [ThreadStatic]
+    private static long _peakLiveBytes;
+
+    /// <summary>Bytes this thread has rented and not yet returned. Diagnostic; not part of the pools' budget.</summary>
+    /// <remarks>
+    /// Live bytes answer the question the declared scratch cannot answer about itself: what one operator actually
+    /// holds at its peak. <c>MemoryEstimator</c> trusts <c>PlanStep.Scratch</c>, so a declaration that under-counts
+    /// turns a ceiling into a suggestion — which is exactly what Dehaze's did before 2026-11-25.
+    /// </remarks>
+    public static long LiveBytes => _liveBytes;
+
+    /// <summary>The largest <see cref="LiveBytes"/> reading on this thread since the last reset.</summary>
+    public static long PeakLiveBytes => _peakLiveBytes;
+
+    /// <summary>Starts a new peak window at the current live figure (tests and ablations).</summary>
+    public static void ResetPeak() => _peakLiveBytes = _liveBytes;
+
     /// <summary>What the calling thread currently holds, and what it has done since the process started.</summary>
     public static ScratchStatistics Statistics => new(
         _free?.Count ?? 0,
@@ -88,17 +108,28 @@ internal static class FloatScratch
             free.RemoveAt(best);
             _retainedBytes -= (long)found.Length * sizeof(float);
             _hits++;
+            TrackRent(found.Length);
             return found;
         }
 
         _misses++;
         _allocations++;
-        return GC.AllocateUninitializedArray<float>(length);
+        var allocated = GC.AllocateUninitializedArray<float>(length);
+        TrackRent(allocated.Length);
+        return allocated;
+    }
+
+    private static void TrackRent(int length)
+    {
+        _liveBytes += (long)length * sizeof(float);
+        if (_liveBytes > _peakLiveBytes)
+            _peakLiveBytes = _liveBytes;
     }
 
     public static void Return(float[] buffer)
     {
         var bytes = (long)buffer.Length * sizeof(float);
+        _liveBytes -= bytes;
 
         // Too large to keep: the caller takes the reallocating path rather than pinning a buffer the size
         // of the image for the life of the process.
@@ -144,6 +175,8 @@ internal static class FloatScratch
         _misses = 0;
         _allocations = 0;
         _evictions = 0;
+        _liveBytes = 0;
+        _peakLiveBytes = 0;
     }
 }
 

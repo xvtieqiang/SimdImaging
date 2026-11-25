@@ -12,9 +12,11 @@ namespace SimdImaging.Processing.Geometry;
 /// same premultiplied float rows, the same vertical convolution — so the bytes are identical.</para>
 /// <para>Source rows are pulled in chunks so the horizontal pass can run one row per worker (a 4× downscale spends
 /// four times as much work horizontally as vertically), and destination rows are emitted in batches so the vertical
-/// pass does too. Memory is the ring of horizontally resized rows, the staging chunk and one output batch:
-/// <c>ringRows × destWidth × 16</c> + <c>chunkRows × sourceWidth × bytesPerPixel</c>, bounded by
-/// <see cref="StreamingResize.DefaultBudgetBytes"/> (or <see cref="ExecuteOptions.MaxWorkingBytes"/> when smaller).</para>
+/// pass does too. The budget is one account over everything this stage owns at once — the ring of horizontally
+/// resized rows, the staging chunk, the output batch, the single source row, and one float row per worker — and it is
+/// enforced by sizing the chunk from what is left, not by checking the ring alone. The reconstruction-weight tables
+/// are not part of it: they belong to <see cref="MemoryBudget"/>'s shared weight cache. Nor are the decoder's and
+/// encoder's own buffers, which this stage never sees.</para>
 /// </summary>
 internal sealed class ResizeRowSource : IRowSource, IDisposable
 {
@@ -77,36 +79,91 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
             ? Math.Min(options.MaxWorkingBytes, StreamingResize.DefaultBudgetBytes)
             : StreamingResize.DefaultBudgetBytes;
 
+        // Everything this stage holds besides the ring and the staging chunk: the output batch it hands out rows
+        // from, the one row it reads the source into, and the float row each worker rents for a horizontal or
+        // vertical pass. Those rows are per worker because FloatScratch is thread-local; the two passes do not
+        // overlap, so one row per worker covers both. Nearest samples row by row on the calling thread and rents
+        // no scratch, so it is charged for neither.
+        var readyRows = Math.Min(OutputBatchRows, height);
+        var readyBytes = checked((long)readyRows * _destStride * sizeof(float));
+        var workers = Math.Max(1, options.MaxDegreeOfParallelism > 0
+            ? options.MaxDegreeOfParallelism
+            : RowParallel.Degree);
+        var workerRows = Math.Max(_sourceWidth * 4, _destStride);
+
         _tapX = 0;
         _tapY = 0;
         _nearest = resampler == Resampler.Nearest && _format == WorkingFormat.Rgba8
                    && Resample.TryNearestTap(_weightsX, out _tapX)
                    && Resample.TryNearestTap(_weightsY, out _tapY);
 
+        var fixedBytes = _nearest
+            ? checked(readyBytes + _srcRowBytes)
+            : checked(readyBytes + _srcRowBytes + ((long)workers * workerRows * sizeof(float)));
+
         _chunkRows = 0;
         _ringRows = 0;
         if (!_nearest)
         {
-            _chunkRows = Math.Clamp((int)((budget / 4) / Math.Max(1, _srcRowBytes)), 1, 256);
+            // One account, solved for the chunk: after the always-resident buffers, what is left is shared by a
+            // ring that grows with the chunk (taps + chunk + 2 rows) and a staging chunk of chunk × source row.
+            var rowFloats = (long)_destStride * sizeof(float);
+            var ringBase = (long)(_weightsY.Taps + 2) * rowFloats;
+            var perChunk = rowFloats + _srcRowBytes;
+            var shared = budget - fixedBytes;
+
+            if (shared < ringBase)
+            {
+                throw new InvalidOperationException(
+                    $"Streaming this resize needs a {(ringBase + fixedBytes) / (1024 * 1024)} MiB working set "
+                    + $"({ringBase / (1024 * 1024)} MiB ring of {_destWidth}-pixel rows, "
+                    + $"{readyBytes / (1024 * 1024)} MiB output batch, one source row, "
+                    + $"{workers} worker rows), above the {budget / (1024 * 1024)} MiB this path allows. "
+                    + "Reduce the downsample ratio, resize in two steps, lower the degree, or raise "
+                    + "ExecuteOptions.MaxWorkingBytes.");
+            }
+
+            _chunkRows = (int)Math.Clamp((shared - ringBase) / perChunk, 1, 256);
             _ringRows = Math.Min(_sourceHeight, _weightsY.Taps + _chunkRows + 2);
 
-            var ringBytes = (long)_ringRows * _destStride * sizeof(float);
-            if (ringBytes > budget)
+            var ringBytes = (long)_ringRows * rowFloats;
+            var stagingBytes = (long)_chunkRows * _srcRowBytes;
+            if (ringBytes + stagingBytes > shared)
+            {
                 throw new InvalidOperationException(
-                    $"Streaming this resize needs a {ringBytes / (1024 * 1024)} MiB ring ({_ringRows} rows of "
-                    + $"{width} pixels), above the {budget / (1024 * 1024)} MiB this path allows. Reduce the "
-                    + "downsample ratio, resize in two steps, or raise ExecuteOptions.MaxWorkingBytes.");
+                    $"Streaming this resize needs a {(ringBytes + stagingBytes + fixedBytes) / (1024 * 1024)} MiB "
+                    + $"working set ({ringBytes / (1024 * 1024)} MiB ring, "
+                    + $"{stagingBytes / (1024 * 1024)} MiB staging, {readyBytes / (1024 * 1024)} MiB output batch, "
+                    + $"one source row, {workers} worker rows), above the {budget / (1024 * 1024)} MiB this path "
+                    + "allows. Reduce the downsample ratio, resize in two steps, lower the degree, or raise "
+                    + "ExecuteOptions.MaxWorkingBytes.");
+            }
 
             _ring = FloatScratch.Rent(checked(_ringRows * _destStride));
             _staging = ArrayPool<byte>.Shared.Rent(checked(_chunkRows * _srcRowBytes));
         }
+        else if (fixedBytes > budget)
+        {
+            throw new InvalidOperationException(
+                $"Streaming this nearest resize needs a {fixedBytes / (1024 * 1024)} MiB working set "
+                + $"({readyBytes / (1024 * 1024)} MiB output batch and one source row), above the "
+                + $"{budget / (1024 * 1024)} MiB this path allows. Lower the degree or raise "
+                + "ExecuteOptions.MaxWorkingBytes.");
+        }
 
-        _ready = WorkingBuffer.Rent(width, Math.Min(OutputBatchRows, height), _format);
+        _ready = WorkingBuffer.Rent(width, readyRows, _format);
+        ResidentBytes = checked(fixedBytes
+            + ((long)_ringRows * _destStride * sizeof(float))
+            + ((long)_chunkRows * _srcRowBytes));
     }
 
     public int Width => _destWidth;
 
     public int Height => _destHeight;
+
+    /// <summary>Bytes this instance holds at once: ring, staging, output batch, source row and worker rows. The
+    /// constructor sizes the chunk so this figure fits the budget; tests pin that invariant.</summary>
+    internal long ResidentBytes { get; private set; }
 
     public WorkingFormat Format => _format;
 
@@ -307,8 +364,8 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
 /// <summary>Drives a <see cref="ResizeRowSource"/> into a sink: the single-resize entry.</summary>
 internal static class StreamingResize
 {
-    /// <summary>What the ring and the staging chunk may take together, unless
-    /// <see cref="ExecuteOptions.MaxWorkingBytes"/> asks for less.</summary>
+    /// <summary>What this stage may hold at once — ring, staging chunk, output batch, source row and one float row
+    /// per worker — unless <see cref="ExecuteOptions.MaxWorkingBytes"/> asks for less.</summary>
     internal const long DefaultBudgetBytes = 24L << 20;
 
     /// <summary>Runs the resize, returns the destination rows written.</summary>

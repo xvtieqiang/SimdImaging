@@ -130,6 +130,45 @@ public class StreamingResizeTests
     }
 
     [Fact]
+    public void TheBudgetCoversTheBatchAndWorkerRows_NotJustTheRing()
+    {
+        // At 4 MiB the old check looked only at the ring, which fits (~1.2 MiB). The ledger also holds a 64-row
+        // output batch (1.9 MiB at 1920 wide) and one float row per worker for a 7680-wide source (2 MiB across
+        // sixteen), so there is no room left for a ring and a staging chunk — and it says so instead of exceeding
+        // the number the caller asked for.
+        var source = new SyntheticSource(7680, 4320, WorkingFormat.Rgba8);
+        var sink = new CollectingSink(1920, 1080, WorkingFormat.Rgba8);
+
+        var error = Should.Throw<InvalidOperationException>(() =>
+            StreamingResize.Execute(source, sink, 1920, 1080, Resampler.Bicubic,
+                new ExecuteOptions { MaxWorkingBytes = 4L << 20 }));
+        error.Message.ShouldContain("ring");
+        error.Message.ShouldContain("output batch");
+    }
+
+    public static TheoryData<int, int, int, int, long> BudgetMatrix => new()
+    {
+        { 7680, 4320, 1920, 1080, 24L << 20 },
+        { 7680, 4320, 1920, 1080, 8L << 20 },
+        { 4000, 3000, 2000, 1500, 4L << 20 },
+        { 6000, 4000, 4000, 1000, 8L << 20 },
+        { 640, 480, 3000, 2000, 12L << 20 },
+    };
+
+    [Theory]
+    [MemberData(nameof(BudgetMatrix))]
+    public void TheRingAndStaging_ShareOneBudgetWithEverythingElse(int sourceWidth, int sourceHeight,
+        int width, int height, long budget)
+    {
+        var source = new SyntheticSource(sourceWidth, sourceHeight, WorkingFormat.Rgba8);
+        using var rows = new ResizeRowSource(source, width, height, Resampler.Bicubic,
+            new ExecuteOptions { MaxWorkingBytes = budget });
+
+        rows.ResidentBytes.ShouldBeLessThanOrEqualTo(budget,
+            $"the constructor sized a {rows.ResidentBytes}-byte stage for a {budget}-byte budget");
+    }
+
+    [Fact]
     public void AHeavyDownscale_IsRefusedWhenTheRingWouldExceedTheBudget()
     {
         // 4000 wide to 4000 wide but 4000 tall to 4: ~1000 vertical taps, so the ring would be ~64 MiB, above the

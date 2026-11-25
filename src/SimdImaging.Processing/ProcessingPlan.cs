@@ -408,7 +408,8 @@ public sealed class ProcessingPlan
 
         // Decided before the shape is built, not per segment: the segments are cut for one execution mode, and a
         // segment of several steps has no step-by-step form — the else branch runs its first step only.
-        var fused = fusionAllowed && (options.ForceFusion || ShouldFuse(_steps, width, height));
+        var fused = fusionAllowed && (options.ForceFusion ||
+            ShouldFuse(_steps, width, height, source.Format.BytesPerPixel()));
         var shape = ExecutionShapeFor(fused);
         var execution = shape.Steps;
         var segments = shape.Segments;
@@ -620,10 +621,16 @@ public sealed class ProcessingPlan
     /// points is the one shape that wins at every size above the gate, because it has no halo to recompute. What
     /// is left for the size test is the purpose fusion was built for: not materialising N full frames.
     /// </para>
+    /// <para>
+    /// The traffic is counted in the source's own bytes per pixel, over the intermediates fusion actually removes.
+    /// Both halves of that sentence were once wrong: the rule multiplied by 4 whatever the format was (wrong by 2x
+    /// for <c>Rgba16</c> and 4x for <c>Rgba32F</c>), and it used <c>steps.Count - 1</c> even though a Global step
+    /// splits the chain and the executor then fuses each side separately, so a plan whose only bandable run is two
+    /// steps long was credited with avoiding a whole chain's worth of frames.
+    /// </para>
     /// </remarks>
-    private static bool ShouldFuse(List<PlanStep> steps, int width, int height)
+    private static bool ShouldFuse(List<PlanStep> steps, int width, int height, int bytesPerPixel)
     {
-        var count = steps.Count;
         var maxHalo = 0;
         foreach (var step in steps)
             maxHalo = Math.Max(maxHalo, Math.Max(step.HaloX, step.HaloY));
@@ -636,18 +643,38 @@ public sealed class ProcessingPlan
             return true;
 
         // A chain with no halo costs nothing to fuse: there is no window to recompute, only a frame to skip.
-        // Measured 0.80-0.84 from 640x360 to 8K.
+        // Measured 0.80-0.84 from 640x360 to 8K for the chains in the table above.
         if (maxHalo == 0)
             return true;
 
-        // Everything else keeps fusion for what it was built for — not materialising N full frames.
-        var intermediateBytes = (long)width * height * 4 * (count - 1);
-        return intermediateBytes > FuseIntermediateBytes;
+        // Everything else keeps fusion for what it was built for — not materialising N full frames. Count them
+        // per contiguous bandable run: a category boundary already forces a full frame, so only the steps on this
+        // side of it are traffic fusion can avoid. Counted without allocating a segment list — this runs per call.
+        long avoided = 0;
+        var run = 0;
+        foreach (var step in steps)
+        {
+            if (FusionPlanner.IsBandable(step))
+            {
+                run++;
+                continue;
+            }
+
+            if (run > 1)
+                avoided += (long)(run - 1) * pixels * bytesPerPixel;
+            run = 0;
+        }
+
+        if (run > 1)
+            avoided += (long)(run - 1) * pixels * bytesPerPixel;
+
+        return avoided > FuseIntermediateBytes;
     }
 
     /// <summary>
-    /// The worth of a full-size intermediate above which fusing is justified even when the steps are expensive:
-    /// below this the pass is cheap enough that its arithmetic, not its memory traffic, sets the time.
+    /// The worth of the full-size intermediates fusion avoids, in bytes, above which fusing is justified even when
+    /// the steps are expensive: below this the pass is cheap enough that its arithmetic, not its memory traffic,
+    /// sets the time.
     /// </summary>
     private const long FuseIntermediateBytes = 64L * 1024 * 1024;
 

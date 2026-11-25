@@ -248,17 +248,32 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             return MaterializedReport(materialisedImage, refusal);
         }
 
-        if (_path is not null)
+        // A forward-only source cannot be rewound, so a whole-input decode has to happen here: ToImageCore reads
+        // the stream exactly once, which is all such a source allows. ProcessChain would have to refuse it.
+        if (_stream is not null && !_stream.CanSeek && Image.RequiresWholeInput(_options.Load))
         {
-            using var input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-            return Image.ProcessChain(input, output, Image.FormatFromExtension(Path.GetExtension(destinationPath)),
-                SizeOf, BuildChain, ProcessOptions(), cancellationToken);
+            using var wholeInput = ToImageCore(cancellationToken);
+            Image.Save(wholeInput, destinationPath, _options.Save, cancellationToken);
+            return MaterializedReport(wholeInput, StreamRefusal.DecodeNeedsWholeInput);
         }
 
-        using var materialised = ToImageCore(cancellationToken);
-        Image.Save(materialised, destinationPath, _options.Save, cancellationToken);
-        return MaterializedReport(materialised, StreamRefusal.None);
+        // Both source shapes end in the same row chain: a file is opened and handed to ProcessChain, and a stream
+        // is handed to it directly. The stream form used to fall through to ToImageCore, which decoded the whole
+        // image and then encoded it — a materialisation caused by the entry point, not by the plan, and one the
+        // report could not even name (`Refusal = None`).
+        var format = Image.FormatFromExtension(Path.GetExtension(destinationPath));
+        if (_path is not null)
+        {
+            // Source first: a missing input must not truncate an existing destination.
+            using var input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
+            return Image.ProcessChain(input, output, format, SizeOf, BuildChain, ProcessOptions(), cancellationToken);
+        }
+
+        using var destination = new FileStream(destinationPath, FileMode.Create, FileAccess.Write,
+            FileShare.None);
+        return Image.ProcessChain(_stream!, destination, format, SizeOf, BuildChain, ProcessOptions(),
+            cancellationToken);
     }
 
     /// <summary>The stream form of <see cref="Run(string, CancellationToken)"/>; the container is
@@ -291,6 +306,15 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             var bytes = Image.Encode(materialisedImage, format, _options.Save, cancellationToken);
             destination.Write(bytes, 0, bytes.Length);
             return MaterializedReport(materialisedImage, refusal);
+        }
+
+        // Same one-pass materialisation as the path form, for the same reason.
+        if (_stream is not null && !_stream.CanSeek && Image.RequiresWholeInput(_options.Load))
+        {
+            using var wholeInput = ToImageCore(cancellationToken);
+            var bytes = Image.Encode(wholeInput, format, _options.Save, cancellationToken);
+            destination.Write(bytes, 0, bytes.Length);
+            return MaterializedReport(wholeInput, StreamRefusal.DecodeNeedsWholeInput);
         }
 
         if (_path is not null)
