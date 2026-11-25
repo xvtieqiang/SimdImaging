@@ -1262,6 +1262,10 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 
 ## 几何执行（M18）
 
+- **Tile 后端未实现（P1 只拒绝）**：编译器已能识别 Tile 请求并给出 `TileRefusal`（`NoRegionSink` /
+  `BlockAlignedOperator` / `GlobalStep` / `CompositeStep` / `NotTileable`），但没有任何 Sink 实现
+  `RandomRegionWrite`，也没有算子声明 `Partitioning.Tiles`。复访条件：先定义 `IRegionSink`（随机区域写入 + 生命周期），
+  再让 Point / Neighborhood 的内核声明 Tiles 并逐字节对拍；在那之前保持拒绝，不用包围盒近似。
 - **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 19 MiB
   （ring + staging + 输出批 + worker 行，一个账本；超限先缩 chunk 再拒绝）。
 - **一次流水线只支持一个缩放**：`ResizeTo(..., plan, after)` 覆盖「计划 → 缩放 → 计划」；两次缩放连用仍要分两次调用

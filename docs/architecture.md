@@ -626,7 +626,7 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 
 分块的验收不是"能跑"，是**输出与整图执行逐字节相同**。这一条会让不少 op 在 P1 阶段被判定为"不能分块"，那是正确结果，不是失败。
 
-### 6.3.1 编译产物（P1 骨架，尚未接生产入口）
+### 6.3.1 编译产物（P1 骨架）
 
 `PipelineRecipe` 是不可变的步骤表：`OperatorStep` 与 `GeometryStep` 并列，几何步带两种执行形式（`Reshape` 与可选的 `Wrap`）。`PipelineCompiler.Compile(recipe, CompileOptions)` 只做判定、不执行，输出 `CompiledExecutionPlan`：
 
@@ -649,6 +649,21 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 现在按书写顺序在 resize 之后执行（`CropAfterResize_CropsTheResizedImage` 钉住）。`BuildChain` 由编译出的 section
 组装拉链；`ToImageCore` 走同一份 section 列表的物化路径；region 只接受「算子步 + 末尾一个 resize」，其余组合显式
 拒绝而不是静默丢弃。
+
+### 6.3.2 Tile 后端：只拒绝，不近似
+
+P1 只做选路，不做二维 Tile 执行。请求 Tile 时编译器返回 `Backend=TileRefused` 和第一个真实阻塞原因：
+
+| 原因 | 条件 |
+|---|---|
+| `NoRegionSink` | 目标没有 `RandomRegionWrite`。目前**没有**任何 Sink 声明它，所以这是实际会命中的那一条 |
+| `BlockAlignedOperator` | 步骤的 footprint 是块网格（Pixelate），块会跨 Tile 边界 |
+| `GlobalStep` | 步骤需要全图统计才能写第一个像素 |
+| `CompositeStep` | 步骤需要 Tile 路径不携带的第二路输入 |
+| `NotTileable` | 没有步骤声明 `Partitioning.Tiles`，Tile 后端无内核可跑 |
+
+拒绝发生在选路阶段，目标一个字节都不会被写。将来打开 Tile 的条件写在 `known-gaps.md`：先有 `IRegionSink` 契约、
+再有声明 `Tiles` 的内核。
 
 ### 6.4 超限行为
 
