@@ -626,6 +626,18 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 
 分块的验收不是"能跑"，是**输出与整图执行逐字节相同**。这一条会让不少 op 在 P1 阶段被判定为"不能分块"，那是正确结果，不是失败。
 
+### 6.3.1 编译产物（P1 骨架，尚未接生产入口）
+
+`PipelineRecipe` 是不可变的步骤表：`OperatorStep` 与 `GeometryStep` 并列，几何步带两种执行形式（`Reshape` 与可选的 `Wrap`）。`PipelineCompiler.Compile(recipe, CompileOptions)` 只做判定、不执行，输出 `CompiledExecutionPlan`：
+
+- **格式**：任一步的 `Formats` 不覆盖源格式 → `NotSupportedException`，消息带步骤名（`IImageOp.Formats` 第一次有消费者）。
+- **分段**：算子连续段与几何步各自成 `CompiledSection`；算子段喂给现有 `ProcessingPlan`，几何段喂给现有几何调用。
+- **融合**：与 `ProcessingPlan` 共用 `FusionDecision.ShouldFuse`（同一条规则、同一处代码）。
+- **后端**：Tile 请求 → `TileRefused`（首个真实阻塞：无区域写 Sink / 块对齐 / Global / 无 Tile 内核）；Region 请求且源有 `RandomRegion`、无几何 → Region；全部算子段可流、几何步都有 `Wrap`、Sink 可写行 → Stream；否则 Frame。拒绝原因复用 `StreamRefusal` / `RegionRefusal`，不新增平行词汇。
+- **解释**：每个决定一行 `Explanation`，测试直接断言这些行。
+
+本提交只有测试消费者；`ImagePipeline` 与 `ImageTranscode` 的接入在后续两步完成。
+
 ### 6.4 超限行为
 
 - `MaxWorkingBytes` 不够 → 先尝试降档（Rgba32F → Rgba16，若算子是精确整数语义）→ 仍不够则抛，**不静默改精度**。

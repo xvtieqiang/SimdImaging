@@ -1086,6 +1086,7 @@
   SimdImaging.Processing.RichardsonLucyOps.ScratchBytes(System.Int32 width, System.Int32 height, SimdImaging.Abstractions.WorkingFormat format) -> System.Int64
   SimdImaging.Processing.StreamRefusal.CompositeStep = 2
   SimdImaging.Processing.StreamRefusal.DecodeNeedsWholeInput = 4
+  SimdImaging.Processing.StreamRefusal.GeometricStep = 5
   SimdImaging.Processing.StreamRefusal.GlobalStep = 1
   SimdImaging.Processing.StreamRefusal.None = 0
   SimdImaging.Processing.StreamRefusal.StepNeedsWholeSource = 3

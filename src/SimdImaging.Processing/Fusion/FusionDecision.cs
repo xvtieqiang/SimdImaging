@@ -55,11 +55,20 @@ internal static class FusionDecision
     /// </summary>
     internal const long FuseIntermediateBytes = 64L * 1024 * 1024;
 
-    internal static bool ShouldFuse(IReadOnlyList<PlanStep> steps, int width, int height, int bytesPerPixel)
+    internal static bool ShouldFuse(IReadOnlyList<PlanStep> steps, int width, int height, int bytesPerPixel) =>
+        ShouldFuse(steps, 0, steps.Count, width, height, bytesPerPixel);
+
+    /// <summary>The same decision for one run inside a larger list: the compiler classifies a section at a time and
+    /// must not let a neighbouring section's halo or length decide for it.</summary>
+    internal static bool ShouldFuse(IReadOnlyList<PlanStep> steps, int first, int count, int width, int height,
+        int bytesPerPixel)
     {
         var maxHalo = 0;
-        foreach (var step in steps)
+        for (var i = first; i < first + count; i++)
+        {
+            var step = steps[i];
             maxHalo = Math.Max(maxHalo, Math.Max(step.HaloX, step.HaloY));
+        }
 
         var pixels = (long)width * height;
 
@@ -78,9 +87,9 @@ internal static class FusionDecision
         // side of it are traffic fusion can avoid. Counted without allocating a segment list — this runs per call.
         long avoided = 0;
         var run = 0;
-        foreach (var step in steps)
+        for (var i = first; i < first + count; i++)
         {
-            if (FusionPlanner.IsBandable(step))
+            if (FusionPlanner.IsBandable(steps[i]))
             {
                 run++;
                 continue;

@@ -182,15 +182,6 @@ internal sealed record SameSizeRule : GeometryRule;
 /// <summary>A fixed output size.</summary>
 internal sealed record FixedSizeRule(int Width, int Height) : GeometryRule;
 
-/// <summary>A row-local geometry change: the output width changes but each output row depends on one input row.</summary>
-internal sealed record RowLocalRule(RowLocalKind Kind, int Arg) : GeometryRule;
-
-/// <summary>A size derived from the content (trim, entropy crop, seam carve).</summary>
+/// <summary>A size derived from the content (trim, entropy crop, seam carve). The compiler reports the size as
+/// unknown and refuses the backends that need it up front.</summary>
 internal sealed record ContentDerivedRule : GeometryRule;
-
-internal enum RowLocalKind : byte
-{
-    Crop = 0,
-    Pad = 1,
-    FlipHorizontal = 2,
-}

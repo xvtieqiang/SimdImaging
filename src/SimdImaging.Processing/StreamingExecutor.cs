@@ -26,6 +26,11 @@ public enum StreamRefusal : byte
     /// variant that must be chosen from the whole header. Not a refusal of the plan: the input has to be read
     /// whole before its size is known, so the facade materialises instead of streaming.</summary>
     DecodeNeedsWholeInput,
+
+    /// <summary>A geometry step has no row-source form, so a stream would have to materialise at that point. A
+    /// resize, crop, pad and horizontal flip do have one; rotation, warp and canvas changes do not. Appended after
+    /// <see cref="DecodeNeedsWholeInput"/> so the existing values keep their numbers.</summary>
+    GeometricStep,
 }
 
 /// <summary>What <see cref="ProcessingPlan.TryExecuteTo"/> did.</summary>
