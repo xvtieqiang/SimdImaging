@@ -277,23 +277,20 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         Reshape(v => ColorConversionOps.ChromaResample(v, mode, ycbcr, limitedRange, bandRows, _pool));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
-    public ImagePipeline Convolve3x3(ReadOnlySpan<float> kernel, float bias = 0f)
-    {
-        var copy = kernel.ToArray();
-        return Reshape(v => FilterOps.Convolve3x3(v, copy, bias, _pool));
-    }
+    public ImagePipeline Convolve3x3(ReadOnlySpan<float> kernel, float bias = 0f) =>
+        Step(PlanOps.Convolve3x3(kernel, bias));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Prewitt(bool bt709 = false) =>
-        Reshape(v => FilterOps.Prewitt(v, bt709, _pool));
+        Step(PlanOps.Prewitt(bt709));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Scharr(bool bt709 = false) =>
-        Reshape(v => FilterOps.Scharr(v, bt709, _pool));
+        Step(PlanOps.Scharr(bt709));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Laplacian(bool bt709 = false) =>
-        Reshape(v => FilterOps.Laplacian(v, bt709, _pool));
+        Step(PlanOps.Laplacian(bt709));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Glow(float threshold = 0.7f, float sigma = 8f, float amount = 0.6f) =>
@@ -362,67 +359,62 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         AppendGeometry(GeometrySteps.ResizeWithOptions(width, height, resampler, options, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
-    public ImagePipeline Premultiply() =>
-        Reshape(v => AlphaOps.Premultiply(v, _pool));
+    public ImagePipeline Premultiply() => Step(PlanOps.Premultiply());
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
-    public ImagePipeline Unpremultiply() =>
-        Reshape(v => AlphaOps.Unpremultiply(v, _pool));
+    public ImagePipeline Unpremultiply() => Step(PlanOps.Unpremultiply());
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
-    public ImagePipeline ColorMatrix(ReadOnlySpan<float> matrix)
-    {
-        var copy = matrix.ToArray();
-        return Reshape(v => PointOps.ColorMatrix(v, copy, _pool));
-    }
+    public ImagePipeline ColorMatrix(ReadOnlySpan<float> matrix) =>
+        Step(PlanOps.ColorMatrix(matrix));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline HueRotate(float degrees) =>
-        Reshape(v => PointOps.HueRotate(v, degrees, _pool));
+        Step(PlanOps.HueRotate(degrees));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline AlphaThreshold(float threshold = 0.5f) =>
-        Reshape(v => PointOps.AlphaThreshold(v, threshold, _pool));
+        Step(PlanOps.AlphaThreshold(threshold));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Tint(RgbaColor tint, float amount = 0.5f) =>
-        Reshape(v => PointOps.Tint(v, tint, amount, _pool));
+        Step(PlanOps.Tint(tint, amount));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ColorBalance(ColorBalanceShifts shadows, ColorBalanceShifts midtones, ColorBalanceShifts highlights, bool bt709 = false) =>
-        Reshape(v => PointOps.ColorBalance(v, shadows, midtones, highlights, bt709, _pool));
+        Step(PlanOps.ColorBalance(shadows, midtones, highlights, bt709));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ChannelSwap(int redSource, int greenSource, int blueSource) =>
-        Reshape(v => PointOps.ChannelSwap(v, redSource, greenSource, blueSource, _pool));
+        Step(PlanOps.ChannelSwap(redSource, greenSource, blueSource));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline BlackWhite(float threshold = 0.5f, bool bt709 = false) =>
-        Reshape(v => PointOps.BlackWhite(v, threshold, bt709, _pool));
+        Step(PlanOps.BlackWhite(threshold, bt709));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Clamp(float low, float high) =>
-        Reshape(v => PointOps.Clamp(v, low, high, _pool));
+        Step(PlanOps.Clamp(low, high));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Opacity(float opacity) =>
-        Reshape(v => PointOps.Opacity(v, opacity, _pool));
+        Step(PlanOps.Opacity(opacity));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Lightness(float factor) =>
-        Reshape(v => PointOps.Lightness(v, factor, _pool));
+        Step(PlanOps.Lightness(factor));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Threshold(float threshold, bool bt709 = false) =>
-        Reshape(v => PointOps.Threshold(v, threshold, bt709, _pool));
+        Step(PlanOps.Threshold(threshold, bt709));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Linearize(TransferCurve curve = TransferCurve.Srgb) =>
-        Reshape(v => TransferOps.Linearize(v, curve, _pool));
+        Step(PlanOps.Linearize(curve));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Delinearize(TransferCurve curve = TransferCurve.Srgb) =>
-        Reshape(v => TransferOps.Delinearize(v, curve, _pool));
+        Step(PlanOps.Delinearize(curve));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ReplaceBackground(RgbaColor background, RgbaColor replacement, float tolerance = 0.1f, float feather = 0.05f) =>
@@ -430,7 +422,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ColorBlindness(ColorVisionDeficiency kind = ColorVisionDeficiency.Protanopia, float severity = 1f, bool correct = false) =>
-        Reshape(v => ColorBlindnessOps.ColorBlindness(v, kind, severity, correct, _pool));
+        Step(PlanOps.ColorBlindness(kind, severity, correct));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Dither(int bits, DitherKernel kernel = DitherKernel.FloydSteinberg) =>

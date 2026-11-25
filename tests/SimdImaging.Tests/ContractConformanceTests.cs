@@ -44,6 +44,30 @@ public sealed class ContractConformanceTests
             WorkingFormatMask.All, InputFootprintKind.Identity),
         new("vibrance", () => PlanOps.Vibrance(1.2f), WorkingFormatMask.All, InputFootprintKind.Identity),
 
+        // Point operators migrated in P3 batch 1: colour, alpha and transfer curves.
+        new("premultiply", () => PlanOps.Premultiply(), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("unpremultiply", () => PlanOps.Unpremultiply(), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("color-matrix", () => PlanOps.ColorMatrix([1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, 0f]),
+            WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("hue-rotate", () => PlanOps.HueRotate(30f), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("alpha-threshold", () => PlanOps.AlphaThreshold(0.5f), WorkingFormatMask.All,
+            InputFootprintKind.Identity),
+        new("tint", () => PlanOps.Tint(new RgbaColor(200, 150, 90, 255), 0.4f), WorkingFormatMask.All,
+            InputFootprintKind.Identity),
+        new("color-balance", () => PlanOps.ColorBalance(new ColorBalanceShifts(0.1f, 0f, -0.1f),
+            new ColorBalanceShifts(0f, 0.05f, 0f), new ColorBalanceShifts(-0.05f, 0f, 0.05f)),
+            WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("channel-swap", () => PlanOps.ChannelSwap(2, 0, 1), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("black-white", () => PlanOps.BlackWhite(0.5f), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("clamp", () => PlanOps.Clamp(0.1f, 0.9f), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("opacity", () => PlanOps.Opacity(0.6f), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("lightness", () => PlanOps.Lightness(1.2f), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("threshold", () => PlanOps.Threshold(0.5f), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("linearize", () => PlanOps.Linearize(), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("delinearize", () => PlanOps.Delinearize(), WorkingFormatMask.All, InputFootprintKind.Identity),
+        new("color-blindness", () => PlanOps.ColorBlindness(severity: 0.8f), WorkingFormatMask.All,
+            InputFootprintKind.Identity),
+
         // Neighbourhood: a constant halo, except the general convolution, which also needs the whole image for
         // its Mirror/Wrap borders while still widening the band by its radius.
         new("gaussian", () => PlanOps.GaussianBlur(1f), WorkingFormatMask.All, InputFootprintKind.Halo, 3,
@@ -57,6 +81,11 @@ public sealed class ContractConformanceTests
         new("median3x3", () => PlanOps.Median3x3(), WorkingFormatMask.All, InputFootprintKind.Halo, 1),
         new("median", () => PlanOps.Median(2), WorkingFormatMask.All, InputFootprintKind.Halo, 2),
         new("convolve", () => PlanOps.Convolve(new float[9], 1), WorkingFormatMask.All, InputFootprintKind.WholeSource, 1),
+        new("prewitt", () => PlanOps.Prewitt(), WorkingFormatMask.All, InputFootprintKind.Halo, 1),
+        new("scharr", () => PlanOps.Scharr(), WorkingFormatMask.All, InputFootprintKind.Halo, 1),
+        new("laplacian", () => PlanOps.Laplacian(), WorkingFormatMask.All, InputFootprintKind.Halo, 1),
+        new("convolve3x3", () => PlanOps.Convolve3x3(new float[9]), WorkingFormatMask.All,
+            InputFootprintKind.Halo, 1),
         new("morph", () => PlanOps.Morph(2), WorkingFormatMask.All, InputFootprintKind.Halo, 2),
         new("gaussian-sharpen", () => PlanOps.GaussianSharpen(), WorkingFormatMask.All, InputFootprintKind.Halo, 3,
             PassModel.SeparableRows),
@@ -186,6 +215,31 @@ public sealed class ContractConformanceTests
         step.HaloX.ShouldBe(op.HaloX);
         step.Kernel.ShouldBeSameAs(op.Kernel);
         step.Scratch.ShouldBeSameAs(op.Scratch);
+    }
+
+    [Fact]
+    public void EveryOperatorWithAWholeImageForm_MatchesThroughAPlan()
+    {
+        foreach (var expected in Ops)
+        {
+            var op = expected.Factory();
+            if (op.Direct is not { } direct)
+                continue;
+
+            using var image = TestImages.Gradient(40, 32, WorkingFormat.Rgba8);
+            using var planned = new ProcessingPlan().Add(op).Execute(image[0].Pixels.View);
+            using var whole = direct(image[0].Pixels.View);
+
+            Rows(planned.View).ShouldBe(Rows(whole.View), $"{expected.Name}: plan vs whole-image form");
+        }
+    }
+
+    private static byte[] Rows(PixelView view)
+    {
+        var bytes = new byte[view.Height * view.RowBytes];
+        for (var y = 0; y < view.Height; y++)
+            view.Row(y).CopyTo(bytes.AsSpan(y * view.RowBytes, view.RowBytes));
+        return bytes;
     }
 
     private static WorkingFormatMask Mask(WorkingFormat format) => format switch

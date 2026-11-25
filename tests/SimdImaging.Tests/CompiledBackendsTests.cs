@@ -52,6 +52,25 @@ public sealed class CompiledBackendsTests
     }
 
     [Theory]
+    [MemberData(nameof(Formats))]
+    public void MigratedPointAndNeighbourhoodSteps_MatchBetweenFrameAndStream(WorkingFormat format)
+    {
+        var recipe = Recipe(
+            PlanOps.ColorMatrix([1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, 0f]),
+            PlanOps.AlphaThreshold(0.5f),
+            PlanOps.Tint(new RgbaColor(200, 150, 90, 255), 0.4f),
+            PlanOps.Prewitt(),
+            PlanOps.ChannelSwap(2, 0, 1));
+        using var image = TestImages.Gradient(64, 48, format);
+
+        var frame = Compile(recipe, 64, 48, format, stream: false, bandRows: 9);
+        var stream = Compile(recipe, 64, 48, format, stream: true, bandRows: 9);
+        stream.Backend.ShouldBe(ExecutionBackend.Stream);
+
+        Frame(frame, image[0].Pixels.View).ShouldBe(StreamBytes(stream, image[0].Pixels.View));
+    }
+
+    [Theory]
     [MemberData(nameof(FormatsAndBands))]
     public void GaussianBlurAndPoint_MatchBetweenFrameAndStream(WorkingFormat format, int bandRows)
     {

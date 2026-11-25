@@ -696,6 +696,24 @@ section 的全局起点重映射回调索引，每个算子步都真的被看到
 `Region` 列指 `RegionExecutor` 对纯算子链，带几何的 recipe 由编译器拒绝。Workspace 对每条 Frame 链断言
 `BoundedBytes >= CountingPool.PeakBytes`。
 
+### 6.3.4 P3 批次 1：点与 3×3 邻域
+
+`ImagePipeline` 的 20 个方法从 `Reshape` barrier 迁到 `PlanOps` 步骤：
+
+- 点：`Premultiply` / `Unpremultiply` / `ColorMatrix` / `HueRotate` / `AlphaThreshold` / `Tint` /
+  `ColorBalance` / `ChannelSwap` / `BlackWhite` / `Clamp` / `Opacity` / `Lightness` / `Threshold` / `Linearize` /
+  `Delinearize` / `ColorBlindness`；
+- 3×3 邻域：`Prewitt` / `Scharr` / `Laplacian` / `Convolve3x3`。
+
+`Linearize` 声明 `Domain = Linear`，`AlphaThreshold` 声明 `Alpha = Recomputes`；其余沿用默认语义。`ContractConformanceTests`
+从 43 行扩到 63 行，并新增 `EveryOperatorWithAWholeImageForm_MatchesThroughAPlan`：对每个有整图形式的算子，在同一输入上
+比较计划路径与直调，覆盖三种格式。
+
+仍是 barrier 的算子：`ConvertColorSpace` / `IccTransform` / `ChromaResample`（工作格式变化或非逐像素）、
+`DistanceTransform` / `Glow` / `RichardsonLucy` / `ToneMap`（整图或迭代）、`Quantize` / `ReduceColors` /
+`DitherToPalette` / `MapToPalette`（调色板构建或顺序抖动）、`ApplyGainMap` / `DrawImage` / `Watermark`（第二输入）。
+它们逐个进入下一批，不需要新的执行模型。
+
 ### 6.4 超限行为
 
 - `MaxWorkingBytes` 不够 → 先尝试降档（Rgba32F → Rgba16，若算子是精确整数语义）→ 仍不够则抛，**不静默改精度**。

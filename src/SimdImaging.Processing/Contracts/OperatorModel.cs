@@ -77,7 +77,7 @@ internal enum PassModel : byte
 }
 
 /// <summary>The colour domain an operator computes in.</summary>
-internal enum SampleDomain : byte
+internal enum PixelDomain : byte
 {
     /// <summary>Encoded sample values, as stored (sRGB-encoded for the current formats).</summary>
     Encoded = 0,
@@ -131,15 +131,15 @@ internal readonly record struct ExecutionRequirements(
 }
 
 /// <summary>The colour and alpha rules an optimisation must not change.</summary>
-internal readonly record struct PixelSemantics(SampleDomain Domain, AlphaPolicy Alpha, Precision Precision)
+internal readonly record struct PixelSemantics(PixelDomain Domain, AlphaPolicy Alpha, Precision Precision)
 {
     /// <summary>Encoded samples, alpha preserved, one rounding after float work — the default.</summary>
     internal static PixelSemantics EncodedFloat { get; } = new(
-        SampleDomain.Encoded, AlphaPolicy.Preserve, Precision.SingleRoundFloat);
+        PixelDomain.Encoded, AlphaPolicy.Preserve, Precision.SingleRoundFloat);
 
     /// <summary>Encoded samples, alpha preserved, exact integer arithmetic (byte tables).</summary>
     internal static PixelSemantics EncodedInteger { get; } = new(
-        SampleDomain.Encoded, AlphaPolicy.Preserve, Precision.IntegerExact);
+        PixelDomain.Encoded, AlphaPolicy.Preserve, Precision.IntegerExact);
 
     /// <summary>Encoded samples where alpha is filtered like the colour channels.</summary>
     internal static PixelSemantics EncodedFloatAlphaComputed { get; } = EncodedFloat with

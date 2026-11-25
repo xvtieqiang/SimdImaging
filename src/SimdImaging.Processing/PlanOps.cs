@@ -376,6 +376,99 @@ public static class PlanOps
     public static ImageOp Vibrance(float amount, bool bt709 = false) =>
         Point(nameof(PointOps.Vibrance), v => PointOps.Vibrance(v, amount, bt709));
 
+    /// <summary>Multiplies colour by alpha, leaving alpha itself unchanged.</summary>
+    public static ImageOp Premultiply() =>
+        Point(nameof(AlphaOps.Premultiply), v => AlphaOps.Premultiply(v));
+
+    /// <summary>Divides colour by alpha, leaving alpha itself unchanged.</summary>
+    public static ImageOp Unpremultiply() =>
+        Point(nameof(AlphaOps.Unpremultiply), v => AlphaOps.Unpremultiply(v));
+
+    /// <summary>A 4x4 (or 4x5) colour matrix, copied so the step outlives the call.</summary>
+    public static ImageOp ColorMatrix(ReadOnlySpan<float> matrix)
+    {
+        var copy = matrix.ToArray();
+        return Point(nameof(PointOps.ColorMatrix), v => PointOps.ColorMatrix(v, copy));
+    }
+
+    /// <summary>Rotates hue by <paramref name="degrees"/>, preserving alpha.</summary>
+    public static ImageOp HueRotate(float degrees) =>
+        Point(nameof(PointOps.HueRotate), v => PointOps.HueRotate(v, degrees));
+
+    /// <summary>Thresholds alpha at <paramref name="threshold"/>, leaving colour unchanged.</summary>
+    public static ImageOp AlphaThreshold(float threshold = 0.5f) =>
+        Point(nameof(PointOps.AlphaThreshold), v => PointOps.AlphaThreshold(v, threshold),
+            semantics: PixelSemantics.EncodedFloat with { Alpha = AlphaPolicy.Recomputes });
+
+    /// <summary>Tints towards <paramref name="tint"/> by <paramref name="amount"/>.</summary>
+    public static ImageOp Tint(RgbaColor tint, float amount = 0.5f) =>
+        Point(nameof(PointOps.Tint), v => PointOps.Tint(v, tint, amount));
+
+    /// <summary>Per-tonal-range colour shifts.</summary>
+    public static ImageOp ColorBalance(ColorBalanceShifts shadows, ColorBalanceShifts midtones,
+        ColorBalanceShifts highlights, bool bt709 = false) =>
+        Point(nameof(PointOps.ColorBalance), v => PointOps.ColorBalance(v, shadows, midtones, highlights, bt709));
+
+    /// <summary>Swaps colour channels by index.</summary>
+    public static ImageOp ChannelSwap(int redSource, int greenSource, int blueSource) =>
+        Point(nameof(PointOps.ChannelSwap), v => PointOps.ChannelSwap(v, redSource, greenSource, blueSource));
+
+    /// <summary>Luma threshold to black and white.</summary>
+    public static ImageOp BlackWhite(float threshold = 0.5f, bool bt709 = false) =>
+        Point(nameof(PointOps.BlackWhite), v => PointOps.BlackWhite(v, threshold, bt709));
+
+    /// <summary>Clamps every channel to <c>[low, high]</c>.</summary>
+    public static ImageOp Clamp(float low, float high) =>
+        Point(nameof(PointOps.Clamp), v => PointOps.Clamp(v, low, high));
+
+    /// <summary>Scales alpha by <paramref name="opacity"/>.</summary>
+    public static ImageOp Opacity(float opacity) =>
+        Point(nameof(PointOps.Opacity), v => PointOps.Opacity(v, opacity));
+
+    /// <summary>Multiplies lightness by <paramref name="factor"/>.</summary>
+    public static ImageOp Lightness(float factor) =>
+        Point(nameof(PointOps.Lightness), v => PointOps.Lightness(v, factor));
+
+    /// <summary>Luma threshold at <paramref name="threshold"/>.</summary>
+    public static ImageOp Threshold(float threshold, bool bt709 = false) =>
+        Point(nameof(PointOps.Threshold), v => PointOps.Threshold(v, threshold, bt709));
+
+    /// <summary>Encoded samples to linear light under <paramref name="curve"/>.</summary>
+    public static ImageOp Linearize(TransferCurve curve = TransferCurve.Srgb) =>
+        Point(nameof(TransferOps.Linearize), v => TransferOps.Linearize(v, curve),
+            semantics: PixelSemantics.EncodedFloat with { Domain = PixelDomain.Linear });
+
+    /// <summary>Linear light back to encoded samples under <paramref name="curve"/>.</summary>
+    public static ImageOp Delinearize(TransferCurve curve = TransferCurve.Srgb) =>
+        Point(nameof(TransferOps.Delinearize), v => TransferOps.Delinearize(v, curve));
+
+    /// <summary>Simulates (or corrects) a colour-vision deficiency.</summary>
+    public static ImageOp ColorBlindness(ColorVisionDeficiency kind = ColorVisionDeficiency.Protanopia,
+        float severity = 1f, bool correct = false) =>
+        Point(nameof(ColorBlindnessOps.ColorBlindness),
+            v => ColorBlindnessOps.ColorBlindness(v, kind, severity, correct));
+
+    /// <summary>Prewitt gradient magnitude; one row and one column.</summary>
+    public static ImageOp Prewitt(bool bt709 = false) =>
+        Neighborhood(nameof(FilterOps.Prewitt), 1, v => FilterOps.Prewitt(v, bt709));
+
+    /// <summary>Scharr gradient magnitude; one row and one column.</summary>
+    public static ImageOp Scharr(bool bt709 = false) =>
+        Neighborhood(nameof(FilterOps.Scharr), 1, v => FilterOps.Scharr(v, bt709));
+
+    /// <summary>Laplacian; one row and one column.</summary>
+    public static ImageOp Laplacian(bool bt709 = false) =>
+        Neighborhood(nameof(FilterOps.Laplacian), 1, v => FilterOps.Laplacian(v, bt709));
+
+    /// <summary>A 3x3 convolution; one row and one column.</summary>
+    public static ImageOp Convolve3x3(ReadOnlySpan<float> kernel, float bias = 0f)
+    {
+        if (kernel.Length != 9)
+            throw new ArgumentException("A 3x3 kernel needs 9 weights.", nameof(kernel));
+        var weights = kernel.ToArray();
+        return Neighborhood(nameof(FilterOps.Convolve3x3), 1, v => FilterOps.Convolve3x3(v, weights, bias));
+    }
+
     /// <summary>
     /// Seeded grain. Global: the generator advances once per pixel across the whole image, so a band would replay
     /// the same sequence and the grain would turn into stripes.
