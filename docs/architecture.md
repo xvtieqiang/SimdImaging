@@ -726,6 +726,22 @@ Region 以 `GlobalStep` 拒绝）；`MapToPalette` / `QuantizeWebSafe` 是 Point
 `DistanceTransform` 没有迁移：它输出 `Rgba32F`，而 `PlanStep` 假设输出格式 = 输入格式。`ConvertColorSpace` /
 `IccTransform` / `ChromaResample` 也受格式或两行依赖约束，仍是 barrier；这条缺口记在 `known-gaps.md`。
 
+### 6.3.6 格式变化步骤
+
+`OperatorContract.Output.Format` 非空时，这个步骤改变工作格式。`ImageOp` 要求它必须有整图内核（计划内核写不进另一种格式的
+目标），`ProcessingPlan.Add` 直接拒绝这种步骤；只有编译器能把它放对位置。
+
+编译器把它切成 `CompiledSectionKind.Format`：执行器调用整图内核得到新格式的缓冲，下一段在这个格式上重新验证和分配。三条
+不支持的后端各有明确原因：`StreamRefusal.FormatChange`、`RegionRefusal.FormatChange`、`TileRefusal.FormatChange`。
+Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式估计计划 scratch（保守方向）。
+
+已迁移：`DistanceTransform`（输出 `Rgba32F`）、`ConvertColorSpace`（输出 `Rgba32F`）。`ImagePipeline.CurrentFormat`
+会把 recipe 里尚未执行的格式步骤算进去，所以 `ConvertColorSpace(...).Composite(Rgba32F overlay, ...)` 的格式校验仍
+在调用点通过。
+
+仍是非计划步骤：`IccTransform`（同格式，LUT/配置文件）、`ChromaResample`（两行依赖）、`Glow` / `RichardsonLucy`
+（halo 分别为 `ceil(3σ)` 与 `iterations × PSF 半径`）、`ApplyGainMap` / `DrawImage` / `Watermark`（第二输入或尺寸依赖）。
+
 ### 6.4 超限行为
 
 - `MaxWorkingBytes` 不够 → 先尝试降档（Rgba32F → Rgba16，若算子是精确整数语义）→ 仍不够则抛，**不静默改精度**。

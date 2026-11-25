@@ -1262,10 +1262,10 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 
 ## 几何执行（M18）
 
-- **工作格式变化的步骤（P3 缺口）**：`PlanStep` / `ProcessingPlan` 假设输出格式 = 输入格式，执行器的目标缓冲也是源格式。
-  `DistanceTransform` 输出 `Rgba32F`，`ConvertColorSpace` 可切到线性 float，`IccTransform` / `ChromaResample` 另有格式或
-  两行依赖。它们仍是 barrier。打开需要步骤声明 output format、执行器按段切换中间格式，并在 Workspace 与契约里表达；
-  不能靠同格式假设硬塞。这是 P3 下一批的前置设计。
+- **剩余的非计划步骤（P3 尾段）**：`IccTransform` 仍是 barrier（同格式，但 LUT/配置文件不进入契约）；`ChromaResample`
+  需要两行依赖；`Glow` / `RichardsonLucy` 的 halo 分别是 `ceil(3σ)` 与 `iterations × PSF 半径`，尚未声明；
+  `ApplyGainMap` / `DrawImage` / `Watermark` 需要第二输入或尺寸依赖。格式变化本身已解决：`DistanceTransform` /
+  `ConvertColorSpace` 以 `CompiledSectionKind.Format` 运行，Stream / Region / Tile 以 `FormatChange` 拒绝。
 - **多输入（Frame 版已落地，通用模型仍缺）**：`PlanOps.Composite` / `PlanOps.Blend` 以 `OpCategory.Composite`
   和两个端口进入计划，Frame 由内核捕获的 overlay 视图执行；`ImagePipeline.Composite/Blend` 已从 barrier 迁成步骤，
   overlay 必须活到 `ToImage`（xmldoc 写明），格式在调用时校验。Stream / Region 仍以 `CompositeStep` 拒绝。
