@@ -750,9 +750,11 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
 - `DrawImage`：Composite 步骤，overlay 在内核里缩放到目标矩形并按 opacity 淡化；overlay 必须活到 `ToImage`。
 - `ApplyGainMap`：Composite + 输出 `Rgba32F`，走格式段；Stream / Region / Tile 以 `FormatChange` 拒绝。
 - `Watermark`：位置依赖当前尺寸，先 `Flush` 再追加 `DrawImage`；opacity 现在真的生效（旧实现忽略了这个参数）。
+- `Glow`：Global 步骤。它先做一张整图高光缓冲，再模糊并合成，所以不能用 band；scratch 按两张整帧 + 每像素
+  16 字节声明，Stream / Region 以 `GlobalStep` 拒绝。
 - `Perspective`：补成 GeometryStep，之前是唯一还在 `Reshape` 的几何重载。
 
-剩余 barrier：`Glow`（内部整图高光缓冲）、`IccTransform`（同格式 LUT/配置文件）、`ChromaResample`（两行依赖）。
+剩余 barrier：`IccTransform`（同格式 LUT/配置文件，scratch 无法从外部准确推导）、`ChromaResample`（两行色度依赖）。
 
 ### 6.4 超限行为
 

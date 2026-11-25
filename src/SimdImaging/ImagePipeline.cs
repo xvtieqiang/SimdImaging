@@ -294,7 +294,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Glow(float threshold = 0.7f, float sigma = 8f, float amount = 0.6f) =>
-        Reshape(v => FilterOps.Glow(v, threshold, sigma, amount, _pool));
+        Step(PlanOps.Glow(threshold, sigma, amount));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline RichardsonLucy(float sigma, int iterations = 10) =>

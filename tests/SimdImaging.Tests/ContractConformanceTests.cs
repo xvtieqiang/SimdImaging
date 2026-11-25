@@ -110,6 +110,7 @@ public sealed class ContractConformanceTests
             InputFootprintKind.WholeSource, Pass: PassModel.GatherThenApply, SameFormat: false),
         new("convert-color-space", () => PlanOps.ConvertColorSpace(ColorSpace.Lab), WorkingFormatMask.All,
             InputFootprintKind.Identity, SameFormat: false),
+        new("glow", () => PlanOps.Glow(), WorkingFormatMask.All, InputFootprintKind.WholeSource),
         new("tone-map", () => PlanOps.ToneMap(), WorkingFormatMask.All, InputFootprintKind.WholeSource),
         new("dither", () => PlanOps.Dither(4), WorkingFormatMask.All, InputFootprintKind.WholeSource),
         new("quantize", () => PlanOps.Quantize(16), WorkingFormatMask.All, InputFootprintKind.WholeSource,

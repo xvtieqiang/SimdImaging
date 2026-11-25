@@ -425,6 +425,13 @@ public static class PlanOps
             PassModel.Single, PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded },
             second: new InputPort("gain-map", PortRole.Overlay, WorkingFormatMask.All, Required: true));
 
+    /// <summary>Thresholded bloom. The highlights and the blurred copy are both full frames, so this is a whole-image
+    /// step (Frame only) rather than a banded one.</summary>
+    public static ImageOp Glow(float threshold = 0.7f, float sigma = 8f, float amount = 0.6f) =>
+        Global(nameof(FilterOps.Glow), v => FilterOps.Glow(v, threshold, sigma, amount),
+            (width, height, _, format) =>
+                (2L * width * height * format.BytesPerPixel()) + (16L * width * height));
+
     /// <summary>Warm or cool shift.</summary>
     /// <param name="amount">Positive warms, negative cools.</param>
     public static ImageOp Temperature(float amount) =>

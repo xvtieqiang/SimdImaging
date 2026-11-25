@@ -939,6 +939,7 @@
   SimdImaging.Processing.PlanOps.Gamma(System.Single gamma) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.GaussianBlur(System.Single sigma) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.GaussianSharpen(System.Single amount, System.Single sigma) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.Glow(System.Single threshold, System.Single sigma, System.Single amount) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Grayscale(System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.GuidedFilter(System.Int32 radius, System.Single epsilon) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.HueRotate(System.Single degrees) -> SimdImaging.Processing.ImageOp

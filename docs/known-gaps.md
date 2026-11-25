@@ -1262,9 +1262,9 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 
 ## 几何执行（M18）
 
-- **剩余的非计划步骤（P3 收尾）**：`Glow` 需要一块整图高光缓冲，`IccTransform` 的 LUT/配置文件还没有进入契约，
-  `ChromaResample` 依赖两行色度。三者仍是 barrier；其余算子（含反卷积、DrawImage、ApplyGainMap、Watermark）已进入
-  计划或格式段。反卷积的 halo 已修正为 `2 × PSF 半径 × iterations`（旧的 `1 ×` 在 Frame vs Stream 下会露缝）。
+- **剩余的非计划步骤（P3 收尾）**：`IccTransform` 的 LUT/配置文件还没有进入契约，`ChromaResample` 依赖两行色度。
+  两者仍是 barrier；`Glow` 已作为 Global 步骤进入计划，其余算子（含反卷积、DrawImage、ApplyGainMap、Watermark）也都
+  已进入计划或格式段。反卷积的 halo 已修正为 `2 × PSF 半径 × iterations`（旧的 `1 ×` 在 Frame vs Stream 下会露缝）。
 - **多输入（Frame 版已落地，通用模型仍缺）**：`PlanOps.Composite` / `PlanOps.Blend` 以 `OpCategory.Composite`
   和两个端口进入计划，Frame 由内核捕获的 overlay 视图执行；`ImagePipeline.Composite/Blend` 已从 barrier 迁成步骤，
   overlay 必须活到 `ToImage`（xmldoc 写明），格式在调用时校验。Stream / Region 仍以 `CompositeStep` 拒绝。
