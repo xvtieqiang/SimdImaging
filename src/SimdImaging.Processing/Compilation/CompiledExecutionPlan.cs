@@ -72,6 +72,7 @@ internal sealed class CompiledExecutionPlan
         int width,
         int height,
         bool sizeKnown,
+        WorkspacePlan workspace,
         IReadOnlyList<string> explanation)
     {
         Recipe = recipe;
@@ -84,6 +85,7 @@ internal sealed class CompiledExecutionPlan
         Width = width;
         Height = height;
         SizeKnown = sizeKnown;
+        Workspace = workspace;
         Explanation = Array.AsReadOnly(explanation.ToArray());
     }
 
@@ -112,6 +114,9 @@ internal sealed class CompiledExecutionPlan
 
     /// <summary>False when a geometry step's size depends on the content (trim, seam carve).</summary>
     internal bool SizeKnown { get; }
+
+    /// <summary>What the plan is predicted to hold, and what the engine cannot see. Report only.</summary>
+    internal WorkspacePlan Workspace { get; }
 
     /// <summary>One line per decision: step semantics, fusion, backend, refusal.</summary>
     internal IReadOnlyList<string> Explanation { get; }
