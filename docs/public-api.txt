@@ -921,12 +921,14 @@
   SimdImaging.Processing.PlanOps.ColorMatrix(System.ReadOnlySpan<System.Single> matrix) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Composite(SimdImaging.Abstractions.PixelView overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.PorterDuff mode) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Contrast(System.Single amount) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.ConvertColorSpace(SimdImaging.Processing.ColorSpace target, SimdImaging.Processing.YCbCrStandard ycbcr, System.Boolean limitedRange, SimdImaging.Processing.WhitePoint white, SimdImaging.Processing.ChromaticAdaptation adaptation) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Convolve(System.ReadOnlySpan<System.Single> kernel, System.Int32 radius, SimdImaging.Abstractions.BorderMode border, System.Single bias, System.Single constantValue) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Convolve3x3(System.ReadOnlySpan<System.Single> kernel, System.Single bias) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Curves(System.ReadOnlySpan<SimdImaging.Processing.CurvePoint> points) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dehaze(System.Int32 patchRadius, System.Single omega, System.Single tMin, System.Int32 refineRadius) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Delinearize(SimdImaging.Processing.TransferCurve curve) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dilate3x3() -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.DistanceTransform(System.Single threshold) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dither(System.Int32 bits, SimdImaging.Processing.DitherKernel kernel) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.DitherToPalette(SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Processing.DitherKernel kernel, System.Single maxError) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Emboss(System.Single strength) -> SimdImaging.Processing.ImageOp
@@ -1075,6 +1077,7 @@
   SimdImaging.Processing.Quantizer.Octree = 2
   SimdImaging.Processing.Quantizer.Wu = 1
   SimdImaging.Processing.RegionRefusal.CompositeStep = 2
+  SimdImaging.Processing.RegionRefusal.FormatChange = 5
   SimdImaging.Processing.RegionRefusal.GeometricStep = 4
   SimdImaging.Processing.RegionRefusal.GlobalStep = 1
   SimdImaging.Processing.RegionRefusal.None = 0
@@ -1115,6 +1118,7 @@
   SimdImaging.Processing.RichardsonLucyOps.ScratchBytes(System.Int32 width, System.Int32 height, SimdImaging.Abstractions.WorkingFormat format) -> System.Int64
   SimdImaging.Processing.StreamRefusal.CompositeStep = 2
   SimdImaging.Processing.StreamRefusal.DecodeNeedsWholeInput = 4
+  SimdImaging.Processing.StreamRefusal.FormatChange = 6
   SimdImaging.Processing.StreamRefusal.GeometricStep = 5
   SimdImaging.Processing.StreamRefusal.GlobalStep = 1
   SimdImaging.Processing.StreamRefusal.None = 0

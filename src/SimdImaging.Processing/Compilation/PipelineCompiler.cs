@@ -25,19 +25,34 @@ internal static class PipelineCompiler
         var width = options.SourceWidth;
         var height = options.SourceHeight;
         var sizeKnown = true;
-        var bytesPerPixel = options.SourceFormat.BytesPerPixel();
-
-        ValidateFormats(recipe, options.SourceFormat);
+        var currentFormat = options.SourceFormat;
 
         var index = 0;
         while (index < recipe.Count)
         {
+            // A format-changing step is a boundary of its own: the plan kernel writes into a destination of the
+            // source format, so this step executes as a whole-image reshape and the next run starts in the new
+            // format.
+            if (recipe.Steps[index] is OperatorStep formatStep &&
+                formatStep.Operator.Contract.Output.Format is { } outputFormat)
+            {
+                ValidateFormat(formatStep, currentFormat);
+                explanation.Add($"step {index} {formatStep.Name}: format {currentFormat} -> {outputFormat}, materialises");
+                sections.Add(new CompiledSection(CompiledSectionKind.Format, -1, 0, index));
+                currentFormat = outputFormat;
+                index++;
+                continue;
+            }
+
             if (recipe.Steps[index] is OperatorStep)
             {
                 var first = steps.Count;
                 var recipeFirst = index;
-                while (index < recipe.Count && recipe.Steps[index] is OperatorStep op)
+                while (index < recipe.Count &&
+                       recipe.Steps[index] is OperatorStep op &&
+                       op.Operator.Contract.Output.Format is null)
                 {
+                    ValidateFormat(op, currentFormat);
                     steps.Add(new PlanStep(op.Operator));
                     explanation.Add($"step {index} {op.Name}: {op.Operator.Category}, " +
                         $"{op.Operator.Contract.Footprint.Describe}, {op.Operator.Contract.Requirements.Partition}");
@@ -45,7 +60,8 @@ internal static class PipelineCompiler
                 }
 
                 var count = steps.Count - first;
-                var fused = DecideFusion(steps, first, count, width, height, bytesPerPixel, options, explanation);
+                var fused = DecideFusion(steps, first, count, width, height,
+                    currentFormat.BytesPerPixel(), options, explanation);
                 sections.Add(new CompiledSection(CompiledSectionKind.OperatorRun, first, count, recipeFirst)
                 {
                     Fused = fused,
@@ -126,16 +142,13 @@ internal static class PipelineCompiler
         return ClassifyStream(recipe, steps, options, out blocked);
     }
 
-    private static void ValidateFormats(PipelineRecipe recipe, WorkingFormat format)
+    private static void ValidateFormat(OperatorStep step, WorkingFormat format)
     {
         var mask = Mask(format);
-        foreach (var step in recipe.Steps)
-        {
-            if (step is OperatorStep op && (op.Operator.Contract.Formats & mask) == 0)
-                throw new NotSupportedException(
-                    $"Step {step.Index} '{step.Name}' does not support {format} " +
-                    $"(it declares {op.Operator.Contract.Formats}). Chain the operator differently or convert first.");
-        }
+        if ((step.Operator.Contract.Formats & mask) == 0)
+            throw new NotSupportedException(
+                $"Step {step.Index} '{step.Name}' does not support {format} " +
+                $"(it declares {step.Operator.Contract.Formats}). Chain the operator differently or convert first.");
     }
 
     private static bool DecideFusion(IReadOnlyList<PlanStep> steps, int first, int count, int width, int height,
@@ -190,6 +203,8 @@ internal static class PipelineCompiler
 
         foreach (var step in recipe.Steps)
         {
+            if (step is OperatorStep { Operator.Contract.Output.Format: not null })
+                return StreamRefusal.FormatChange;
             if (step is GeometryStep geometry && !geometry.CanWrap)
                 return StreamRefusal.GeometricStep;
         }
@@ -218,6 +233,8 @@ internal static class PipelineCompiler
 
         foreach (var step in recipe.Steps)
         {
+            if (step is OperatorStep { Operator.Contract.Output.Format: not null })
+                return RegionRefusal.FormatChange;
             if (step is GeometryStep)
                 return RegionRefusal.GeometricStep;
         }
@@ -235,6 +252,8 @@ internal static class PipelineCompiler
             if (step is not OperatorStep op)
                 return TileRefusal.NotTileable;
 
+            if (op.Operator.Contract.Output.Format is not null)
+                return TileRefusal.FormatChange;
             if (op.Operator.Contract.Footprint.IsBlockAligned)
                 return TileRefusal.BlockAlignedOperator;
             if (op.Operator.Category == OpCategory.Global)

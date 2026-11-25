@@ -26,9 +26,10 @@ public static class PlanOps
         WorkspaceModel workspace, KernelImplementations kernels,
         WorkingFormatMask formats = WorkingFormatMask.All, ExecutionRequirements? requirements = null,
         PassModel pass = PassModel.Single, PixelSemantics? semantics = null,
-        int? haloX = null, int? haloY = null, InputPort? input = null, InputPort? input2 = null) =>
+        int? haloX = null, int? haloY = null, InputPort? input = null, InputPort? input2 = null,
+        WorkingFormat? outputFormat = null) =>
         new(OperatorContract.Create(name, category, formats, footprint, workspace, requirements, pass, semantics,
-                input: input, input2: input2, haloX: haloX, haloY: haloY),
+                input: input, input2: input2, outputFormat: outputFormat, haloX: haloX, haloY: haloY),
             kernels);
 
     /// <summary>
@@ -159,7 +160,7 @@ public static class PlanOps
         Func<int, int, int, WorkingFormat, long>? scratch = null, IInputFootprint? footprint = null,
         PassModel pass = PassModel.Single, StateScope state = StateScope.None,
         ExecutionOrder order = ExecutionOrder.Any, Determinism determinism = Determinism.CoordinateDeterministic,
-        PixelSemantics? semantics = null)
+        PixelSemantics? semantics = null, WorkingFormat? outputFormat = null)
     {
         var requirements = ExecutionRequirements.WholeImage with
         {
@@ -171,7 +172,7 @@ public static class PlanOps
         return Create(name, OpCategory.Global, footprint ?? WholeSourceFootprint.Instance,
             scratch is null ? WorkspaceModel.Undeclared : WorkspaceModel.Of(scratch),
             new KernelImplementations(PlanSteps.Global(op), op),
-            requirements: requirements, pass: pass, semantics: semantics);
+            requirements: requirements, pass: pass, semantics: semantics, outputFormat: outputFormat);
     }
 
     /// <summary>Brightness by <paramref name="amount"/>.</summary>
@@ -481,6 +482,32 @@ public static class PlanOps
         var weights = kernel.ToArray();
         return Neighborhood(nameof(FilterOps.Convolve3x3), 1, v => FilterOps.Convolve3x3(v, weights, bias));
     }
+
+    /// <summary>
+    /// Squared Euclidean distance transform of the alpha channel, in Rgba32F. The output format differs from the
+    /// input, so this step can only run in a compiled recipe, never in a same-format <c>ProcessingPlan</c>.
+    /// </summary>
+    public static ImageOp DistanceTransform(float threshold = 0.5f) =>
+        Global("distance-transform", v => DistanceTransformOps.SquaredEuclidean(v, threshold),
+            (width, height, _, _) =>
+                (4L * width * height) + (256L * height) + (16L * Math.Max(width, height)) + (16L * width),
+            pass: PassModel.GatherThenApply,
+            outputFormat: WorkingFormat.Rgba32F,
+            semantics: PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
+
+    /// <summary>
+    /// Converts to a colour model (XYZ, Lab, YCbCr, ...) in Rgba32F. The output format differs from the input, so
+    /// this step is a recipe-level format boundary.
+    /// </summary>
+    public static ImageOp ConvertColorSpace(ColorSpace target, YCbCrStandard ycbcr = YCbCrStandard.Bt709,
+        bool limitedRange = false, WhitePoint white = WhitePoint.D65,
+        ChromaticAdaptation adaptation = ChromaticAdaptation.Bradford) =>
+        Global("convert-color-space",
+            v => ColorConversionOps.Convert(v, target, ycbcr, limitedRange, white, adaptation),
+            (width, _, _, _) => 16L * width,
+            footprint: IdentityFootprint.Instance,
+            outputFormat: WorkingFormat.Rgba32F,
+            semantics: PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
 
     /// <summary>HDR tone mapping. Auto-exposure needs the whole image's geometric mean first.</summary>
     public static ImageOp ToneMap(ToneMapCurve curve = ToneMapCurve.Aces, float exposure = 0f,

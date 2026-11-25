@@ -26,6 +26,9 @@ public enum RegionRefusal : byte
     /// <summary>The plan ends with a size change; a region run produces the rectangle at its own size. Use
     /// <c>Image.ResizeRegion</c> for "decode a rectangle, then resize it".</summary>
     GeometricStep,
+
+    /// <summary>A step changes the working format, which the region path's single destination format cannot carry.</summary>
+    FormatChange,
 }
 
 /// <summary>What <see cref="ProcessingPlan.TryExecuteRegion"/> did.</summary>

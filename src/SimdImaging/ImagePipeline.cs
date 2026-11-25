@@ -218,7 +218,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline DistanceTransform(float threshold = 0.5f) =>
-        Reshape(v => DistanceTransformOps.SquaredEuclidean(v, threshold, _pool));
+        Step(PlanOps.DistanceTransform(threshold));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ResizeCanvas(int width, int height, Anchor anchor = Anchor.Centre, RgbaColor background = default) =>
@@ -262,7 +262,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ConvertColorSpace(ColorSpace target, YCbCrStandard ycbcr = YCbCrStandard.Bt709, bool limitedRange = false, WhitePoint white = WhitePoint.D65, ChromaticAdaptation adaptation = ChromaticAdaptation.Bradford) =>
-        Reshape(v => ColorConversionOps.Convert(v, target, ycbcr, limitedRange, white, adaptation, _pool));
+        Step(PlanOps.ConvertColorSpace(target, ycbcr, limitedRange, white, adaptation));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline IccTransform(ReadOnlySpan<byte> sourceProfile, ReadOnlySpan<byte> destinationProfile = default)
@@ -454,9 +454,26 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         return Step(PlanOps.Blend(overlay[0].Pixels.View, x, y, mode));
     }
 
+    /// <summary>The working format at the current end of the chain: the last materialised image's, then any
+    /// format-changing steps already queued.</summary>
+    private WorkingFormat CurrentFormat
+    {
+        get
+        {
+            var format = _current?.Format ?? _source.Format;
+            foreach (var step in _recipe.Steps)
+            {
+                if (step is OperatorStep { Operator.Contract.Output.Format: { } output })
+                    format = output;
+            }
+
+            return format;
+        }
+    }
+
     private void EnsureOverlayFormat(Image overlay)
     {
-        var format = _current?.Format ?? _source.Format;
+        var format = CurrentFormat;
         if (overlay.Format != format)
             throw new ArgumentException($"The overlay is {overlay.Format} but this image is {format}.", nameof(overlay));
     }

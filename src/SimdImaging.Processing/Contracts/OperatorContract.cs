@@ -91,6 +91,7 @@ internal sealed class OperatorContract
         PixelSemantics? semantics = null,
         InputPort? input = null,
         InputPort? input2 = null,
+        WorkingFormat? outputFormat = null,
         OutputPort? output = null,
         GeometryRule? geometry = null,
         int? haloX = null,
@@ -114,6 +115,10 @@ internal sealed class OperatorContract
             throw new ArgumentException(
                 $"The operator '{name}' declares no supported format; None means 'cannot run', which no plan step is.",
                 nameof(formats));
+
+        if (outputFormat is not null && category == OpCategory.Composite)
+            throw new ArgumentException(
+                $"The composite operator '{name}' cannot also change the working format.", nameof(outputFormat));
 
         if (category == OpCategory.Geometric)
             throw new ArgumentException(
@@ -160,7 +165,7 @@ internal sealed class OperatorContract
             category,
             formats,
             inputs,
-            output ?? new OutputPort("output", SameSize: true, SameFormat: true),
+            output ?? new OutputPort("output", SameSize: true, SameFormat: outputFormat is null, outputFormat),
             geometry ?? GeometryRule.SameSize,
             footprint,
             resolvedHaloX,

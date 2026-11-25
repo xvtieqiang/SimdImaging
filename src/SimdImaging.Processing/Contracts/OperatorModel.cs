@@ -167,8 +167,10 @@ internal enum PortRole : byte
 /// <summary>One input a step reads.</summary>
 internal readonly record struct InputPort(string Name, PortRole Role, WorkingFormatMask Formats, bool Required);
 
-/// <summary>What a step produces. Every planned step today produces one same-size image of the source format.</summary>
-internal readonly record struct OutputPort(string Name, bool SameSize, bool SameFormat);
+/// <summary>What a step produces. <paramref name="Format"/> is null when the output keeps the input's working
+/// format; a non-null value makes the step a format boundary that only the compiled recipe can place.</summary>
+internal readonly record struct OutputPort(string Name, bool SameSize, bool SameFormat,
+    WorkingFormat? Format = null);
 
 /// <summary>How a step's output relates to its input geometry.</summary>
 internal abstract record GeometryRule

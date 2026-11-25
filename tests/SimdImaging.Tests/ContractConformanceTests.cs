@@ -21,7 +21,8 @@ public sealed class ContractConformanceTests
         WorkingFormatMask Formats,
         InputFootprintKind Footprint,
         int Halo = 0,
-        PassModel Pass = PassModel.Single);
+        PassModel Pass = PassModel.Single,
+        bool SameFormat = true);
 
     private static readonly Expected[] Ops =
     [
@@ -101,6 +102,10 @@ public sealed class ContractConformanceTests
         new("oilpaint", () => PlanOps.OilPaint(2), WorkingFormatMask.All, InputFootprintKind.Halo, 2),
 
         // Whole-image steps: the ones that read the whole picture declare it; the position-local ones say so.
+        new("distance-transform", () => PlanOps.DistanceTransform(), WorkingFormatMask.All,
+            InputFootprintKind.WholeSource, Pass: PassModel.GatherThenApply, SameFormat: false),
+        new("convert-color-space", () => PlanOps.ConvertColorSpace(ColorSpace.Lab), WorkingFormatMask.All,
+            InputFootprintKind.Identity, SameFormat: false),
         new("tone-map", () => PlanOps.ToneMap(), WorkingFormatMask.All, InputFootprintKind.WholeSource),
         new("dither", () => PlanOps.Dither(4), WorkingFormatMask.All, InputFootprintKind.WholeSource),
         new("quantize", () => PlanOps.Quantize(16), WorkingFormatMask.All, InputFootprintKind.WholeSource,
@@ -149,6 +154,7 @@ public sealed class ContractConformanceTests
             contract.Inputs.Count.ShouldBeGreaterThan(0, $"{expected.Name}: needs an input port");
             contract.Inputs[0].Formats.ShouldBe(expected.Formats, $"{expected.Name}: input port formats");
             contract.Output.SameSize.ShouldBeTrue($"{expected.Name}: plan steps are same-size");
+            contract.Output.SameFormat.ShouldBe(expected.SameFormat, $"{expected.Name}: output format rule");
             contract.Requirements.Partition.ShouldBe(
                 contract.Category is OpCategory.Global or OpCategory.Composite
                     || expected.Footprint is InputFootprintKind.BlockAligned
@@ -169,6 +175,15 @@ public sealed class ContractConformanceTests
                     continue;
 
                 using var image = TestImages.Gradient(64, 48, format);
+                if (!expected.SameFormat)
+                {
+                    using var direct = expected.Factory().Direct!(image[0].Pixels.View);
+                    direct.Width.ShouldBe(64, $"{expected.Name}/{format}: width");
+                    direct.Height.ShouldBe(48, $"{expected.Name}/{format}: height");
+                    direct.Format.ShouldBe(WorkingFormat.Rgba32F, $"{expected.Name}/{format}: output format");
+                    continue;
+                }
+
                 using var result = new ProcessingPlan().Add(expected.Factory()).Execute(image[0].Pixels.View);
                 result.Width.ShouldBe(64, $"{expected.Name}/{format}: width");
                 result.Height.ShouldBe(48, $"{expected.Name}/{format}: height");
@@ -234,7 +249,7 @@ public sealed class ContractConformanceTests
         foreach (var expected in Ops)
         {
             var op = expected.Factory();
-            if (op.Direct is not { } direct)
+            if (!expected.SameFormat || op.Direct is not { } direct)
                 continue;
 
             using var image = TestImages.Gradient(40, 32, WorkingFormat.Rgba8);

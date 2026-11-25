@@ -31,6 +31,9 @@ public enum StreamRefusal : byte
     /// resize, crop, pad and horizontal flip do have one; rotation, warp and canvas changes do not. Appended after
     /// <see cref="DecodeNeedsWholeInput"/> so the existing values keep their numbers.</summary>
     GeometricStep,
+
+    /// <summary>A step changes the working format; a row chain cannot splice two formats, so the plan materialises.</summary>
+    FormatChange,
 }
 
 /// <summary>What <see cref="ProcessingPlan.TryExecuteTo"/> did.</summary>

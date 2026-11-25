@@ -29,6 +29,13 @@ public sealed class ImageOp : IImageOp
     {
         Contract = contract ?? throw new ArgumentNullException(nameof(contract));
         Kernels = kernels ?? throw new ArgumentNullException(nameof(kernels));
+
+        // A format-changing step is executed as a whole-image reshape; a plan kernel writes into a destination of
+        // the source format and cannot change it. Refuse the combination at construction instead of at a boundary.
+        if (contract.Output.Format is not null && kernels.WholeImage is null)
+            throw new ArgumentException(
+                $"The operator '{contract.Name}' changes the working format to {contract.Output.Format} but has no " +
+                "whole-image kernel.", nameof(kernels));
     }
 
     internal OperatorContract Contract { get; }

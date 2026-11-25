@@ -36,6 +36,13 @@ internal static class CompiledPlanExecutor
                     next = ProcessingPlan.FromCompiled(steps, plan.BandRows)
                         .ExecuteWithOptions(current, options, pool, sectionObserver);
                 }
+                else if (section.Kind == CompiledSectionKind.Format)
+                {
+                    // The whole-image form is the only one that can allocate a buffer in another format. The
+                    // contract guarantees it exists for a step that declares an output format.
+                    var formatStep = (OperatorStep)plan.Recipe.Steps[section.RecipeIndex];
+                    next = formatStep.Operator.Kernels.WholeImage!(current);
+                }
                 else
                 {
                     var geometry = (GeometryStep)plan.Recipe.Steps[section.RecipeIndex];
@@ -79,6 +86,10 @@ internal static class CompiledPlanExecutor
         IRowSource current = source;
         foreach (var section in plan.Sections)
         {
+            if (section.Kind == CompiledSectionKind.Format)
+                throw new InvalidOperationException(
+                    "A format-changing section has no row form; the compiler must not choose Stream for it.");
+
             if (section.Kind == CompiledSectionKind.OperatorRun)
             {
                 var steps = Slice(plan.Steps, section.FirstStep, section.StepCount);

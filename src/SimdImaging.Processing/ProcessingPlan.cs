@@ -279,6 +279,10 @@ public sealed class ProcessingPlan
         if (op.Category == OpCategory.Geometric)
             throw new NotSupportedException(
                 "A geometric step changes the image size, which a same-size plan cannot represent; run it outside the plan.");
+        if (op.Contract.Output.Format is { } outputFormat)
+            throw new NotSupportedException(
+                $"The step '{op.Name}' changes the working format to {outputFormat}; a same-size plan keeps one " +
+                "format, so run it as a compiled recipe section instead.");
         if (HasResize)
             throw new InvalidOperationException(
                 "A resize ends the plan; add the steps before processing the size change, or run the resize outside.");

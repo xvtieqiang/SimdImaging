@@ -16,6 +16,7 @@ internal enum WorkspaceTermKind : byte
     ResizeStaging = 6,
     ResizeBatch = 7,
     ResizeWorkerRows = 8,
+    FormatStep = 9,
 }
 
 internal readonly record struct WorkspaceTerm(WorkspaceTermKind Kind, long Bytes, string Note);
@@ -70,21 +71,51 @@ internal static class WorkspacePlanner
 
         return backend == ExecutionBackend.Stream
             ? EstimateStream(recipe, steps, options, terms, unmanaged)
-            : EstimateFrame(steps, sections, options, outputWidth, outputHeight, terms, unmanaged);
+            : EstimateFrame(recipe, steps, sections, options, outputWidth, outputHeight, terms, unmanaged);
     }
 
-    private static WorkspacePlan EstimateFrame(IReadOnlyList<PlanStep> steps, IReadOnlyList<CompiledSection> sections,
-        CompileOptions options, int outputWidth, int outputHeight, List<WorkspaceTerm> terms,
-        List<UnmanagedTerm> unmanaged)
+    private static WorkspacePlan EstimateFrame(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
+        IReadOnlyList<CompiledSection> sections, CompileOptions options, int outputWidth, int outputHeight,
+        List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
     {
         var bandRows = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
         var fused = sections.Any(section => section.Fused);
-        var estimate = MemoryEstimator.Estimate(options.SourceWidth, options.SourceHeight, options.SourceFormat,
+
+        // A format section's output is one frame of the new format, and the sections after it run in that format.
+        // Estimate the plan scratch with the widest format in the chain; over-reporting is the safe direction.
+        var width = options.SourceWidth;
+        var height = options.SourceHeight;
+        var widest = options.SourceFormat;
+        var finalFormat = options.SourceFormat;
+        var formatTerms = new List<WorkspaceTerm>();
+        foreach (var step in recipe.Steps)
+        {
+            if (step is GeometryStep geometry)
+            {
+                if (geometry.Geometry.SizeKnown)
+                    (width, height) = geometry.Geometry.Map(width, height);
+                continue;
+            }
+
+            if (step is OperatorStep { Operator.Contract.Output.Format: { } outputFormat })
+            {
+                formatTerms.Add(new WorkspaceTerm(WorkspaceTermKind.FormatStep,
+                    (long)width * height * outputFormat.BytesPerPixel(), $"{width}x{height} {outputFormat}"));
+                if (outputFormat.BytesPerPixel() > widest.BytesPerPixel())
+                    widest = outputFormat;
+                finalFormat = outputFormat;
+            }
+        }
+
+        var estimate = MemoryEstimator.Estimate(options.SourceWidth, options.SourceHeight, widest,
             steps, bandRows, allowFusion: fused, options.Execute.MaxDegreeOfParallelism);
 
-        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Source, estimate.InputBytes, "decoded source"));
+        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Source,
+            (long)options.SourceWidth * options.SourceHeight * options.SourceFormat.BytesPerPixel(),
+            "decoded source"));
         terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination,
-            (long)outputWidth * outputHeight * options.SourceFormat.BytesPerPixel(), "result image"));
+            (long)outputWidth * outputHeight * finalFormat.BytesPerPixel(), "result image"));
+        terms.AddRange(formatTerms);
         if (estimate.PlanScratchBytes > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, estimate.PlanScratchBytes, "plan buffers"));
         if (estimate.PerWorkerBytes > 0)

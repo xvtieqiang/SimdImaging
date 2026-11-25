@@ -21,6 +21,9 @@ internal enum CompiledSectionKind : byte
 {
     OperatorRun = 0,
     Geometry = 1,
+
+    /// <summary>One whole-image step that changes the working format; only Frame can run it.</summary>
+    Format = 2,
 }
 
 /// <summary>
@@ -53,6 +56,9 @@ internal enum TileRefusal : byte
 
     /// <summary>No step declares tile partitioning.</summary>
     NotTileable = 5,
+
+    /// <summary>A step changes the working format, which a tile destination cannot splice.</summary>
+    FormatChange = 6,
 }
 
 /// <summary>
