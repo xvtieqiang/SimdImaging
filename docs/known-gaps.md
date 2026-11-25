@@ -1274,7 +1274,8 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 - **Tile 后端（P5 第一刀已落地）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。未做：编码器端
   的 `IRegionSink` 实现（目前只有测试里的内存 Sink）、算子显式声明 `Partitioning.Tiles`（当前以 RowBands + halo 判定
-  可 tile）、以及 tile 的内存/吞吐基线。
+  可 tile）、以及 tile 的内存/吞吐基线。`IRegionSink` 目前只有测试实现，也还没有公开的入口（`ProcessTiles` 一类）；
+  公开入口需要先决定 Recipe/Compiler 是否成为公开 API。
 - **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 19 MiB
   （ring + staging + 输出批 + worker 行，一个账本；超限先缩 chunk 再拒绝）。
 - **一次流水线只支持一个缩放**：`ResizeTo(..., plan, after)` 覆盖「计划 → 缩放 → 计划」；两次缩放连用仍要分两次调用
