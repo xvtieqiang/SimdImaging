@@ -1,4 +1,5 @@
 using SimdImaging.Processing.Internal;
+using SimdImaging.Processing.Contracts;
 using SimdImaging.Abstractions;
 
 namespace SimdImaging.Processing;
@@ -21,28 +22,43 @@ namespace SimdImaging.Processing;
 /// </remarks>
 public static class PlanOps
 {
+    private static ImageOp Create(string name, OpCategory category, IInputFootprint footprint,
+        WorkspaceModel workspace, KernelImplementations kernels,
+        WorkingFormatMask formats = WorkingFormatMask.All, ExecutionRequirements? requirements = null,
+        PassModel pass = PassModel.Single, PixelSemantics? semantics = null,
+        int? haloX = null, int? haloY = null) =>
+        new(OperatorContract.Create(name, category, formats, footprint, workspace, requirements, pass, semantics,
+                haloX: haloX, haloY: haloY),
+            kernels);
+
     /// <summary>
     /// Point steps need no per-pixel scratch beyond a row buffer that already exists in the executor, so they
     /// declare zero rather than nothing: zero is a claim, null is an admission.
     /// </summary>
-    private static ImageOp Point(string name, Func<PixelView, WorkingBuffer> op) =>
-        new(name, OpCategory.Point, 0, 0, PlanSteps.Point(op), PointScratch, op);
+    private static ImageOp Point(string name, Func<PixelView, WorkingBuffer> op,
+        WorkingFormatMask formats = WorkingFormatMask.All, PixelSemantics? semantics = null,
+        bool wholeImage = true) =>
+        Create(name, OpCategory.Point, IdentityFootprint.Instance, WorkspaceModel.Of(PointScratch),
+            new KernelImplementations(PlanSteps.Point(op), wholeImage ? op : null), formats,
+            semantics: semantics);
 
     /// <summary>
     /// A point step that writes its destination directly on Rgba8: the operator is run once over a 256-pixel probe to
     /// build its byte table, and the table is what the kernel applies. The probe is the operator itself, so the table
     /// cannot drift from the arithmetic it replaces — there is no second definition of the transform to keep in step.
     /// </summary>
-    private static ImageOp PointTable(string name, Func<PixelView, WorkingBuffer> op) =>
+    private static ImageOp PointTable(string name, Func<PixelView, WorkingBuffer> op,
+        WorkingFormatMask formats = WorkingFormatMask.All, PixelSemantics? semantics = null) =>
         ForceAdapterPoint
-            ? Point(name, op)
-            : new(name, OpCategory.Point, 0, 0,
-                PlanSteps.PointTable(
-                    new Lazy<byte[]>(() => BuildByteTable(op), LazyThreadSafetyMode.ExecutionAndPublication),
-                    op,
-                    TablePixelFloor),
-                PointScratch,
-                op);
+            ? Point(name, op, formats, semantics)
+            : Create(name, OpCategory.Point, IdentityFootprint.Instance, WorkspaceModel.Of(PointScratch),
+                new KernelImplementations(
+                    PlanSteps.PointTable(
+                        new Lazy<byte[]>(() => BuildByteTable(op), LazyThreadSafetyMode.ExecutionAndPublication),
+                        op,
+                        TablePixelFloor),
+                    op),
+                formats, semantics: semantics);
 
     /// <summary>
     /// Pixels below which the table is not worth building. Measured at 27 us per table against a 4K step's 5 ms and a
@@ -114,24 +130,41 @@ public static class PlanOps
     /// and the 3x3 family both do, at sixteen bytes per pixel per row. The estimator's <c>rows</c> argument
     /// already includes the halo.
     /// </summary>
-    private static ImageOp Neighborhood(string name, int halo, Func<PixelView, WorkingBuffer> op) =>
-        Neighborhood(name, halo, op, (width, _, rows, _) => (long)rows * width * 16);
-
     private static ImageOp Neighborhood(string name, int halo, Func<PixelView, WorkingBuffer> op,
-        Func<int, int, int, WorkingFormat, long> scratch) =>
-        new(name, OpCategory.Neighborhood, halo, halo, PlanSteps.Neighborhood(op, halo, halo), scratch, op);
-
-    private static ImageOp Neighborhood(string name, int halo, Func<PixelView, WorkingBuffer> op, IntoKernel into) =>
-        new(name, OpCategory.Neighborhood, halo, halo, PlanSteps.Neighborhood(op, halo, halo, into),
-            (width, _, rows, _) => (long)rows * width * 16, op, into);
+        Func<int, int, int, WorkingFormat, long>? scratch = null, IntoKernel? into = null,
+        PassModel pass = PassModel.Single, PixelSemantics? semantics = null)
+    {
+        var footprint = halo == 0
+            ? (IInputFootprint)IdentityFootprint.Instance
+            : new HaloFootprint(halo, halo);
+        var workspace = WorkspaceModel.Of(scratch ?? ((width, _, rows, _) => (long)rows * width * 16));
+        return Create(name, OpCategory.Neighborhood, footprint, workspace,
+            new KernelImplementations(PlanSteps.Neighborhood(op, halo, halo, into), op, into),
+            requirements: ExecutionRequirements.RowBands, pass: pass, semantics: semantics);
+    }
 
     /// <summary>
-    /// Whole-image steps run once on the calling thread. Most of them have no declaration yet, which is reported
-    /// as undeclared rather than as zero — the budget refuses to pretend it can enforce a ceiling it cannot see.
+    /// Whole-image steps run once on the calling thread. A step that has not declared its workspace is reported as
+    /// undeclared rather than as zero — the budget refuses to pretend it can enforce a ceiling it cannot see.
     /// </summary>
     private static ImageOp Global(string name, Func<PixelView, WorkingBuffer> op,
-        Func<int, int, int, WorkingFormat, long>? scratch = null) =>
-        new(name, OpCategory.Global, 0, 0, PlanSteps.Global(op), scratch, op);
+        Func<int, int, int, WorkingFormat, long>? scratch = null, IInputFootprint? footprint = null,
+        PassModel pass = PassModel.Single, StateScope state = StateScope.None,
+        ExecutionOrder order = ExecutionOrder.Any, Determinism determinism = Determinism.CoordinateDeterministic,
+        PixelSemantics? semantics = null)
+    {
+        var requirements = ExecutionRequirements.WholeImage with
+        {
+            State = state,
+            Order = order,
+            Determinism = determinism,
+        };
+
+        return Create(name, OpCategory.Global, footprint ?? WholeSourceFootprint.Instance,
+            scratch is null ? WorkspaceModel.Undeclared : WorkspaceModel.Of(scratch),
+            new KernelImplementations(PlanSteps.Global(op), op),
+            requirements: requirements, pass: pass, semantics: semantics);
+    }
 
     /// <summary>Brightness by <paramref name="amount"/>.</summary>
     public static ImageOp Brightness(float amount) => PointTable(nameof(PointOps.Brightness), v => PointOps.Brightness(v, amount));
@@ -165,18 +198,21 @@ public static class PlanOps
 
     /// <summary>Gaussian blur; support is <c>ceil(3σ)</c>, which is where the halo comes from.</summary>
     public static ImageOp GaussianBlur(float sigma) =>
-        Neighborhood(nameof(FilterOps.GaussianBlur), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)), v => FilterOps.GaussianBlur(v, sigma));
+        Neighborhood(nameof(FilterOps.GaussianBlur), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)),
+            v => FilterOps.GaussianBlur(v, sigma), pass: PassModel.SeparableRows);
 
     /// <summary>Box blur of the given radius; support is the radius.</summary>
     public static ImageOp BoxBlur(int radius) =>
-        Neighborhood(nameof(FilterOps.BoxBlur), radius, v => FilterOps.BoxBlur(v, radius));
+        Neighborhood(nameof(FilterOps.BoxBlur), radius, v => FilterOps.BoxBlur(v, radius),
+            pass: PassModel.SeparableRows);
 
     /// <summary>
     /// Unsharp mask. It blurs internally, so its support follows the Gaussian (<c>ceil(3σ)</c>), not the single
     /// row a 3x3 kernel would need — the mistake this type exists to prevent.
     /// </summary>
     public static ImageOp Sharpen(float amount = 0.5f, float sigma = 1f) =>
-        Neighborhood(nameof(FilterOps.Sharpen), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)), v => FilterOps.Sharpen(v, amount, sigma));
+        Neighborhood(nameof(FilterOps.Sharpen), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)),
+            v => FilterOps.Sharpen(v, amount, sigma), pass: PassModel.SeparableRows);
 
     /// <summary>3x3 emboss; one row and one column.</summary>
     public static ImageOp Emboss(float strength = 1f) =>
@@ -189,10 +225,11 @@ public static class PlanOps
         into: (window, destination, destinationY, rows, offset) =>
             FilterOps.SobelInto(window, destination, destinationY, rows, offset));
 
-    /// <summary>3x3 median; one row and one column of context.</summary>
+    /// <summary>3x3 median; one row and one column of context. Alpha is filtered like the colour channels.</summary>
     public static ImageOp Median3x3() => Neighborhood(nameof(FilterOps.Median3x3), 1, v => FilterOps.Median3x3(v),
         into: (window, destination, destinationY, rows, offset) =>
-            FilterOps.Median3x3Into(window, destination, destinationY, rows, offset));
+            FilterOps.Median3x3Into(window, destination, destinationY, rows, offset),
+        semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     /// <summary>
     /// Median with radius <paramref name="radius"/>; the support is the window, so the halo is the radius.
@@ -206,7 +243,8 @@ public static class PlanOps
     public static ImageOp Median(int radius) =>
         Neighborhood(nameof(FilterOps.Median), radius, v => FilterOps.Median(v, radius),
             // Four channels are medianed, read from a band of rows widened by the radius on each side.
-            (width, _, rows, _) => (long)rows * width * 4);
+            (width, _, rows, _) => (long)rows * width * 4,
+            semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     /// <summary>
     /// Convolution with an arbitrary odd kernel and any border mode.
@@ -230,18 +268,19 @@ public static class PlanOps
             throw new ArgumentException($"A {side}×{side} kernel needs {side * side} weights.", nameof(kernel));
 
         var weights = kernel.ToArray();
-        return new ImageOp("convolve", OpCategory.Neighborhood, radius, radius,
-            PlanSteps.Neighborhood(
+        return Create("convolve", OpCategory.Neighborhood, WholeSourceFootprint.Instance,
+            // One float RGBA copy of the window, which is a band plus the halo on both sides.
+            WorkspaceModel.Of((width, _, rows, _) => (long)rows * width * 16),
+            new KernelImplementations(PlanSteps.Neighborhood(
                 (window, context, full) =>
                     FilterOps.ConvolveBanded(window, context, full, weights, radius, border, bias, constantValue),
-                radius, radius),
-            // One float RGBA copy of the window, which is a band plus the halo on both sides.
-            (width, _, rows, _) => (long)rows * width * 16)
-        {
+                radius, radius)),
             // Mirror and Wrap map taps in image coordinates; the kernel is handed the full source for that. A
             // streaming executor has only a band, so it must refuse this step rather than seam at the band edge.
-            NeedsWholeSource = true,
-        };
+            // The band window is still widened by the radius: the taps it reads locally need their neighbours.
+            requirements: ExecutionRequirements.RowBands,
+            haloX: radius,
+            haloY: radius);
     }
 
     /// <summary>
@@ -249,7 +288,8 @@ public static class PlanOps
     /// </summary>
     /// <summary>A pre-built point chain table.</summary>
     public static ImageOp PointChain(PointChainTable table) =>
-        Point(nameof(FilterOps.Apply), v => FilterOps.Apply(v, table));
+        Point(nameof(FilterOps.Apply), v => FilterOps.Apply(v, table),
+            WorkingFormatMask.Rgba8, PixelSemantics.EncodedInteger);
 
     /// <summary>
     /// Several per-channel point transforms collapsed into one table and one pass (8-bit).
@@ -262,9 +302,9 @@ public static class PlanOps
             throw new ArgumentException("A chain needs at least one transform.", nameof(transforms));
 
         var chain = transforms.ToArray();
-        return new ImageOp("point-chain", OpCategory.Point, 0, 0,
-            PlanSteps.Point(v => FilterOps.PointChain(v, chain)),
-            (_, _, _, _) => 0);
+        return Create("point-chain", OpCategory.Point, IdentityFootprint.Instance, WorkspaceModel.None,
+            new KernelImplementations(PlanSteps.Point(v => FilterOps.PointChain(v, chain))),
+            WorkingFormatMask.Rgba8, semantics: PixelSemantics.EncodedInteger);
     }
 
     /// <summary>
@@ -308,16 +348,18 @@ public static class PlanOps
     /// <param name="kind">Uniform or Gaussian.</param>
     /// <param name="seed">Sequence seed; the same seed always yields the same image.</param>
     public static ImageOp Noise(float amount = 0.05f, NoiseKind kind = NoiseKind.Gaussian, uint seed = 1) =>
-        new("noise", OpCategory.Global, 0, 0,
-            PlanSteps.Global(v => NoiseOps.Noise(v, amount, kind, seed)),
-            (_, _, _, _) => 0L);
+        Global("noise", v => NoiseOps.Noise(v, amount, kind, seed), (_, _, _, _) => 0L,
+            footprint: IdentityFootprint.Instance,
+            state: StateScope.PerCall,
+            order: ExecutionOrder.SourceOrder,
+            determinism: Determinism.SeededSequence);
 
     /// <summary>Unsharp mask built from a negative Gaussian.</summary>
     /// <param name="amount">Strength.</param>
     /// <param name="sigma">Gaussian sigma; the halo follows it.</param>
     public static ImageOp GaussianSharpen(float amount = 0.5f, float sigma = 1f) =>
         Neighborhood(nameof(FilterOps.GaussianSharpen), (int)Math.Ceiling(3 * sigma),
-            v => FilterOps.GaussianSharpen(v, amount, sigma));
+            v => FilterOps.GaussianSharpen(v, amount, sigma), pass: PassModel.SeparableRows);
 
     /// <summary>3x3 erosion; one row and one column.</summary>
     public static ImageOp Erode3x3() => Neighborhood(nameof(FilterOps.Erode3x3), 1, v => FilterOps.Erode3x3(v),
@@ -348,8 +390,7 @@ public static class PlanOps
 
     /// <summary>Guided filter; its window is the radius.</summary>
     public static ImageOp GuidedFilter(int radius, float epsilon = 1e-4f) =>
-        new("guided", OpCategory.Neighborhood, radius, radius,
-            PlanSteps.Neighborhood(v => GuidedFilterOps.GuidedFilter(v, radius, epsilon), radius, radius),
+        Neighborhood("guided", radius, v => GuidedFilterOps.GuidedFilter(v, radius, epsilon),
             // Five float planes over bandRows + 4·radius rows (the operator widens the band by 2·radius on each
             // side, so its row count is the estimator's `rows` plus another 2·radius), plus the full-image copy
             // it makes up front. Both terms are read off GuidedFilterOps, not assumed.
@@ -378,37 +419,44 @@ public static class PlanOps
     /// whole picture is the only correct context. It costs one intermediate image, like calling it directly.
     /// </summary>
     public static ImageOp Vignette(float radius = 0.75f, float strength = 1f) =>
-        Global(nameof(FilterOps.Vignette), v => FilterOps.Vignette(v, radius, strength), (_, _, _, _) => 0L);
+        Global(nameof(FilterOps.Vignette), v => FilterOps.Vignette(v, radius, strength), (_, _, _, _) => 0L,
+            footprint: IdentityFootprint.Instance);
 
     /// <summary>CLAHE: it builds per-tile histograms, so it reads the whole picture.</summary>
     public static ImageOp Clahe(int tilesX = 8, int tilesY = 8, float clipLimit = 3f) =>
         // One int histogram per tile per channel, plus the destination row.
         Global(nameof(ClaheOps.Clahe), v => ClaheOps.Clahe(v, tilesX, tilesY, clipLimit),
-            (width, _, _, _) => ((long)tilesX * tilesY * 3 * 256 * 4) + ((long)width * 16));
+            (width, _, _, _) => ((long)tilesX * tilesY * 3 * 256 * 4) + ((long)width * 16),
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 
     /// <summary>Local Laplacian: a pyramid, so every band would need the whole image anyway.</summary>
     public static ImageOp LocalLaplacian(int levels = 5, int samples = 32) =>
         Global(nameof(LocalLaplacianOps.LocalLaplacian), v => LocalLaplacianOps.LocalLaplacian(v, levels, samples),
-            (width, height, _, _) => LocalLaplacianOps.ScratchBytes(width, height, levels, samples));
+            (width, height, _, _) => LocalLaplacianOps.ScratchBytes(width, height, levels, samples),
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 
     /// <summary>Per-channel histogram stretch; whole-image statistics.</summary>
     public static ImageOp Normalize() =>
         // One 256-bin histogram plus the destination row the executor already provides.
-        Global(nameof(PointOps.Normalize), v => PointOps.Normalize(v), (width, _, _, _) => 1024L + ((long)width * 16));
+        Global(nameof(PointOps.Normalize), v => PointOps.Normalize(v), (width, _, _, _) => 1024L + ((long)width * 16),
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 
     /// <summary>Adaptive threshold: a local mean, but its window is wider than any band worth carrying.</summary>
     public static ImageOp AdaptiveThreshold(int radius = 8, float offset = 0.05f) =>
         // A (2r+1)-row float window of the full width, plus the working row.
         Global(nameof(ThresholdOps.AdaptiveThreshold), v => ThresholdOps.AdaptiveThreshold(v, radius, offset),
-            (width, _, _, _) => ((long)((radius * 2) + 1) * width * 4) + ((long)width * 16));
+            (width, _, _, _) => ((long)((radius * 2) + 1) * width * 4) + ((long)width * 16),
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 
     /// <summary>
     /// Block-aligned mosaic. A block spans rows that a band boundary can cut anywhere, so no halo is correct —
     /// whole-image is the only category that reproduces the single-image result.
     /// </summary>
     public static ImageOp Pixelate(int blockSize) =>
-        // Writes blocks straight into the destination; no plane of its own.
-        Global(nameof(FilterOps.Pixelate), v => FilterOps.Pixelate(v, blockSize), (_, _, _, _) => 0L);
+        // Writes blocks straight into the destination; no plane of its own. The footprint is the block grid,
+        // not a constant halo: the radius a band needs depends on where the band starts.
+        Global(nameof(FilterOps.Pixelate), v => FilterOps.Pixelate(v, blockSize), (_, _, _, _) => 0L,
+            footprint: new BlockAlignedFootprint(blockSize));
 
     /// <summary>Dehaze: the dark channel and the atmospheric light both need the whole picture.</summary>
     public static ImageOp Dehaze(int patchRadius = 7, float omega = 0.95f, float tMin = 0.1f, int refineRadius = 20) =>
@@ -425,10 +473,13 @@ public static class PlanOps
                     + ((long)ringRows * width * sizeof(float))
                     + ((long)width * sizeof(float))
                     + (2L * width * 4 * sizeof(float));
-            });
+            },
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 
     /// <summary>Histogram equalisation needs the whole image to build its transfer curve.</summary>
     public static ImageOp Equalize() =>
         // Three 256-bin histograms turned into three LUTs, plus the destination row.
-        Global(nameof(HistogramOps.Equalize), v => HistogramOps.Equalize(v), (width, _, _, _) => (3L * 256 * 4) + ((long)width * 16));
+        Global(nameof(HistogramOps.Equalize), v => HistogramOps.Equalize(v),
+            (width, _, _, _) => (3L * 256 * 4) + ((long)width * 16),
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 }

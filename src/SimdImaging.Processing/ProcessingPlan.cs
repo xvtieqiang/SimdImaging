@@ -31,29 +31,55 @@ public delegate void OpKernel(PixelView source, PixelView destination, PixelRect
 public delegate void IntoKernel(PixelView sourceWindow, PixelView destination, int destinationY, int rows,
     int sourceRowOffset);
 
-/// <summary>One named operator in a <see cref="ProcessingPlan"/>.</summary>
-/// <param name="Name">Stable name, used in diagnostics.</param>
-/// <param name="Category">How the step reads its source; <see cref="OpCategory.Global"/>,
-/// <see cref="OpCategory.Composite"/> and <see cref="OpCategory.Geometric"/> are run whole.</param>
-/// <param name="HaloX">Columns read on each side of a destination pixel.</param>
-/// <param name="HaloY">Rows read on each side.</param>
-/// <param name="Kernel">The code that fills a rectangle.</param>
-public readonly record struct PlanStep(string Name, OpCategory Category, int HaloX, int HaloY, OpKernel Kernel)
+/// <summary>
+/// One compiled step in a <see cref="ProcessingPlan"/>: a reference to the operator definition plus the kernel
+/// closure the executor dispatches. The metadata is read from the definition, never copied.
+/// </summary>
+/// <remarks>
+/// Before 2026-11-26 this type carried its own copy of the name, category, halos, scratch and whole-source flag,
+/// filled at <c>Add</c> time. Two copies of the same facts drift: the estimator and the classifier read one while
+/// the operator changed the other. A step is now a view over <see cref="ImageOp"/>, and the kernel is the only
+/// value copied here — the fused executor dispatches it once per band and should not walk three references first.
+/// </remarks>
+public readonly record struct PlanStep
 {
+    internal PlanStep(ImageOp definition, byte[]? lut = null)
+    {
+        Definition = definition ?? throw new ArgumentNullException(nameof(definition));
+        Kernel = definition.Kernels.PlanKernel;
+        Lut = lut;
+    }
+
+    /// <summary>The operator this step was compiled from.</summary>
+    internal ImageOp Definition { get; }
+
+    /// <summary>Stable name, used in diagnostics.</summary>
+    public string Name => Definition.Name;
+
+    /// <summary>How the step reads its source; <see cref="OpCategory.Global"/> and <see cref="OpCategory.Composite"/>
+    /// run whole.</summary>
+    public OpCategory Category => Definition.Category;
+
+    /// <summary>Columns read on each side of a destination pixel.</summary>
+    public int HaloX => Definition.HaloX;
+
+    /// <summary>Rows read on each side.</summary>
+    public int HaloY => Definition.HaloY;
+
+    /// <summary>The code that fills a rectangle. Copied once so a band dispatch is a field read.</summary>
+    public OpKernel Kernel { get; }
+
     /// <summary>The 4×256 byte table when this step came from <see cref="ProcessingPlan.AddPointLut"/>;
     /// consecutive table steps compose into a single pass. Internal: the table is an execution detail,
     /// not part of the step's identity.</summary>
     internal byte[]? Lut { get; init; }
 
     /// <summary>
-    /// What this step allocates privately, per worker, for a band of <c>height</c> rows — or null when it
-    /// allocates nothing the executor should know about. Declared by the operator, because only it knows:
-    /// Richardson-Lucy's four float planes are forty-eight bytes a pixel and no amount of geometry
-    /// inspection from the outside recovers that.
-    /// <para>The height passed in is the band the step will actually see, which is why this is a function
-    /// and not a number. <c>MemoryEstimator</c> reads it and reports the largest declaration.</para>
+    /// What this step allocates privately, per worker, for a band of <c>height</c> rows — or null when the
+    /// operator has not declared its footprint. Read from the definition; <c>MemoryEstimator</c> turns it into the
+    /// per-worker term and refuses a ceiling it cannot enforce.
     /// </summary>
-    public Func<int, int, int, WorkingFormat, long>? Scratch { get; init; }
+    public Func<int, int, int, WorkingFormat, long>? Scratch => Definition.Contract.Workspace.Estimate;
 
     /// <summary>
     /// True when the kernel reads the whole source image and not just its window — the general convolution's
@@ -61,7 +87,7 @@ public readonly record struct PlanStep(string Name, OpCategory Category, int Hal
     /// that. A streaming executor must refuse such a plan instead of handing the kernel a band and letting it
     /// reflect about the band edge, which would seam.
     /// </summary>
-    internal bool NeedsWholeSource { get; init; }
+    internal bool NeedsWholeSource => Definition.Contract.Footprint.CoversWholeImage;
 }
 
 /// <summary>
@@ -250,35 +276,31 @@ public sealed class ProcessingPlan
     public ProcessingPlan Add(ImageOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
-        return Add(op.Name, op.Category, op.Kernel, op.HaloX, op.HaloY, op.Scratch, op.NeedsWholeSource);
-    }
-
-    /// <summary>Appends a step that also declares its own scratch.</summary>
-    /// <param name="scratch">What the step allocates per worker for a band of the given height; null when it
-    /// allocates nothing worth reporting. <see cref="MemoryEstimator"/> turns these into the per-worker term.</param>
-    /// <param name="needsWholeSource">The kernel reads the whole image, not just its window (see
-    /// <see cref="PlanStep.NeedsWholeSource"/>).</param>
-    internal ProcessingPlan Add(string name, OpCategory category, OpKernel kernel, int haloX, int haloY,
-        Func<int, int, int, WorkingFormat, long>? scratch, bool needsWholeSource = false)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(name);
-        ArgumentNullException.ThrowIfNull(kernel);
-        ArgumentOutOfRangeException.ThrowIfNegative(haloX);
-        ArgumentOutOfRangeException.ThrowIfNegative(haloY);
-        if (category == OpCategory.Geometric)
+        if (op.Category == OpCategory.Geometric)
             throw new NotSupportedException(
                 "A geometric step changes the image size, which a same-size plan cannot represent; run it outside the plan.");
         if (HasResize)
             throw new InvalidOperationException(
                 "A resize ends the plan; add the steps before processing the size change, or run the resize outside.");
 
-        _steps.Add(new PlanStep(name, category, haloX, haloY, kernel)
-        {
-            Scratch = scratch,
-            NeedsWholeSource = needsWholeSource,
-        });
+        _steps.Add(new PlanStep(op));
         _version++;
         return this;
+    }
+
+    /// <summary>Appends a step that also declares its own scratch. Tests and the benchmark harness use this to
+    /// build plans whose operators are not in <see cref="PlanOps"/>.</summary>
+    /// <param name="scratch">What the step allocates per worker for a band of the given height; null when nothing
+    /// is known, which the budget reports as a lower bound rather than as zero.</param>
+    /// <param name="needsWholeSource">The kernel reads the whole image, not just its window.</param>
+    internal ProcessingPlan Add(string name, OpCategory category, OpKernel kernel, int haloX, int haloY,
+        Func<int, int, int, WorkingFormat, long>? scratch, bool needsWholeSource = false)
+    {
+        if (category == OpCategory.Geometric)
+            throw new NotSupportedException(
+                "A geometric step changes the image size, which a same-size plan cannot represent; run it outside the plan.");
+
+        return Add(ImageOp.AdHoc(name, category, haloX, haloY, kernel, scratch, needsWholeSource));
     }
 
     /// <summary>
@@ -302,14 +324,14 @@ public sealed class ProcessingPlan
                 "A resize ends the plan; add the steps before processing the size change, or run the resize outside.");
 
         var table = rgbaTable.ToArray();
-        _steps.Add(new PlanStep(name, OpCategory.Point, 0, 0, BuildLutKernel(table)) { Lut = table });
+        _steps.Add(new PlanStep(ImageOp.PointLut(name, table), table));
         _version++;
         return this;
     }
 
     /// <summary>Byte-domain table application; the kernel checks the format because the table is
     /// defined on 8-bit samples only.</summary>
-    private static OpKernel BuildLutKernel(byte[] table) => (source, destination, rect, _) =>
+    internal static OpKernel BuildLutKernel(byte[] table) => (source, destination, rect, _) =>
     {
         if (source.Format != WorkingFormat.Rgba8)
             throw new NotSupportedException(
@@ -409,7 +431,7 @@ public sealed class ProcessingPlan
         // Decided before the shape is built, not per segment: the segments are cut for one execution mode, and a
         // segment of several steps has no step-by-step form — the else branch runs its first step only.
         var fused = fusionAllowed && (options.ForceFusion ||
-            ShouldFuse(_steps, width, height, source.Format.BytesPerPixel()));
+            FusionDecision.ShouldFuse(_steps, width, height, source.Format.BytesPerPixel()));
         var shape = ExecutionShapeFor(fused);
         var execution = shape.Steps;
         var segments = shape.Segments;
@@ -589,95 +611,6 @@ public sealed class ProcessingPlan
         return Math.Max(1, Math.Min(RowParallel.Degree, byRows));
     }
 
-    /// <summary>
-    /// Whether this segment is worth fusing, decided from what the segment contains and how big the image is.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Fusing trades two things: it saves one full-frame write and read per intermediate, and it pays for the halo
-    /// rows recomputed at every band boundary plus a fixed cost per band. Which side wins is not a property of the
-    /// kernel size — it is a property of whether the steps can use the machine some other way.
-    /// </para>
-    /// <para>
-    /// An earlier version of this rule read "fuse when the segment contains a small kernel", and at the time it was
-    /// right: <c>Morph3x3</c>, <c>Convolve3x3</c> and the combine loop in <c>Sharpen</c> ran on one thread, so the
-    /// fused band was the only path that used more than one core, and a 3×3 chain read 0.45 (fusion 2.2x faster).
-    /// Those operators now parallelise over rows themselves. Re-measured with the two sides interleaved in one
-    /// timing call (six sizes, three runs, plan ÷ step-by-step):
-    /// </para>
-    /// <para>
-    /// <code>
-    ///           160x120  320x180  640x360  1080p   4K      8K
-    /// point x2    0.59     0.42     0.84    0.83   0.83    0.80
-    /// 3x3 x2      0.25     0.27     1.37    1.23   1.05    1.11
-    /// 3x3 x3      0.46     0.32     1.08    1.00   1.03    1.16
-    /// blur+2pt    1.07     0.87     1.12    1.05   1.05    1.24
-    /// </code>
-    /// </para>
-    /// <para>
-    /// The curve is not monotonic, and the reason is the parallel gate: below it a step runs on one thread, so
-    /// fusion is the only source of parallelism and wins 2-4x; above it every step is already using the cores, and
-    /// fusion keeps only the traffic it saves, which at 640x360 is less than the halo it recomputes. A chain of
-    /// points is the one shape that wins at every size above the gate, because it has no halo to recompute. What
-    /// is left for the size test is the purpose fusion was built for: not materialising N full frames.
-    /// </para>
-    /// <para>
-    /// The traffic is counted in the source's own bytes per pixel, over the intermediates fusion actually removes.
-    /// Both halves of that sentence were once wrong: the rule multiplied by 4 whatever the format was (wrong by 2x
-    /// for <c>Rgba16</c> and 4x for <c>Rgba32F</c>), and it used <c>steps.Count - 1</c> even though a Global step
-    /// splits the chain and the executor then fuses each side separately, so a plan whose only bandable run is two
-    /// steps long was credited with avoiding a whole chain's worth of frames.
-    /// </para>
-    /// </remarks>
-    private static bool ShouldFuse(List<PlanStep> steps, int width, int height, int bytesPerPixel)
-    {
-        var maxHalo = 0;
-        foreach (var step in steps)
-            maxHalo = Math.Max(maxHalo, Math.Max(step.HaloX, step.HaloY));
-
-        var pixels = (long)width * height;
-
-        // Below the parallel gate every step would run on the calling thread: fusion is the only way this image
-        // uses more than one core, and it measured 0.25-0.46 at 160x120 and 320x180.
-        if (pixels < RowParallel.MinWorkPixels)
-            return true;
-
-        // A chain with no halo costs nothing to fuse: there is no window to recompute, only a frame to skip.
-        // Measured 0.80-0.84 from 640x360 to 8K for the chains in the table above.
-        if (maxHalo == 0)
-            return true;
-
-        // Everything else keeps fusion for what it was built for — not materialising N full frames. Count them
-        // per contiguous bandable run: a category boundary already forces a full frame, so only the steps on this
-        // side of it are traffic fusion can avoid. Counted without allocating a segment list — this runs per call.
-        long avoided = 0;
-        var run = 0;
-        foreach (var step in steps)
-        {
-            if (FusionPlanner.IsBandable(step))
-            {
-                run++;
-                continue;
-            }
-
-            if (run > 1)
-                avoided += (long)(run - 1) * pixels * bytesPerPixel;
-            run = 0;
-        }
-
-        if (run > 1)
-            avoided += (long)(run - 1) * pixels * bytesPerPixel;
-
-        return avoided > FuseIntermediateBytes;
-    }
-
-    /// <summary>
-    /// The worth of the full-size intermediates fusion avoids, in bytes, above which fusing is justified even when
-    /// the steps are expensive: below this the pass is cheap enough that its arithmetic, not its memory traffic,
-    /// sets the time.
-    /// </summary>
-    private const long FuseIntermediateBytes = 64L * 1024 * 1024;
-
     /// <summary>Everything about one folding mode that does not change between executions.</summary>
     private sealed class ExecutionShape
     {
@@ -777,7 +710,7 @@ public sealed class ProcessingPlan
                     for (var i = index + 1; i < end; i++)
                         name += " + " + _steps[i].Name;
 
-                    steps.Add(new PlanStep(name, OpCategory.Point, 0, 0, BuildLutKernel(table)));
+                    steps.Add(new PlanStep(ImageOp.PointLut(name, table), table));
                     firsts.Add(index);
                     counts.Add(end - index);
                     index = end;

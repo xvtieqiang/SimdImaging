@@ -382,7 +382,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 | 回退与报告 | `PlanObserver` 存在 → 强制逐步骤（`ObserverPresent`）；`AllowFusion = false` → `AllowFusionDisabled`；链中有整图步骤 → `CategoryBoundary`；空链 → `EmptyPlan`。`PlanReport` 只在 `Diagnostics = true` 时构造（段/回退原因/worker 数/band 数/池租借/ticks），诊断关闭时不建对象、不读 `Stopwatch`。`Segments[i].FirstStep` 始终是**原始**步骤下标（折叠后的执行步会映射回去） |
 | LUT 折叠 | `ProcessingPlan.AddPointLut(name, 1024 字节表)`：连续表步骤按 `T_AB[c][v] = T_B[c][T_A[c][v]]` 折叠成一张、单遍执行。构造性恒等（逐步执行本来就在字节域量化），`PointLutCompositionTests` 用真实点算子取表验证。**Rgba8 only**：其它格式在 kernel 入口抛 `NotSupportedException` |
 | 内存模型 | 融合段 = 1 张整图输出 + 每 worker 2 张 band 窗口；逐步骤 = 每步 1 张整图（活动集 2 张）。`MaxWorkingBytes` 用前者估算并在执行前抛 `InvalidOperationException`（消息含预算与估算值），估算不是测量。窗口按 worker 租、按「全局最大 windowRows」租（band 0 更短），kernel 在 worker 抛时输出与窗口都在 `finally` 释放 |
-| 仍未做 | 批处理并发（`MaxConcurrentImages` / `ImageBatchRunner` 没有调用方，未引入）；几何算子进 Plan（`Add` 仍拒绝）；Rgba16/Rgba32F 的 LUT 折叠；融合段的 SIMD；`IImageOp` 仍零实现（`PlanStep` 不引用它）。**halo 必须等于算子真实支撑**：给小时融合与逐步骤本来就会给出不同字节，这不是等价性测试的覆盖范围 |
+| 仍未做 | 批处理并发（`MaxConcurrentImages` / `ImageBatchRunner` 没有调用方，未引入）；几何算子进 Plan（`Add` 仍拒绝）；Rgba16/Rgba32F 的 LUT 折叠；融合段的 SIMD；`IImageOp` 已由 `ImageOp` 实现（2026-11-26），`PlanStep` 引用算子定义而不是复制字段；契约内部的 footprint 仍只由编译器消费，带泵/区域执行器继续用 `HaloX/HaloY`。**halo 必须等于算子真实支撑**：给小时融合与逐步骤本来就会给出不同字节，这不是等价性测试的覆盖范围 |
 | ✅ 已判定（未达标） | 「点算子融合后分配 = 0」（M2 出口条件）：2026-11-15 在融合路径上重测，稳态仍 ≈4.3 KiB/op（`AddPointLut` LUT 折叠、§1.3 字面尺）/ ≈6.0 KiB/op（进程级），**未达标但已出数**。见 §「M2『点算子融合后分配』重测与判定」 |
 
 ## M11 高级照片算法 I（完成，2026-11-14）

@@ -320,11 +320,12 @@ public enum OpCategory : byte
     Point,          // 逐像素，无邻域
     Neighborhood,   // 有 (HaloX, HaloY)
     Separable,      // 可拆成水平+垂直两遍
-    Geometric,      // 需要源坐标逆映射
+    Geometric,      // 需要源坐标逆映射（不进同尺寸计划）
     Global,         // 需要全图统计（直方图、量化、CLAHE）
     Composite,      // 双输入
 }
 
+// 公开的只读视图。ImageOp 实现它；数值来自内部的 OperatorContract。
 public interface IImageOp
 {
     string Name { get; }
@@ -336,25 +337,11 @@ public interface IImageOp
 }
 ```
 
-`MapSourceRect` 是分块执行的关键：执行器据此算出每个输出块要读的源矩形（含 halo），从而支持超大图的行带/分块处理。**v1 所有算子都实现它，但执行器先只跑整图**；P1 打开行带执行，P2 打开二维分块。
+`ImageOp` 是唯一算子定义：内部持有一个 `OperatorContract`（输入/输出端口、几何规则、InputFootprint、分区/状态/顺序/线程/确定性、Pass、Workspace、PixelSemantics）与 `KernelImplementations`（Plan / WholeImage / Into 三种执行体）。`PlanStep` 不再复制这些字段：它只持有定义引用与 kernel 闭包，`Name/HaloX/HaloY/Scratch/NeedsWholeSource` 全部转发到定义，`Kernel` 在构造时拷成字段以免每条 band 多一层解引用。
 
-```csharp
-public sealed class ProcessingPlan
-{
-    public static ProcessingPlanBuilder Create();
-    public PlanReport Analyze(Image image);                 // 融合、格式、缓冲水位、预计分配
-    public Image Execute(Image image, ExecuteOptions? options = null);
-}
+`MapSourceRect` 因此第一次是真的：footprint 有四种——identity（点算子）、halo（常数半径）、whole-source（整图统计与 Mirror/Wrap 边界）、block-aligned（块网格）。Pixelate 声明 `block-aligned + WholeImage 分区`，不再把块对齐伪装成常数 halo；通用卷积声明 whole-source，但仍带一个半径 halo——窗口里的邻居要读，边界语义又要整图。
 
-public sealed record ExecuteOptions
-{
-    public IPixelPool? Pool { get; init; }
-    public int MaxDegreeOfParallelism { get; init; } = -1;  // -1 = 处理器数
-    public long MaxWorkingBytes { get; init; } = 512L << 20;
-    public TilePolicy Tiling { get; init; } = TilePolicy.Whole;
-    public CancellationToken CancellationToken { get; init; }
-}
-```
+`ExecuteOptions` 的当前形态见 §6.2（`MaxDegreeOfParallelism` / `MaxWorkingBytes` / `AllowFusion` / `ForceFusion` / `AllowUnestimatedScratch` / `Diagnostics` / `CancellationToken`）。
 
 算子只有一套，就在 `ImagePipeline` 上——`Image` 上没有算子方法。区别只在结果去哪：
 
@@ -370,9 +357,9 @@ using var result = image.Pipe()
 image.Mutate(p => p.Resize(1920, 1080, Resampler.Lanczos3).Grayscale().Contrast(1.1f));
 ```
 
-链的每一步是 `ProcessingPlan` 里的一个 `ImageOp`：算子自己带着「读多远」的支撑半径，`PlanOps` 的工厂从
+链的每一步是 `ProcessingPlan` 里的一个 `PlanStep`：算子自己带着「读多远」的支撑半径，`PlanOps` 的工厂从
 算子参数推导它（高斯是 `ceil(3σ)`、盒式是半径、点算子是 0），所以调用方既不用写、也写不错。
-`Add(ImageOp)` 是唯一的公共入口，`PlanSteps` 与字符串版 `Add` 都是 `internal`。
+`Add(ImageOp)` 是唯一的公共入口，`PlanSteps` 与字符串版 `Add` 都是 `internal`（后者只给测试与基准造临时步骤）。
 逐算子的判定见 [`operators.md`](operators.md)。
 
 **计划期做的四件事**（这是"超越"里最实的一块）：
@@ -632,7 +619,7 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 
 | 阶段 | 能力 |
 |---|---|
-| v1（M1–M3） | 整图执行。`MapSourceRect` 只在 `IImageOp` 上**声明**过，全仓零实现；执行器真正的契约是 `ImageOp` / `PlanStep` 的 `HaloX/HaloY` |
+| v1（M1–M3） | 整图执行。`MapSourceRect` 曾只在 `IImageOp` 上声明、全仓零实现；2026-11-26 起由 `ImageOp` 的 footprint 真正提供（identity / halo / whole-source / block-aligned），但执行器仍只读 `HaloX/HaloY`，footprint 的消费从 P1 编译器开始 |
 | P1（M4） | 行带流式：只对 `Neighborhood` / `Separable` 打开，halo = 核半径；内存从 O(H) 降到 O(band + halo) |
 | P2 · 已交付一半（M17） | **矩形执行**：任意源矩形 → 窗口 → `RunWindow` → 内圈，见 §6.6。源只有 TIFF 段级实现 |
 | P2 · 未做 | `Geometric`（尺寸变化）与 `Global` 两遍（先统计后处理），仍受 `MaxWorkingBytes` 约束 |
@@ -861,7 +848,8 @@ sourcePeak   ≈ 一个段缓冲（复用）
 - `ProcessingPlan.Add` 第 191 行拒绝 `Geometric`；`PlanOps` 没有任何几何工厂。
 - `Resize.cs:219` 用 `source.Width/Height` 建 `WeightTable`；`Resize.cs:402/412` 以 view 坐标索引与钳制；
   行号是绝对目标行（`:353`、`:362`），没有原点参数。
-- `IImageOp.MapSourceRect` 全仓零实现（见 §6.3），执行器真正的契约是 `ImageOp` 的 `HaloX/HaloY`。
+- `IImageOp.MapSourceRect` 在 2026-11-26 前全仓零实现；现在由 `ImageOp` 的 footprint 提供（见 §5.4），
+  但带泵与区域执行器仍只用 `HaloX/HaloY`——footprint 的消费者是 P1 编译器。
 - `Resize` 的并行度来自目标行带（`RowParallel.ForBands`），不是行内并行——这决定了「顺序喂料」不能直接复用它的并行结构。
 
 #### 6.7.2 第一个切片（已落地）
