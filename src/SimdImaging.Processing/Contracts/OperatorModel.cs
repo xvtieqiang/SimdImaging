@@ -175,13 +175,63 @@ internal abstract record GeometryRule
 {
     /// <summary>No size or coordinate change.</summary>
     internal static GeometryRule SameSize { get; } = new SameSizeRule();
+
+    /// <summary>False when the output size depends on pixels (trim, entropy crop, seam carve).</summary>
+    internal abstract bool SizeKnown { get; }
+
+    /// <summary>The output size for a given input size.</summary>
+    internal abstract (int Width, int Height) Map(int width, int height);
+
+    /// <summary>One line for plan explanations.</summary>
+    internal abstract string Describe { get; }
 }
 
-internal sealed record SameSizeRule : GeometryRule;
+internal sealed record SameSizeRule : GeometryRule
+{
+    internal override bool SizeKnown => true;
+
+    internal override (int Width, int Height) Map(int width, int height) => (width, height);
+
+    internal override string Describe => "same size";
+}
 
 /// <summary>A fixed output size.</summary>
-internal sealed record FixedSizeRule(int Width, int Height) : GeometryRule;
+internal sealed record FixedSizeRule(int Width, int Height) : GeometryRule
+{
+    internal override bool SizeKnown => true;
+
+    internal override (int Width, int Height) Map(int width, int height) => (Width, Height);
+
+    internal override string Describe => $"{Width}x{Height}";
+}
+
+/// <summary>A size that depends on the input size, arithmetically (aspect-preserving resize, padding).</summary>
+internal sealed record RelativeRule(Func<int, int, (int Width, int Height)> MapSize, string Text) : GeometryRule
+{
+    internal override bool SizeKnown => true;
+
+    internal override (int Width, int Height) Map(int width, int height) => MapSize(width, height);
+
+    internal override string Describe => Text;
+}
+
+/// <summary>The axes swap: a quarter turn or a transpose.</summary>
+internal sealed record SwappedSizeRule : GeometryRule
+{
+    internal override bool SizeKnown => true;
+
+    internal override (int Width, int Height) Map(int width, int height) => (height, width);
+
+    internal override string Describe => "swapped axes";
+}
 
 /// <summary>A size derived from the content (trim, entropy crop, seam carve). The compiler reports the size as
 /// unknown and refuses the backends that need it up front.</summary>
-internal sealed record ContentDerivedRule : GeometryRule;
+internal sealed record ContentDerivedRule : GeometryRule
+{
+    internal override bool SizeKnown => false;
+
+    internal override (int Width, int Height) Map(int width, int height) => (width, height);
+
+    internal override string Describe => "content-derived size";
+}

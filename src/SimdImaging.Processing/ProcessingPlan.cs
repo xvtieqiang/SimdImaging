@@ -304,6 +304,20 @@ public sealed class ProcessingPlan
     }
 
     /// <summary>
+    /// Builds a plan from steps a <c>PipelineCompiler</c> already validated and segmented. No re-validation: the
+    /// compiler produced these from <see cref="ImageOp"/> definitions, so the halos and scratch are the same ones
+    /// the definition carries.
+    /// </summary>
+    internal static ProcessingPlan FromCompiled(IReadOnlyList<PlanStep> steps, int bandRows)
+    {
+        var plan = new ProcessingPlan { BandRows = bandRows };
+        foreach (var step in steps)
+            plan._steps.Add(step);
+        plan._version++;
+        return plan;
+    }
+
+    /// <summary>
     /// Appends a point step defined by an explicit 4×256 byte table (R, G, B, A — 1024 bytes). Consecutive
     /// table steps are composed into one table at execution time and run in a single pass over the band,
     /// which is exact because each step in the chain quantises to bytes anyway. Rgba8 only: another

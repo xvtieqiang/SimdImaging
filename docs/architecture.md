@@ -636,7 +636,8 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 - **后端**：Tile 请求 → `TileRefused`（首个真实阻塞：无区域写 Sink / 块对齐 / Global / 无 Tile 内核）；Region 请求且源有 `RandomRegion`、无几何 → Region；全部算子段可流、几何步都有 `Wrap`、Sink 可写行 → Stream；否则 Frame。拒绝原因复用 `StreamRefusal` / `RegionRefusal`，不新增平行词汇。
 - **解释**：每个决定一行 `Explanation`，测试直接断言这些行。
 
-本提交只有测试消费者；`ImagePipeline` 与 `ImageTranscode` 的接入在后续两步完成。
+`ImagePipeline` 已接入：`_pending` 换成 `PipelineRecipeBuilder`，几何方法只追加步骤，`ToImage()`/barrier 时才
+编译并顺序执行 section；几何不再在调用点物化。`ImageTranscode` 的接入是下一步。
 
 ### 6.4 超限行为
 

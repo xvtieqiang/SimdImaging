@@ -55,7 +55,7 @@ internal static class PipelineCompiler
 
             var geometry = (GeometryStep)recipe.Steps[index];
             ApplyGeometrySize(geometry, ref width, ref height, ref sizeKnown);
-            explanation.Add($"step {index} {geometry.Name}: {Describe(geometry.Geometry)}, " +
+            explanation.Add($"step {index} {geometry.Name}: {geometry.Geometry.Describe}, " +
                 (geometry.CanWrap ? "row-wrappable" : "materialises"));
             sections.Add(new CompiledSection(CompiledSectionKind.Geometry, -1, 0, index));
             index++;
@@ -135,24 +135,13 @@ internal static class PipelineCompiler
 
     private static void ApplyGeometrySize(GeometryStep step, ref int width, ref int height, ref bool known)
     {
-        switch (step.Geometry)
+        if (!step.Geometry.SizeKnown)
         {
-            case SameSizeRule:
-                return;
-
-            case FixedSizeRule fixedSize:
-                width = fixedSize.Width;
-                height = fixedSize.Height;
-                return;
-
-            case ContentDerivedRule:
-                known = false;
-                return;
-
-            default:
-                throw new NotSupportedException(
-                    $"The geometry rule {step.Geometry.GetType().Name} at step {step.Index} has no size rule.");
+            known = false;
+            return;
         }
+
+        (width, height) = step.Geometry.Map(width, height);
     }
 
     /// <summary>Returns the first step-driven refusal; <paramref name="blocked"/> names a non-refusal reason the
@@ -237,14 +226,6 @@ internal static class PipelineCompiler
         // No operator declares tile partitioning yet; the Tile backend has nothing to run.
         return TileRefusal.NotTileable;
     }
-
-    private static string Describe(GeometryRule geometry) => geometry switch
-    {
-        SameSizeRule => "same size",
-        FixedSizeRule fixedSize => $"{fixedSize.Width}x{fixedSize.Height}",
-        ContentDerivedRule => "content-derived size",
-        _ => geometry.GetType().Name,
-    };
 
     private static WorkingFormatMask Mask(WorkingFormat format) => format switch
     {

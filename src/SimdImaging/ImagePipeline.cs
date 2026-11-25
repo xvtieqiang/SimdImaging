@@ -1,6 +1,8 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Compilation;
+using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Geometry;
 
 namespace SimdImaging;
@@ -37,7 +39,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 {
     private readonly Image _source;
     private readonly IPixelPool? _pool;
-    private readonly List<ImageOp> _pending = [];
+    private PipelineRecipeBuilder _recipe = new();
     private Image? _current;
     private int _bandRows = ProcessingPlan.DefaultBandRows;
     private bool _finished;
@@ -58,27 +60,27 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>Resizes. Ends the current band pass and continues with a new one.</summary>
     public ImagePipeline Resize(int width, int height, Resampler resampler = Resampler.Bicubic) =>
-        Reshape(v => Canvas.Resize(v, width, height, resampler, ResizeMode.Stretch, Anchor.Centre, default, _pool));
+        AppendGeometry(GeometrySteps.Resize(width, height, resampler));
 
     /// <summary>Resize with an explicit mode, anchor and background.</summary>
     public ImagePipeline Resize(int width, int height, ResizeMode mode, Anchor anchor = Anchor.Centre,
         Resampler resampler = Resampler.Bicubic, RgbaColor background = default) =>
-        Reshape(v => Canvas.Resize(v, width, height, resampler, mode, anchor, background, _pool));
+        AppendGeometry(GeometrySteps.Resize(width, height, mode, anchor, resampler, background));
 
     /// <summary>Crops to <paramref name="region"/>. Ends the current band pass.</summary>
-    public ImagePipeline Crop(PixelRect region) => Reshape(v => Transforms.Crop(v, region, _pool));
+    public ImagePipeline Crop(PixelRect region) => AppendGeometry(GeometrySteps.Crop(region));
 
     /// <summary>Rotates by a quarter turn. Ends the current band pass.</summary>
-    public ImagePipeline Rotate90(bool clockwise = true) => Reshape(v => Transforms.Rotate90(v, clockwise, _pool));
+    public ImagePipeline Rotate90(bool clockwise = true) => AppendGeometry(GeometrySteps.Rotate90(clockwise));
 
     /// <summary>Rotates by a half turn. Ends the current band pass.</summary>
-    public ImagePipeline Rotate180() => Reshape(v => Transforms.Rotate180(v, _pool));
+    public ImagePipeline Rotate180() => AppendGeometry(GeometrySteps.Rotate180());
 
     /// <summary>Mirrors left to right. Ends the current band pass.</summary>
-    public ImagePipeline FlipHorizontal() => Reshape(v => Transforms.FlipHorizontal(v, _pool));
+    public ImagePipeline FlipHorizontal() => AppendGeometry(GeometrySteps.FlipHorizontal());
 
     /// <summary>Mirrors top to bottom. Ends the current band pass.</summary>
-    public ImagePipeline FlipVertical() => Reshape(v => Transforms.FlipVertical(v, _pool));
+    public ImagePipeline FlipVertical() => AppendGeometry(GeometrySteps.FlipVertical());
 
 
 
@@ -169,18 +171,27 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         // `using var copy = image.Pipe().ToImage()` hand back the very image it was copying — and the dispose at
         // the end of that using then returned the source's buffer to the pool while the caller kept using it.
         // A copy costs one frame; an aliased one costs the caller their image.
-        var result = HasWork ? Current() : _source.Clone();
+        var result = HasWork ? Flush() : _source.Clone();
         _current = null;
         return result;
     }
 
     /// <summary>Whether any step has been recorded or run; false means the pipeline is the source.</summary>
-    internal bool HasWork => _current is not null || _pending.Count > 0;
+    internal bool HasWork => _current is not null || !_recipe.IsEmpty;
 
     protected override ImagePipeline Step(ImageOp op)
     {
         ObjectDisposedException.ThrowIf(_finished, this);
-        _pending.Add(op);
+        _recipe.Append(op);
+        return this;
+    }
+
+    /// <summary>Appends a geometry change. It is executed when the chain is flushed, not here; the compiler decides
+    /// where the boundary falls, and the two facts it needs (the new size and the row form) travel with the step.</summary>
+    private ImagePipeline AppendGeometry(GeometryDescriptor geometry)
+    {
+        ObjectDisposedException.ThrowIf(_finished, this);
+        _recipe.Append(geometry);
         return this;
     }
 
@@ -192,7 +203,11 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     private ImagePipeline Reshape(Func<PixelView, WorkingBuffer> reshape)
     {
         ObjectDisposedException.ThrowIf(_finished, this);
-        var input = Current();
+
+        // A whole-image operator that is not a plan step is an explicit barrier: flush the recipe into an image,
+        // run the operator, and continue from its result. Geometry steps do not come through here any more — they
+        // stay in the recipe until ToImage, so the compiler decides the boundary.
+        var input = Flush();
         var reshaped = input.ReplaceBuffer(reshape(input[0].Pixels.View));
         if (!ReferenceEquals(input, _source))
             input.Dispose();
@@ -207,43 +222,43 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ResizeCanvas(int width, int height, Anchor anchor = Anchor.Centre, RgbaColor background = default) =>
-        Reshape(v => Canvas.ResizeCanvas(v, width, height, anchor, background, _pool));
+        AppendGeometry(GeometrySteps.ResizeCanvas(width, height, anchor, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Tile(int width, int height, bool mirror = false) =>
-        Reshape(v => Canvas.Tile(v, width, height, mirror, _pool));
+        AppendGeometry(GeometrySteps.Tile(width, height, mirror));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Trim(float tolerance = 0f) =>
-        Reshape(v => Canvas.Trim(v, tolerance, _pool));
+        AppendGeometry(GeometrySteps.Trim(tolerance));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline RoundCorners(float radius) =>
-        Reshape(v => Canvas.RoundCorners(v, radius, _pool));
+        AppendGeometry(GeometrySteps.RoundCorners(radius));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Transpose(bool anti = false) =>
-        Reshape(v => Orientation.Transpose(v, anti, _pool));
+        AppendGeometry(GeometrySteps.Transpose(anti));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline RotateFlip(int quarterTurns, bool flipHorizontal = false) =>
-        Reshape(v => Orientation.RotateFlip(v, quarterTurns, flipHorizontal, _pool));
+        AppendGeometry(GeometrySteps.RotateFlip(quarterTurns, flipHorizontal));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline EntropyCrop(float threshold = 0.25f) =>
-        Reshape(v => Processing.Geometry.EntropyCrop.Crop(v, threshold, _pool));
+        AppendGeometry(GeometrySteps.EntropyCrop(threshold));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline RemoveSeams(SeamAxis axis, int count) =>
-        Reshape(v => SeamCarving.RemoveSeams(v, axis, count, _pool));
+        AppendGeometry(GeometrySteps.RemoveSeams(axis, count));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline InsertSeams(SeamAxis axis, int count) =>
-        Reshape(v => SeamCarving.InsertSeams(v, axis, count, _pool));
+        AppendGeometry(GeometrySteps.InsertSeams(axis, count));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline SeamCarve(int width, int height) =>
-        Reshape(v => SeamCarving.CarveTo(v, width, height, _pool));
+        AppendGeometry(GeometrySteps.SeamCarve(width, height));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ConvertColorSpace(ColorSpace target, YCbCrStandard ycbcr = YCbCrStandard.Bt709, bool limitedRange = false, WhitePoint white = WhitePoint.D65, ChromaticAdaptation adaptation = ChromaticAdaptation.Bradford) =>
@@ -301,19 +316,16 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline PerspectiveWithOptions(ReadOnlySpan<float> homography, int width, int height,
-        Resampler resampler, SampleOptions options, RgbaColor background = default)
-    {
-        var copy = homography.ToArray();
-        return Reshape(v => Mapping.PerspectiveWithOptions(v, copy, width, height, resampler, options, background, _pool));
-    }
+        Resampler resampler, SampleOptions options, RgbaColor background = default) =>
+        AppendGeometry(GeometrySteps.PerspectiveWithOptions(homography, width, height, resampler, options, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Affine(AffineMatrix forward, int width, int height, RgbaColor background = default) =>
-        Reshape(v => Mapping.Transform(v, forward, width, height, background, _pool));
+        AppendGeometry(GeometrySteps.Affine(forward, width, height, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline AffineWithOptions(AffineMatrix forward, int width, int height, Resampler resampler, SampleOptions options, RgbaColor background = default) =>
-        Reshape(v => Mapping.TransformWithOptions(v, forward, width, height, resampler, options, background, _pool));
+        AppendGeometry(GeometrySteps.AffineWithOptions(forward, width, height, resampler, options, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ToneMap(ToneMapCurve curve = ToneMapCurve.Aces, float exposure = 0f, float whitePoint = 1f, bool autoExposure = false, float targetLuminance = 0.18f) =>
@@ -332,22 +344,22 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Pad(int margin, RgbaColor background) =>
-        Reshape(v => Transforms.Pad(v, margin, margin, margin, margin, background, _pool));
+        AppendGeometry(GeometrySteps.Pad(margin, background));
 
     public ImagePipeline Pad(int left, int top, int right, int bottom, RgbaColor background) =>
-        Reshape(v => Transforms.Pad(v, left, top, right, bottom, background, _pool));
+        AppendGeometry(GeometrySteps.Pad(left, top, right, bottom, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Warp(int width, int height, PixelWarp map, Resampler resampler = Resampler.Bilinear, RgbaColor background = default) =>
-        Reshape(v => Sampling.Warp(v, width, height, map, resampler, background, _pool));
+        AppendGeometry(GeometrySteps.Warp(width, height, map, resampler, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline WarpWithOptions(int width, int height, PixelWarp map, Resampler resampler, SampleOptions options, RgbaColor background = default) =>
-        Reshape(v => Sampling.WarpWithOptions(v, width, height, map, resampler, options, background, _pool));
+        AppendGeometry(GeometrySteps.WarpWithOptions(width, height, map, resampler, options, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline ResizeWithOptions(int width, int height, Resampler resampler, SampleOptions options, RgbaColor background = default) =>
-        Reshape(v => Resample.ResizeWithOptions(v, width, height, resampler, options, background, _pool));
+        AppendGeometry(GeometrySteps.ResizeWithOptions(width, height, resampler, options, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline Premultiply() =>
@@ -465,45 +477,25 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>Resize preserving the aspect ratio, by width.</summary>
     public ImagePipeline ResizeToWidth(int width, Resampler resampler = Resampler.Bicubic) =>
-        Reshape(v => Canvas.Resize(v, width, Math.Max(1, (int)MathF.Round((float)v.Height * width / v.Width)),
-            resampler, ResizeMode.Stretch, Anchor.Centre, default, _pool));
+        AppendGeometry(GeometrySteps.ResizeToWidth(width, resampler));
 
     /// <summary>Resize preserving the aspect ratio, by height.</summary>
     public ImagePipeline ResizeToHeight(int height, Resampler resampler = Resampler.Bicubic) =>
-        Reshape(v => Canvas.Resize(v, Math.Max(1, (int)MathF.Round((float)v.Width * height / v.Height)), height,
-            resampler, ResizeMode.Stretch, Anchor.Centre, default, _pool));
+        AppendGeometry(GeometrySteps.ResizeToHeight(height, resampler));
 
     /// <summary>Thumbnail: fit inside a box, then sharpen what the downscale softened.</summary>
     public ImagePipeline Thumbnail(int maxWidth, int maxHeight, Resampler resampler = Resampler.Lanczos3,
         float sharpenAmount = 0.4f) =>
-        Reshape(v =>
-        {
-            var scale = MathF.Min(maxWidth / (float)v.Width, maxHeight / (float)v.Height);
-            if (scale >= 1f)
-                return Transforms.Crop(v, new PixelRect(0, 0, v.Width, v.Height), _pool);
-
-            var width = Math.Max(1, (int)MathF.Round(v.Width * scale));
-            var height = Math.Max(1, (int)MathF.Round(v.Height * scale));
-            using var resized = Canvas.Resize(v, width, height, resampler, ResizeMode.Stretch, Anchor.Centre, default, _pool);
-            return sharpenAmount > 0f ? FilterOps.Sharpen(resized.View, sharpenAmount, 0.8f, _pool) : resized.Clone(_pool);
-        });
+        AppendGeometry(GeometrySteps.Thumbnail(maxWidth, maxHeight, resampler, sharpenAmount));
 
     /// <summary>Rotation with an explicit resampler and sampling options.</summary>
     public ImagePipeline RotateWithOptions(float degrees, Resampler resampler, SampleOptions options,
         RgbaColor background = default) =>
-        Reshape(v =>
-        {
-            var (width, height, forward) = Image.RotationCanvas(v.Width, v.Height, degrees);
-            return Mapping.TransformWithOptions(v, forward, width, height, resampler, options, background, _pool);
-        });
+        AppendGeometry(GeometrySteps.RotateWithOptions(degrees, resampler, options, background));
 
     /// <summary>Rotate by an arbitrary angle.</summary>
     public ImagePipeline Rotate(float degrees, RgbaColor background = default) =>
-        Reshape(v =>
-        {
-            var (width, height, forward) = Image.RotationCanvas(v.Width, v.Height, degrees);
-            return Mapping.Transform(v, forward, width, height, background, _pool);
-        });
+        AppendGeometry(GeometrySteps.Rotate(degrees, background));
 
     /// <summary>Reduces to at most <paramref name="maxColors"/> colours.</summary>
     public ImagePipeline Quantize(int maxColors, Quantizer quantizer = Quantizer.MedianCut) =>
@@ -561,7 +553,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     private ImagePipeline Geometry(Func<Image, Image> reshape)
     {
         ObjectDisposedException.ThrowIf(_finished, this);
-        var input = Current();
+        var input = Flush();
         var reshaped = reshape(input);
 
         // The pass just ended: its output is no longer reachable and is not the caller's source, so it goes back
@@ -573,41 +565,71 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         return this;
     }
 
-    /// <summary>The image as of the last completed pass, running the pending plan first.</summary>
-    private Image Current()
+    /// <summary>
+    /// Runs the recipe so far and returns the image it produced. Geometry steps are applied in recipe order; a run
+    /// of operators between them is one compiled section, executed through the same <see cref="ProcessingPlan"/>
+    /// the caller would have built by hand.
+    /// </summary>
+    private Image Flush()
     {
-        if (_pending.Count == 0)
+        if (_recipe.IsEmpty)
             return _current ?? _source;
 
-        // One step has nothing to fuse and nothing to gain from banding: the operator already parallelises over the
-        // image itself. Running it directly is the same call the facade used to make, so a single-operator chain costs
-        // what the direct call cost instead of a plan, a rent and a kernel dispatch per band.
-        if (_pending.Count == 1 && _pending[0].Direct is { } direct)
-        {
-            var only = _pending[0];
-            _pending.Clear();
+        var recipe = _recipe.Build();
+        _recipe = new PipelineRecipeBuilder();
 
-            var directInput = _current ?? _source;
-            var directResult = directInput.ReplaceBuffer(direct(directInput[0].Pixels.View));
-            if (!ReferenceEquals(directInput, _source))
-                directInput.Dispose();
+        var input = _current ?? _source;
+
+        // One step has nothing to fuse and nothing to gain from banding: the operator already parallelises over the
+        // image itself. Running it directly is the same call the facade used to make.
+        if (recipe.Count == 1 && recipe.Steps[0] is OperatorStep only &&
+            only.Operator.Kernels.WholeImage is { } direct)
+        {
+            var directResult = input.ReplaceBuffer(direct(input[0].Pixels.View));
+            if (!ReferenceEquals(input, _source))
+                input.Dispose();
 
             _current = directResult;
             return directResult;
         }
 
-        var plan = new ProcessingPlan { BandRows = _bandRows };
-        foreach (var op in _pending)
-            plan.Add(op);
-        _pending.Clear();
+        var options = new CompileOptions
+        {
+            SourceWidth = input.Width,
+            SourceHeight = input.Height,
+            SourceFormat = input.Format,
+            Source = SourceCapabilities.Seekable | SourceCapabilities.Replayable |
+                     SourceCapabilities.StableContent,
+            Sink = SinkCapabilities.None,
+            BandRows = _bandRows,
+        };
 
-        var input = _current ?? _source;
-        var next = input.Apply(plan, _pool);
-        if (!ReferenceEquals(input, _source))
-            input.Dispose();
+        var compiled = PipelineCompiler.Compile(recipe, options);
+        foreach (var section in compiled.Sections)
+        {
+            if (section.Kind == CompiledSectionKind.OperatorRun)
+            {
+                var steps = new PlanStep[section.StepCount];
+                for (var i = 0; i < steps.Length; i++)
+                    steps[i] = compiled.Steps[section.FirstStep + i];
 
-        _current = next;
-        return next;
+                var plan = ProcessingPlan.FromCompiled(steps, _bandRows);
+                var next = input.Apply(plan, _pool);
+                if (!ReferenceEquals(input, _source))
+                    input.Dispose();
+                input = next;
+                continue;
+            }
+
+            var geometry = (GeometryStep)recipe.Steps[section.RecipeIndex];
+            var reshaped = input.ReplaceBuffer(geometry.Reshape(input[0].Pixels.View, _pool));
+            if (!ReferenceEquals(input, _source))
+                input.Dispose();
+            input = reshaped;
+        }
+
+        _current = input;
+        return input;
     }
 }
 
