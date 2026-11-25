@@ -47,6 +47,9 @@ public enum ProcessMode : byte
 
     /// <summary>The result was produced whole: the plan cannot stream, or a region was selected.</summary>
     Materialized,
+
+    /// <summary>The plan ran one rectangle at a time and the encoder consumed rows as bands completed.</summary>
+    Tiled,
 }
 
 /// <summary>What <c>Image.ProcessTo</c> did, and how much of it was actually streamed.</summary>

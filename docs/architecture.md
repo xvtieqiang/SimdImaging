@@ -670,10 +670,18 @@ tile 交给 `RegionExecutor` 读取含 halo 的源区域、执行步骤、再把
 | `NotTileable` | 其余不可矩形执行的情况（几何步等） |
 
 Tile 的验收是逐字节：`TileExecutionTests` 在 3 种格式、3 组 tile 尺寸下与 Frame 结果比较，并断言 tile 恰好覆盖每个
-像素一次。公开入口是 `Image.ProcessTiles(source, plan, tileW, tileH)`（返回缓冲）与
-`Image.ProcessTiles(source, sink, plan, …)`（写自定义 Sink）。可 tile 性由契约的 `Requirements.SupportsTiles` 显式声明：
-Point / 局部 Neighborhood 为 true，Global / Composite / 整图 / 块对齐为 false，编译器按声明拒绝。编码器端的
-`IRegionSink` 实现仍留给后续；内存侧有 `TileExecution_HoldsWellUnderOneFrame` 钉住「一块 tile + halo」的峰值。
+像素一次。公开入口是 `Image.ProcessTiles(source, plan, tileW, tileH)`（返回缓冲）、
+`Image.ProcessTiles(source, sink, plan, …)`（写自定义 Sink），以及 `Image.ProcessTilesTo(...)`（直接编码，见下）。可 tile
+性由契约的 `Requirements.SupportsTiles` 显式声明：Point / 局部 Neighborhood 为 true，Global / Composite / 整图 / 块对齐
+为 false，编译器按声明拒绝。内存侧有 `TileExecution_HoldsWellUnderOneFrame` 钉住「一块 tile + halo」的峰值。
+
+`ProcessTilesTo` 是编码器端的 `IRegionSink`：sink 持有一条 `tileHeight` 行的编码带，按「每行已填列数」判断何时可写
+——一块 tile 接一块 tile 地到达，行必须自上而下提交，band 内允许任意顺序；所有行写满后调用
+`StreamFrameEncoder.WriteRows`，最后 `Complete()` 断言没有截断。它不解码整图，只多一条宽的带（`width × tileHeight`
+× bpp，计入 Workspace 与 `MaxWorkingBytes`），报告 `ProcessMode.Tiled`、`PeakWorkingBytes` 与
+`PredictedWorkingBytes`。路径重载 `ProcessTilesTo(path, path, …)` 用 `TiffRegionSource` 打开可区域读取的 TIFF；计划里
+的几何步（含尾部 resize）会进入 recipe 并被编译器以 `NotTileable` 拒绝，而不是被静默忽略。tile 吞吐基线仍未录入
+`benchmarks`。
 
 ### 6.3.3 代表算子闭环（P2）
 

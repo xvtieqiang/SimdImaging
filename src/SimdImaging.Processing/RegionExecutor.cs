@@ -32,6 +32,9 @@ public enum RegionRefusal : byte
 
     /// <summary>The derived source read is far larger than the output region; a whole-frame run is cheaper.</summary>
     RegionCost,
+
+    /// <summary>A step declares order-dependent or per-call state, which a rectangle walk cannot reproduce.</summary>
+    StatefulStep,
 }
 
 /// <summary>What <see cref="ProcessingPlan.TryExecuteRegion"/> did.</summary>
@@ -85,6 +88,7 @@ internal static class RegionExecutor
             StreamRefusal.GlobalStep => RegionRefusal.GlobalStep,
             StreamRefusal.CompositeStep => RegionRefusal.CompositeStep,
             StreamRefusal.StepNeedsWholeSource => RegionRefusal.StepNeedsWholeSource,
+            StreamRefusal.StatefulStep => RegionRefusal.StatefulStep,
             _ => throw new UnreachableException(
                 $"StreamRefusal.{refusal} has no region equivalent; the classifier returned a value it never used to."),
         };

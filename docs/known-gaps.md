@@ -1270,9 +1270,9 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   未做的部分：`PlanStep` / `ProcessingPlan` 没有真正的第二输入字段（overlay 是闭包捕获的 `PixelView`，没有逐端口
   footprint、没有所有权与生命周期托管），`DrawImage` / `Watermark` / `ApplyGainMap` 仍是 barrier。下一步要打开的
   是通用多输入执行（第二视图 + 每端口区域 + 生命周期），不是再加一个捕获式算子。
-- **统一预算（P4 部分完成）**：编译期上界总门 + `WorkspaceManager` 预留账户（计划/流窗口/resize ring/tile），
-  `ProcessReport` 带预测与实测峰值。仍缺：spool/物化缓存项、M2–M4 出口条件、所有分配路径（FloatScratch/编码器）
-  的完整计量。
+- **统一预算（P4 部分完成）**：编译期上界总门 + `WorkspaceManager` 预留账户（计划/流窗口/resize ring/tile/编码带），
+  `ProcessReport` 带预测与实测峰值，并有「预测 ≥ 实测」的对账测试（流式与物化各一）。仍缺：spool/物化缓存项、
+  M2–M4 出口条件、FloatScratch/编码器内部缓冲的完整计量。
 - **区域推导（P1 部分完成）**：已有 `SourceRegionSet`、反向逐段推导、Resize/Crop/Pad/FlipVertical/FlipHorizontal/
   Rotate90/Rotate180/Transpose/RotateFlip（8 种组合）/Affine/任意角 Rotate 反向映射、每个输入端口的 footprint、
   区域成本与 `RegionCost` 拒绝、公开的 `Image.Explain`（`PlanExplanation`：后端与拒绝原因、编译段与融合、工作空间
@@ -1282,12 +1282,15 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   带 `Region` 的转码仍走 `RegionExecutor`、没有编译计划可解释；
   `Image.Apply/ApplyWithOptions` 已统一到 Compiler，`ProcessTo/ProcessRegion/ResizeRegion` 仍走旧
   `ProcessingPlan` 路径。
-- **Tile 后端（P5 第一刀已落地）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
-  Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。未做：编码器端
-  的 `IRegionSink` 实现（目前只有测试里的内存 Sink）、算子显式声明 `Partitioning.Tiles`（当前以 RowBands + halo 判定
-  可 tile）、以及 tile 的吞吐基线。公开入口已提供：`Image.ProcessTiles` 的缓冲与 Sink 两个重载；可 tile 性由
-  `Requirements.SupportsTiles` 显式声明并有测试；内存峰值有 `CountingPool` 对账。编码器端的 `IRegionSink` 实现仍未做
-  （目前是内存 Sink），tile 吞吐也还没有基准条目。
+- **Tile 后端（P5 部分完成）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
+  Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。公开入口：
+  `Image.ProcessTiles` 的缓冲与 Sink 两个重载、`Image.ProcessTilesTo(IRegionSource, Stream, …)`（编码器端 sink：
+  持一条 `tileHeight` 行的带、行填满即写、`ProcessMode.Tiled`）与 `ProcessTilesTo(path, path, …)`（TIFF 区域源）。
+  未做：公开的通用文件级区域源（目前只有 TIFF 内部实现）、tile 吞吐基准条目；tile 计划不能带几何步（含尾部 resize），
+  编译期以 `NotTileable` 拒绝。
+- **需求选路（P1 补完）**：`StateScope.PerCall` / `ExecutionOrder.SourceOrder` 现在参与 Stream/Region 拒绝
+  （`StatefulStep`），并由 `RequirementsSelectionTests` 用一个合成的行可分步验证；`PassModel` 与 `Determinism`
+  仍只用于解释与预算，不改变后端选择（当前非默认项都是 Global，分类已被 Category 拦下）。
 - **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 19 MiB
   （ring + staging + 输出批 + worker 行，一个账本；超限先缩 chunk 再拒绝）。
 - **一次流水线只支持一个缩放**：`ResizeTo(..., plan, after)` 覆盖「计划 → 缩放 → 计划」；两次缩放连用仍要分两次调用

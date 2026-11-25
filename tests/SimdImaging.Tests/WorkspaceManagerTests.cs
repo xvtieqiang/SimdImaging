@@ -37,6 +37,56 @@ public sealed class WorkspaceManagerTests
     }
 
     [Fact]
+    public void AStreamedRun_StaysWithinItsPrediction()
+    {
+        var source = Path.Combine(Path.GetTempPath(), $"simd-ws-{Guid.NewGuid():N}.png");
+        var destination = Path.Combine(Path.GetTempPath(), $"simd-ws-{Guid.NewGuid():N}.png");
+        try
+        {
+            using (var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+
+            var report = ImageTranscode.From(source).Invert().Resize(32, 24).Run(destination);
+
+            report.Mode.ShouldBe(ProcessMode.Streamed);
+            report.PredictedWorkingBytes.ShouldBeGreaterThan(0);
+            report.PeakWorkingBytes.ShouldBeGreaterThan(0);
+            report.PeakWorkingBytes.ShouldBeLessThanOrEqualTo(report.PredictedWorkingBytes,
+                "the compile-time prediction is an upper bound, not a guess");
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
+    [Fact]
+    public void AMaterializedRun_StaysWithinItsPrediction()
+    {
+        var source = Path.Combine(Path.GetTempPath(), $"simd-ws-{Guid.NewGuid():N}.png");
+        var destination = Path.Combine(Path.GetTempPath(), $"simd-ws-{Guid.NewGuid():N}.png");
+        try
+        {
+            using (var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+
+            var report = ImageTranscode.From(source).Noise(0.05f, seed: 7).Run(destination);
+
+            report.Mode.ShouldBe(ProcessMode.Materialized);
+            report.PredictedWorkingBytes.ShouldBeGreaterThan(0);
+            report.PeakWorkingBytes.ShouldBeGreaterThan(0);
+            report.PeakWorkingBytes.ShouldBeLessThanOrEqualTo(report.PredictedWorkingBytes,
+                "the compile-time prediction is an upper bound, not a guess");
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
+    [Fact]
     public void APlanReservation_IsVisibleToTheManager()
     {
         using var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);

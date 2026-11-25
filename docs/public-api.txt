@@ -296,6 +296,8 @@
   SimdImaging.Image.Mutate(System.Action<SimdImaging.ImagePipeline> steps, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Abstractions.IRegionSink sink, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.IPixelPool? pool) -> System.Void
   SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
+  SimdImaging.Image.ProcessTilesTo(SimdImaging.Abstractions.IRegionSource source, System.IO.Stream destination, Sdcb.SimdCodecs.Abstractions.ImageFormat format, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.SaveOptions? save, SimdImaging.Abstractions.IPixelPool? pool, System.Threading.CancellationToken cancellationToken) -> SimdImaging.ProcessReport
+  SimdImaging.Image.ProcessTilesTo(System.String sourcePath, System.String destinationPath, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.TranscodeOptions? options, System.Threading.CancellationToken cancellationToken) -> SimdImaging.ProcessReport
   SimdImaging.Image.Psnr(SimdImaging.Image other) -> System.Double
   SimdImaging.Image.RadialGradient(Sdcb.SimdCodecs.Abstractions.PixelRect rect, System.Single centreX, System.Single centreY, System.Single radius, SimdImaging.Abstractions.RgbaColor inner, SimdImaging.Abstractions.RgbaColor outer) -> System.Void
   SimdImaging.Image.SamplePixel(System.Single x, System.Single y, SimdImaging.Processing.Resampler resampler) -> SimdImaging.Abstractions.RgbaColor
@@ -614,6 +616,7 @@
   SimdImaging.PlanWorkspaceTerm.op_Inequality(SimdImaging.PlanWorkspaceTerm? left, SimdImaging.PlanWorkspaceTerm? right) -> System.Boolean
   SimdImaging.ProcessMode.Materialized = 1
   SimdImaging.ProcessMode.Streamed = 0
+  SimdImaging.ProcessMode.Tiled = 2
   SimdImaging.ProcessOptions.#ctor()
   SimdImaging.ProcessOptions.Default : SimdImaging.ProcessOptions { get; }
   SimdImaging.ProcessOptions.Equals(SimdImaging.ProcessOptions? other) -> System.Boolean
@@ -1278,6 +1281,7 @@
   SimdImaging.Processing.RegionRefusal.GlobalStep = 1
   SimdImaging.Processing.RegionRefusal.None = 0
   SimdImaging.Processing.RegionRefusal.RegionCost = 6
+  SimdImaging.Processing.RegionRefusal.StatefulStep = 7
   SimdImaging.Processing.RegionRefusal.StepNeedsWholeSource = 3
   SimdImaging.Processing.RegionResult.#ctor(SimdImaging.Processing.RegionRefusal Refusal, System.Int32 BandCount, System.Int32 WorkerCount)
   SimdImaging.Processing.RegionResult.BandCount : System.Int32 { get; set; }
@@ -1319,6 +1323,7 @@
   SimdImaging.Processing.StreamRefusal.GeometricStep = 5
   SimdImaging.Processing.StreamRefusal.GlobalStep = 1
   SimdImaging.Processing.StreamRefusal.None = 0
+  SimdImaging.Processing.StreamRefusal.StatefulStep = 7
   SimdImaging.Processing.StreamRefusal.StepNeedsWholeSource = 3
   SimdImaging.Processing.StreamResult.#ctor(SimdImaging.Processing.StreamRefusal Refusal, System.Int32 RowsWritten, System.Int32 BandCount, System.Int32 WorkerCount)
   SimdImaging.Processing.StreamResult.BandCount : System.Int32 { get; set; }

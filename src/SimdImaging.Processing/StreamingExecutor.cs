@@ -1,5 +1,6 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Fusion;
 using SimdImaging.Processing.Internal;
 
@@ -34,6 +35,12 @@ public enum StreamRefusal : byte
 
     /// <summary>A step changes the working format; a row chain cannot splice two formats, so the plan materialises.</summary>
     FormatChange,
+
+    /// <summary>A step declares order-dependent or per-call state (<see cref="ExecutionOrder.SourceOrder"/> or
+    /// <see cref="StateScope.PerCall"/>). A row pump feeds bands in order but may interleave workers, and a step
+    /// whose result depends on the call sequence cannot promise the same pixels. No operator needs this today —
+    /// every order-dependent step is Global — but the declaration is what decides, not the category alone.</summary>
+    StatefulStep,
 }
 
 /// <summary>What <see cref="ProcessingPlan.TryExecuteTo"/> did.</summary>
@@ -81,6 +88,14 @@ internal static class StreamingExecutor
                 OpCategory.Composite => StreamRefusal.CompositeStep,
                 _ => step.NeedsWholeSource ? StreamRefusal.StepNeedsWholeSource : StreamRefusal.None,
             };
+
+            if (refusal == StreamRefusal.None)
+            {
+                var requirements = step.Definition.Contract.Requirements;
+                if (requirements.State is not StateScope.None || requirements.Order is not ExecutionOrder.Any)
+                    refusal = StreamRefusal.StatefulStep;
+            }
+
             if (refusal != StreamRefusal.None)
             {
                 refusingStep = step.Name;
