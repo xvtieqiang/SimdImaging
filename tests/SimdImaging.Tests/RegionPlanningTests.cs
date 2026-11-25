@@ -3,6 +3,7 @@ using SimdImaging;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Compilation;
+using SimdImaging.Processing.Geometry;
 using Shouldly;
 using Xunit;
 
@@ -89,6 +90,85 @@ public sealed class RegionPlanningTests
             Region = new PixelRect(5, 4, 10, 8),
         });
         flip.StepInfo[0].SourceRegions[0].Region.ShouldBe(new PixelRect(5, 18, 10, 8));
+    }
+
+    [Fact]
+    public void Transpose_MapsTheRegionToTheOtherAxis()
+    {
+        var normal = Compile(Recipe(GeometrySteps.Transpose(anti: false)), new CompileOptions
+        {
+            SourceWidth = 40, SourceHeight = 30, SourceFormat = WorkingFormat.Rgba8,
+            Region = new PixelRect(5, 4, 10, 8),
+        });
+        normal.StepInfo[0].SourceRegions[0].Region.ShouldBe(new PixelRect(4, 5, 8, 10));
+
+        var anti = Compile(Recipe(GeometrySteps.Transpose(anti: true)), new CompileOptions
+        {
+            SourceWidth = 40, SourceHeight = 30, SourceFormat = WorkingFormat.Rgba8,
+            Region = new PixelRect(5, 4, 10, 8),
+        });
+        anti.StepInfo[0].SourceRegions[0].Region.ShouldBe(new PixelRect(28, 15, 8, 10));
+    }
+
+    [Theory]
+    [InlineData(0, false, 5, 4, 10, 8)]
+    [InlineData(0, true, 25, 4, 10, 8)]
+    [InlineData(1, false, 4, 15, 8, 10)]
+    [InlineData(1, true, 4, 5, 8, 10)]
+    [InlineData(2, false, 25, 18, 10, 8)]
+    [InlineData(2, true, 5, 18, 10, 8)]
+    [InlineData(3, false, 28, 5, 8, 10)]
+    [InlineData(3, true, 28, 15, 8, 10)]
+    public void RotateFlip_MapsEveryCombination(int turns, bool flip, int x, int y, int width, int height)
+    {
+        var plan = Compile(Recipe(GeometrySteps.RotateFlip(turns, flip)), new CompileOptions
+        {
+            SourceWidth = 40, SourceHeight = 30, SourceFormat = WorkingFormat.Rgba8,
+            Region = new PixelRect(5, 4, 10, 8),
+        });
+
+        plan.StepInfo[0].SourceRegions[0].Region.ShouldBe(new PixelRect(x, y, width, height));
+    }
+
+    [Fact]
+    public void Affine_MapsTheCornersAndWidensByTheKernelSupport()
+    {
+        var identity = Compile(Recipe(GeometrySteps.Affine(AffineMatrix.Identity, 40, 30, default)),
+            new CompileOptions
+            {
+                SourceWidth = 40, SourceHeight = 30, SourceFormat = WorkingFormat.Rgba8,
+                Region = new PixelRect(5, 4, 10, 8),
+            });
+        identity.StepInfo[0].SourceRegions[0].Region.ShouldBe(new PixelRect(4, 3, 12, 10));
+
+        var shifted = Compile(Recipe(GeometrySteps.Affine(AffineMatrix.Translation(3, 2), 40, 30, default)),
+            new CompileOptions
+            {
+                SourceWidth = 40, SourceHeight = 30, SourceFormat = WorkingFormat.Rgba8,
+                Region = new PixelRect(5, 4, 10, 8),
+            });
+        shifted.StepInfo[0].SourceRegions[0].Region.ShouldBe(new PixelRect(1, 1, 12, 10));
+    }
+
+    [Fact]
+    public void Rotate_QuarterTurn_StaysCloseToTheExactRotate90Mapping()
+    {
+        var plan = Compile(Recipe(GeometrySteps.Rotate(90f, default)), new CompileOptions
+        {
+            SourceWidth = 40, SourceHeight = 30, SourceFormat = WorkingFormat.Rgba8,
+            Region = new PixelRect(5, 4, 10, 8),
+        });
+
+        // The exact image of the rectangle under Rotate90 is (4, 15, 8, 10); the general affine path adds the
+        // bilinear support on each side plus the float error of the 90° matrix, so the region is a superset of
+        // that and still far smaller than the 40x30 source.
+        var region = plan.StepInfo[0].SourceRegions[0].Region;
+        region.X.ShouldBeLessThanOrEqualTo(4);
+        region.Y.ShouldBeLessThanOrEqualTo(15);
+        (region.X + region.Width).ShouldBeGreaterThanOrEqualTo(12);
+        (region.Y + region.Height).ShouldBeGreaterThanOrEqualTo(25);
+        region.Width.ShouldBeLessThan(20);
+        region.Height.ShouldBeLessThan(20);
     }
 
     [Fact]

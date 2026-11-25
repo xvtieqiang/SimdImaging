@@ -791,8 +791,10 @@ orientation 复位（§6.3.10）。
 - `IInputFootprint.MapSourceRegions` 取代单一 `MapSourceRect` 作为推导入口；Identity / Halo / WholeSource /
   BlockAligned / Fixed 五种。
 - 几何步带 `MapRegions`：Resize（按缩放比例 + 重采样核支持半径）、Crop（偏移）、Pad（负偏移）、
-  FlipHorizontal / FlipVertical（镜像）、Rotate90 / Rotate180（换轴 + 镜像）；Transpose / RotateFlip / Rotate /
-  Warp / Affine / Perspective / 内容派生尺寸仍保守返回整图。
+  FlipHorizontal / FlipVertical（镜像）、Rotate90 / Rotate180（换轴 + 镜像）、Transpose / RotateFlip（8 种
+  四分之一转组合，逐组合反推）、Affine 与任意角 Rotate（反变换四个角 + 核支持半径，实测保守 1–2 像素）。
+  `SampleOptions.AaMode = Elliptical` 的足迹随 Jacobian 变化，仍返回整图；Warp / Perspective / 内容派生尺寸
+  也仍保守返回整图。
 - 每个 `OperatorStep` 的端口分别推导：主输入用算子 footprint，第二端口用 `InputPort.Footprint`（Composite / Blend /
   DrawImage / ApplyGainMap / GuidedFilter 已声明 Fixed）。
 - 编译器把每步的 `CompiledStepInfo`（输出尺寸/格式、各端口源矩形、读取面积、放大比）放进

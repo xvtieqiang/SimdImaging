@@ -96,13 +96,21 @@ internal static class GeometrySteps
         new("round-corners", GeometryRule.SameSize, (view, pool) => Canvas.RoundCorners(view, radius, pool));
 
     internal static GeometryDescriptor Transpose(bool anti) =>
-        new("transpose", new SwappedSizeRule(), (view, pool) => Orientation.Transpose(view, anti, pool));
+        new("transpose", new SwappedSizeRule(), (view, pool) => Orientation.Transpose(view, anti, pool),
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) => anti
+                ? SourceRegionSet.Of(new PixelRect(sourceWidth - (destination.Y + destination.Height),
+                    sourceHeight - (destination.X + destination.Width), destination.Height,
+                    destination.Width)).Clamp(sourceWidth, sourceHeight)
+                : SourceRegionSet.Of(new PixelRect(destination.Y, destination.X, destination.Height,
+                    destination.Width)).Clamp(sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor RotateFlip(int quarterTurns, bool flipHorizontal) =>
         new("rotate-flip", new RelativeRule(
                 (width, height) => (quarterTurns & 1) == 0 ? (width, height) : (height, width),
                 "rotate/flip"),
-            (view, pool) => Orientation.RotateFlip(view, quarterTurns, flipHorizontal, pool));
+            (view, pool) => Orientation.RotateFlip(view, quarterTurns, flipHorizontal, pool),
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) =>
+                MapRotateFlip(quarterTurns, flipHorizontal, destination, sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor EntropyCrop(float threshold) =>
         new("entropy-crop", new ContentDerivedRule(),
@@ -144,13 +152,19 @@ internal static class GeometrySteps
 
     internal static GeometryDescriptor Affine(AffineMatrix forward, int width, int height, RgbaColor background) =>
         new($"affine {width}x{height}", new FixedSizeRule(width, height),
-            (view, pool) => Mapping.Transform(view, forward, width, height, background, pool));
+            (view, pool) => Mapping.Transform(view, forward, width, height, background, pool),
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) =>
+                MapAffine(forward, destination, sourceWidth, sourceHeight, support: 1));
 
     internal static GeometryDescriptor AffineWithOptions(AffineMatrix forward, int width, int height,
         Resampler resampler, SampleOptions options, RgbaColor background) =>
         new($"affine {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Mapping.TransformWithOptions(view, forward, width, height, resampler, options,
-                background, pool));
+                background, pool),
+            MapRegions: options.AaMode == SampleAaMode.Elliptical
+                ? null
+                : (destination, sourceWidth, sourceHeight, _, _) =>
+                    MapAffine(forward, destination, sourceWidth, sourceHeight, Support(resampler)));
 
     internal static GeometryDescriptor Warp(int width, int height, PixelWarp map, Resampler resampler,
         RgbaColor background) =>
@@ -235,6 +249,11 @@ internal static class GeometrySteps
             {
                 var (width, height, forward) = Image.RotationCanvas(view.Width, view.Height, degrees);
                 return Mapping.Transform(view, forward, width, height, background, pool);
+            },
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) =>
+            {
+                var (_, _, forward) = Image.RotationCanvas(sourceWidth, sourceHeight, degrees);
+                return MapAffine(forward, destination, sourceWidth, sourceHeight, support: 1);
             });
 
     internal static GeometryDescriptor RotateWithOptions(float degrees, Resampler resampler, SampleOptions options,
@@ -245,7 +264,14 @@ internal static class GeometrySteps
                 var (width, height, forward) = Image.RotationCanvas(view.Width, view.Height, degrees);
                 return Mapping.TransformWithOptions(view, forward, width, height, resampler, options, background,
                     pool);
-            });
+            },
+            MapRegions: options.AaMode == SampleAaMode.Elliptical
+                ? null
+                : (destination, sourceWidth, sourceHeight, _, _) =>
+                {
+                    var (_, _, forward) = Image.RotationCanvas(sourceWidth, sourceHeight, degrees);
+                    return MapAffine(forward, destination, sourceWidth, sourceHeight, Support(resampler));
+                });
 
     private static RelativeRule RotateRule(float degrees) =>
         new((width, height) =>
@@ -260,6 +286,68 @@ internal static class GeometrySteps
         return scale >= 1f
             ? (width, height)
             : (Math.Max(1, (int)MathF.Round(width * scale)), Math.Max(1, (int)MathF.Round(height * scale)));
+    }
+
+    /// <summary>The source rectangle a destination rectangle reads under a quarter-turn/transpose combination.</summary>
+    private static SourceRegionSet MapRotateFlip(int quarterTurns, bool flipHorizontal, PixelRect destination,
+        int sourceWidth, int sourceHeight)
+    {
+        var turns = ((quarterTurns % 4) + 4) % 4;
+        var x = destination.X;
+        var y = destination.Y;
+        var w = destination.Width;
+        var h = destination.Height;
+
+        // The kernel walks destination pixels and reads the source pixel each case names; for an axis-aligned
+        // rectangle the image of that map is again a rectangle, so the bounds are exact.
+        var region = (turns, flipHorizontal) switch
+        {
+            (0, false) => new PixelRect(x, y, w, h),
+            (0, true) => new PixelRect(sourceWidth - (x + w), y, w, h),
+            (1, false) => new PixelRect(y, sourceHeight - (x + w), h, w),
+            (1, true) => new PixelRect(y, x, h, w),
+            (2, false) => new PixelRect(sourceWidth - (x + w), sourceHeight - (y + h), w, h),
+            (2, true) => new PixelRect(x, sourceHeight - (y + h), w, h),
+            (3, false) => new PixelRect(sourceWidth - (y + h), x, h, w),
+            _ => new PixelRect(sourceWidth - (y + h), sourceHeight - (x + w), h, w),
+        };
+        return SourceRegionSet.Of(region).Clamp(sourceWidth, sourceHeight);
+    }
+
+    /// <summary>
+    /// The source rectangle a destination rectangle reads through an affine map: the inverse-mapped corners bounded
+    /// and widened by the kernel support. The result is a superset, never an under-read; a singular map falls back
+    /// to the whole source, as the executor refuses it anyway.
+    /// </summary>
+    private static SourceRegionSet MapAffine(AffineMatrix forward, PixelRect destination, int sourceWidth,
+        int sourceHeight, int support)
+    {
+        if (!forward.TryInvert(out var inverse))
+            return SourceRegionSet.Of(new PixelRect(0, 0, sourceWidth, sourceHeight));
+
+        var left = float.MaxValue;
+        var top = float.MaxValue;
+        var right = float.MinValue;
+        var bottom = float.MinValue;
+        Accumulate(inverse, destination.X, destination.Y);
+        Accumulate(inverse, destination.X + destination.Width, destination.Y);
+        Accumulate(inverse, destination.X + destination.Width, destination.Y + destination.Height);
+        Accumulate(inverse, destination.X, destination.Y + destination.Height);
+
+        var x0 = (int)Math.Clamp(MathF.Floor(left) - support, 0, sourceWidth);
+        var y0 = (int)Math.Clamp(MathF.Floor(top) - support, 0, sourceHeight);
+        var x1 = (int)Math.Clamp(MathF.Ceiling(right) + support, 0, sourceWidth);
+        var y1 = (int)Math.Clamp(MathF.Ceiling(bottom) + support, 0, sourceHeight);
+        return SourceRegionSet.Of(new PixelRect(x0, y0, Math.Max(0, x1 - x0), Math.Max(0, y1 - y0)));
+
+        void Accumulate(AffineMatrix map, float x, float y)
+        {
+            var (sx, sy) = map.Apply(x, y);
+            left = MathF.Min(left, sx);
+            top = MathF.Min(top, sy);
+            right = MathF.Max(right, sx);
+            bottom = MathF.Max(bottom, sy);
+        }
     }
 
     /// <summary>The largest source-pixel distance a resampler's kernel reaches.</summary>
