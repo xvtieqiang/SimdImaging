@@ -1262,8 +1262,8 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 
 ## 几何执行（M18）
 
-**P3 已无计划外算子**：`IccTransform` 与 `ChromaResample` 作为 Global 步骤进入计划；反卷积的 halo 修正为
-`2 × PSF 半径 × iterations`；`Glow`、`DrawImage`、`ApplyGainMap`、`Watermark` 也都已进入计划或格式段。
+**P3 已完成**：除 `AutoOrient`（需要方向元数据，仍是 `Geometry` barrier）外，所有窗口算子都在计划、格式段或 Composite
+步骤里；反卷积的 halo 修正为 `2 × PSF 半径 × iterations`。
 - **多输入（Frame 版已落地，通用模型仍缺）**：`PlanOps.Composite` / `PlanOps.Blend` 以 `OpCategory.Composite`
   和两个端口进入计划，Frame 由内核捕获的 overlay 视图执行；`ImagePipeline.Composite/Blend` 已从 barrier 迁成步骤，
   overlay 必须活到 `ToImage`（xmldoc 写明），格式在调用时校验。Stream / Region 仍以 `CompositeStep` 拒绝。

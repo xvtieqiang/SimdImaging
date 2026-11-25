@@ -763,8 +763,10 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
   16 字节声明，Stream / Region 以 `GlobalStep` 拒绝。
 - `Perspective`：补成 GeometryStep，之前是唯一还在 `Reshape` 的几何重载。
 
-`IccTransform` 与 `ChromaResample` 随后也作为 Global 步骤进入计划：前者整图解析一次 profile，scratch 按 8 MiB + 一行
-声明；后者自行内部分带、需要下一行色度，所以整图执行、不交给 band 适配器。至此没有算子还停在 `Reshape` barrier 上。
+`IccTransform` 与 `ChromaResample` 作为 Global 步骤进入计划：前者整图解析一次 profile，scratch 按 8 MiB + 一行声明；
+后者自行内部分带、需要下一行色度，所以整图执行、不交给 band 适配器。`Bilateral`（含 `sigmaSpace` 重载）、
+`LocalLaplacian`（完整参数）、`EqualizeHistogram`、`ReplaceBackground` 与带 guide 的 `GuidedFilter`（Composite 步骤）也
+已迁移。唯一剩下的 `Geometry` barrier 是 `AutoOrient`：它需要 `Image` 的方向元数据，不是 view 的纯函数。
 
 ### 6.3.8 预算强制：编译执行器自己分配的那几帧
 
