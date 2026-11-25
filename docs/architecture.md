@@ -665,6 +665,29 @@ P1 只做选路，不做二维 Tile 执行。请求 Tile 时编译器返回 `Bac
 拒绝发生在选路阶段，目标一个字节都不会被写。将来打开 Tile 的条件写在 `known-gaps.md`：先有 `IRegionSink` 契约、
 再有声明 `Tiles` 的内核。
 
+### 6.3.3 代表算子闭环（P2）
+
+`CompiledBackendsTests` 用「同一 recipe、编译一次、各后端各跑一遍」钉住代表算子：
+
+| 步骤 | Frame | Stream | Region | 验证点 |
+|---|---|---|---|---|
+| Invert + Contrast | ✓ | ✓ | ✓ | 点运算；band 3/17/128；三种格式 |
+| GaussianBlur + Invert | ✓ | ✓ | ✓ | halo 边界；band 1/3/7 |
+| Crop → Blur → Resize → Invert | ✓ | ✓ | 拒绝（几何） | 两个几何边界；40×30 出 96×72 |
+| Pad → Flip → Contrast | ✓ | ✓ | 拒绝（几何） | Pad 的行包装 |
+| Equalize | ✓ | 拒绝 `GlobalStep` | 拒绝 `GlobalStep` | 全图统计 |
+| Pixelate | ✓ | 拒绝 `GlobalStep` | 拒绝 `GlobalStep` | 块对齐 footprint |
+| Warp | ✓ | 拒绝 `GeometricStep` | 拒绝 `GeometricStep` | 几何反向映射 |
+| Convolve(Mirror) | ✓ | 拒绝 `StepNeedsWholeSource` | 拒绝 | band 1/7/128 逐字节相同 |
+| Noise(seed) | ✓ | 拒绝 `GlobalStep` | 拒绝 | 同种子两次相同 |
+| SeamCarve | ✓ | 拒绝 `GeometricStep` | 拒绝 | 目标尺寸 40×34 |
+| Composite | 无执行体 | 拒绝 `CompositeStep` | 拒绝 `CompositeStep` | 多输入模型未建（见 `known-gaps.md`） |
+| Observer | ✓ | 拒绝（观察需求） | 拒绝 | 融合关闭、每段逐步 |
+
+流式侧走的是 `CompiledPlanExecutor.CreateStreamChain`，与 `ImageTranscode.BuildChain` 实际构建的链是同一段代码；
+`Region` 列指 `RegionExecutor` 对纯算子链，带几何的 recipe 由编译器拒绝。Workspace 对每条 Frame 链断言
+`BoundedBytes >= CountingPool.PeakBytes`。
+
 ### 6.4 超限行为
 
 - `MaxWorkingBytes` 不够 → 先尝试降档（Rgba32F → Rgba16，若算子是精确整数语义）→ 仍不够则抛，**不静默改精度**。
