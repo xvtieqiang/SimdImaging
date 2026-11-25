@@ -1275,9 +1275,10 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   的完整计量。
 - **区域推导（P1 部分完成）**：已有 `SourceRegionSet`、反向逐段推导、Resize/Crop/Pad/FlipVertical/FlipHorizontal/
   Rotate90/Rotate180/Transpose/RotateFlip（8 种组合）/Affine/任意角 Rotate 反向映射、每个输入端口的 footprint、
-  区域成本与 `RegionCost` 拒绝、公开的 `Image.Explain`（`PlanStepExplanation`：尺寸、格式、每端口源矩形、放大比）。
+  区域成本与 `RegionCost` 拒绝、公开的 `Image.Explain`（`PlanExplanation`：后端与拒绝原因、编译段与融合、工作空间
+  逐项预测、每步的区域/放大比与 `Partitioning`/`PassModel`/`StateScope`/`ExecutionOrder`/`Determinism`、文字 notes）。
   仍缺：Warp/Perspective/内容派生尺寸的区域反推（当前整图）、`AaMode.Elliptical`（足迹随 Jacobian 变化，当前整图）、
-  真实的多矩形集合、成本驱动的后端比较/切分；
+  真实的多矩形集合、成本驱动的后端比较/切分；文件侧选路（`ImageTranscode` 预检）尚未走同一公开解释投影；
   `Image.Apply/ApplyWithOptions` 已统一到 Compiler，`ProcessTo/ProcessRegion/ResizeRegion` 仍走旧
   `ProcessingPlan` 路径。
 - **Tile 后端（P5 第一刀已落地）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与

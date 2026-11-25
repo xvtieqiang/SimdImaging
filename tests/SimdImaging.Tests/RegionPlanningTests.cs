@@ -278,10 +278,13 @@ public sealed class RegionPlanningTests
 
         var info = image.Explain(plan, new PixelRect(10, 10, 8, 8));
 
-        info.Count.ShouldBe(1);
-        info[0].Name.ShouldBe("GaussianBlur");
-        info[0].SourceRegions[0].Region.ShouldBe(new PixelRect(7, 7, 14, 14));
-        info[0].Amplification.ShouldBe(196.0 / 64.0, 1e-9);
+        info.Steps.Count.ShouldBe(1);
+        info.Steps[0].Name.ShouldBe("GaussianBlur");
+        info.Steps[0].SourceRegions[0].Region.ShouldBe(new PixelRect(7, 7, 14, 14));
+        info.Steps[0].Amplification.ShouldBe(196.0 / 64.0, 1e-9);
+        info.Output.RegionSourceArea.ShouldBe(196);
+        info.Output.RegionOutputArea.ShouldBe(64);
+        info.Output.RegionAmplification.ShouldBe(196.0 / 64.0, 1e-9);
     }
 
     private static PipelineRecipe Recipe(params object[] steps)

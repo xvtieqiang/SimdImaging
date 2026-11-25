@@ -80,10 +80,10 @@ public sealed partial class Image
     }
 
     /// <summary>
-    /// The compiler's per-step explanation for this image and plan: output size/format, the source rectangles each
-    /// input port must read, and the read amplification. It compiles without executing.
+    /// The compiler's account of this image and plan: backend, refusals, sections, per-step requirements and source
+    /// regions, and the workspace prediction. It compiles without executing.
     /// </summary>
-    public IReadOnlyList<PlanStepExplanation> Explain(ProcessingPlan plan, PixelRect? region = null)
+    public PlanExplanation Explain(ProcessingPlan plan, PixelRect? region = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ThrowIfMultiFrame();
@@ -100,15 +100,7 @@ public sealed partial class Image
             Execute = new ExecuteOptions(),
         });
 
-        return compiled.StepInfo.Select(info => new PlanStepExplanation(
-            info.Name,
-            info.IsGeometry,
-            info.Width,
-            info.Height,
-            info.Format,
-            info.SourceRegions.Select(port => new PlanSourceRegion(port.Port, port.Region)).ToArray(),
-            info.SourceArea,
-            info.OutputArea)).ToArray();
+        return PlanExplanation.From(compiled);
     }
 
     private PipelineRecipe BuildRecipe(ProcessingPlan plan)

@@ -226,7 +226,8 @@ internal static class PipelineCompiler
                     }
 
                     infos.Add(new CompiledStepInfo(j, step.Name, false, state.OutputWidth, state.OutputHeight,
-                        state.OutputFormat, ports, set.Area, outputArea));
+                        state.OutputFormat, ports, set.Area, outputArea,
+                        StepRequirements.Of(step.Definition.Contract)));
                     region = set;
                 }
             }
@@ -243,7 +244,8 @@ internal static class PipelineCompiler
                 foreach (var rect in set.Regions)
                     ports.Add(new PortRegion(0, rect));
                 infos.Add(new CompiledStepInfo(state.RecipeIndex, geometry.Name, true, state.OutputWidth,
-                    state.OutputHeight, state.OutputFormat, ports, set.Area, outputArea));
+                    state.OutputHeight, state.OutputFormat, ports, set.Area, outputArea,
+                    StepRequirements.Boundary(geometry.CanWrap ? Partitioning.RowBands : Partitioning.WholeImage)));
                 region = set;
             }
             else
@@ -252,7 +254,8 @@ internal static class PipelineCompiler
                 foreach (var rect in region.Regions)
                     ports.Add(new PortRegion(0, rect));
                 infos.Add(new CompiledStepInfo(state.RecipeIndex, "format change", false, state.OutputWidth,
-                    state.OutputHeight, state.OutputFormat, ports, region.Area, region.Area));
+                    state.OutputHeight, state.OutputFormat, ports, region.Area, region.Area,
+                    StepRequirements.Boundary(Partitioning.WholeImage)));
             }
         }
 

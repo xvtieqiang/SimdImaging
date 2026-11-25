@@ -802,10 +802,9 @@ orientation 复位（§6.3.10）。
 - `RegionCost` 汇总整条链的源读取面积 / 输出面积；`CompileOptions.MaxRegionReadAmplification` 超限时把 Region
   后端拒绝为 `RegionRefusal.RegionCost`。
 
-仍保守的地方：Warp/Affine/Rotate 按整图；区域集合目前实际只产生单矩形（模型支持多矩形）；成本只用于拒绝 Region，
+仍保守的地方：Warp / Perspective / 内容派生尺寸按整图；区域集合目前实际只产生单矩形（模型支持多矩形）；成本只用于拒绝 Region，
 没有拿它和 Frame/Stream/Tile 做成本比较。解释有两条出口：内部 `Explanation` 字符串，以及公开的
-`Image.Explain(plan, region)`，后者把同一份 `CompiledStepInfo` 投影成 `PlanStepExplanation`（尺寸、格式、每端口源矩形、
-读取面积与放大比）。
+`Image.Explain(plan, region)`，后者把同一份 `CompiledExecutionPlan` 投影成结构化的 `PlanExplanation`（§6.3.11）。
 
 ### 6.3.10 编译入口、AutoOrient 与 WorkspaceManager
 
@@ -820,6 +819,28 @@ orientation 复位（§6.3.10）。
 
 仍未统一：`Image.ProcessTo` / `ProcessRegion` / `ResizeRegion` 仍走 `ProcessingPlan`/`RegionExecutor`；WorkspaceManager
 没有 spool/物化缓存项，也没有把 M2–M4 的出口条件补验。
+
+### 6.3.11 计划解释（Plan Explanation）
+
+`Image.Explain(plan, region)` 返回 `PlanExplanation`——编译但不执行、不持有缓冲，是设计文档 §5.4 的结构化形式：
+
+- `Backend`：`PlanBackend.Frame / Stream / Region / Tile / TileRefused`，与编译器内部选路一一对应。
+- `Refusals`：三种后端的首个拒绝原因（`StreamRefusal` / `RegionRefusal` / `PlanTileRefusal`）；没有尝试的后端由
+  `Notes` 说明原因（sink 不接受行、source 无随机区域能力等）。
+- `Output`：最终尺寸是否已知、区域成本（读取面积、输出面积、区域数、放大比）。
+- `Workspace`：`PredictedBytes`、`IsLowerBound`（有算子未声明 scratch 时为 true）、逐项 `PlanWorkspaceTerm`，以及引擎
+  看不到的 `PlanUnmanagedTerm`（权重表、FloatScratch、编解码器缓冲等）。
+- `Sections`：编译段（算子段 / 几何段 / 格式段）、映射回 recipe 的起始索引、算子步数与是否融合。
+- `Steps`：每步尺寸/格式、每端口源矩形、读取面积/放大比，以及契约声明的 `PlanStepRequirements`
+  （`Partitioning` / `PassModel` / `StateScope` / `ExecutionOrder` / `Determinism`）。
+- `Notes`：编译器写入的逐行文字解释（流/区域不可用、tile 拒绝、逐段推导等）。
+
+`Partitioning` / `PassModel` / `StateScope` / `ExecutionOrder` / `Determinism` 因此从 `Processing.Contracts` 的内部词表
+变为公开类型：解释与契约共用一套术语，而不是另造一份字符串。几何步的 requirements 取 `RowBands`（可包装的
+resize/crop/pad/flip）或 `WholeImage`（必须物化的 reshape），格式段固定 `WholeImage` + `Single`。
+
+边界：`Image.Explain` 的源是内存图像、目标是调用方缓冲，所以 `Backend` 通常是 `Frame`；它解释的是步骤、区域、
+requirements 与工作空间。文件侧的选路解释仍由 `ImageTranscode` 的预检在内部完成，尚未走同一公开投影。
 
 ### 6.4 超限行为
 

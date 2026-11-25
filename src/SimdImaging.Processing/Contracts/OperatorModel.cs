@@ -3,7 +3,7 @@ using SimdImaging.Abstractions;
 namespace SimdImaging.Processing.Contracts;
 
 /// <summary>The smallest unit the executor may divide the work into.</summary>
-internal enum Partitioning : byte
+public enum Partitioning : byte
 {
     /// <summary>The whole image is one unit; banding would change the answer or is not implemented.</summary>
     WholeImage = 0,
@@ -16,7 +16,7 @@ internal enum Partitioning : byte
 }
 
 /// <summary>How far a step's state reaches.</summary>
-internal enum StateScope : byte
+public enum StateScope : byte
 {
     /// <summary>No state beyond the current pixel and its window.</summary>
     None = 0,
@@ -32,7 +32,7 @@ internal enum StateScope : byte
 }
 
 /// <summary>Whether output rows may be produced out of order.</summary>
-internal enum ExecutionOrder : byte
+public enum ExecutionOrder : byte
 {
     Any = 0,
 
@@ -51,7 +51,7 @@ internal enum ThreadSafety : byte
 }
 
 /// <summary>What the step promises about identical inputs.</summary>
-internal enum Determinism : byte
+public enum Determinism : byte
 {
     /// <summary>An output pixel is a function of its coordinates and the input; order does not matter.</summary>
     CoordinateDeterministic = 0,
@@ -64,7 +64,7 @@ internal enum Determinism : byte
 }
 
 /// <summary>How many passes over the input a step needs.</summary>
-internal enum PassModel : byte
+public enum PassModel : byte
 {
     /// <summary>One read and one write.</summary>
     Single = 0,

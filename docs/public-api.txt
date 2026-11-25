@@ -269,7 +269,7 @@
   SimdImaging.Image.DrawPath(SimdImaging.Processing.PixelPath path, SimdImaging.Abstractions.RgbaColor color, SimdImaging.Processing.StrokeOptions options) -> System.Void
   SimdImaging.Image.DrawRect(Sdcb.SimdCodecs.Abstractions.PixelRect rect, SimdImaging.Abstractions.RgbaColor color, System.Int32 thickness) -> System.Void
   SimdImaging.Image.Encode(SimdImaging.Image image, Sdcb.SimdCodecs.Abstractions.ImageFormat format, SimdImaging.Abstractions.SaveOptions? options, System.Threading.CancellationToken cancellationToken) -> System.Byte[]
-  SimdImaging.Image.Explain(SimdImaging.Processing.ProcessingPlan plan, Sdcb.SimdCodecs.Abstractions.PixelRect? region) -> System.Collections.Generic.IReadOnlyList<SimdImaging.PlanStepExplanation>
+  SimdImaging.Image.Explain(SimdImaging.Processing.ProcessingPlan plan, Sdcb.SimdCodecs.Abstractions.PixelRect? region) -> SimdImaging.PlanExplanation
   SimdImaging.Image.Fill(SimdImaging.Abstractions.RgbaColor color) -> System.Void
   SimdImaging.Image.FillEllipse(Sdcb.SimdCodecs.Abstractions.PixelRect bounds, SimdImaging.Abstractions.RgbaColor color) -> System.Void
   SimdImaging.Image.FillPath(SimdImaging.Processing.PixelPath path, SimdImaging.Abstractions.RgbaColor color, SimdImaging.Processing.PathFillRule rule) -> System.Void
@@ -458,6 +458,67 @@
   SimdImaging.NormalizedWarp.BeginInvoke(System.Single u, System.Single v, System.Single& sourceU, System.Single& sourceV, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
   SimdImaging.NormalizedWarp.EndInvoke(System.Single& sourceU, System.Single& sourceV, System.IAsyncResult result) -> System.Void
   SimdImaging.NormalizedWarp.Invoke(System.Single u, System.Single v, System.Single& sourceU, System.Single& sourceV) -> System.Void
+  SimdImaging.PlanBackend.Frame = 0
+  SimdImaging.PlanBackend.Region = 2
+  SimdImaging.PlanBackend.Stream = 1
+  SimdImaging.PlanBackend.Tile = 3
+  SimdImaging.PlanBackend.TileRefused = 4
+  SimdImaging.PlanExplanation.#ctor(SimdImaging.PlanBackend Backend, SimdImaging.PlanRefusals Refusals, SimdImaging.PlanOutputGeometry Output, SimdImaging.PlanWorkspaceReport Workspace, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSectionExplanation> Sections, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanStepExplanation> Steps, System.Collections.Generic.IReadOnlyList<System.String> Notes)
+  SimdImaging.PlanExplanation.Backend : SimdImaging.PlanBackend { get; set; }
+  SimdImaging.PlanExplanation.Deconstruct(SimdImaging.PlanBackend& Backend, SimdImaging.PlanRefusals& Refusals, SimdImaging.PlanOutputGeometry& Output, SimdImaging.PlanWorkspaceReport& Workspace, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSectionExplanation>& Sections, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanStepExplanation>& Steps, System.Collections.Generic.IReadOnlyList<System.String>& Notes) -> System.Void
+  SimdImaging.PlanExplanation.Equals(SimdImaging.PlanExplanation? other) -> System.Boolean
+  SimdImaging.PlanExplanation.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.PlanExplanation.GetHashCode() -> System.Int32
+  SimdImaging.PlanExplanation.Notes : System.Collections.Generic.IReadOnlyList<System.String> { get; set; }
+  SimdImaging.PlanExplanation.Output : SimdImaging.PlanOutputGeometry { get; set; }
+  SimdImaging.PlanExplanation.Refusals : SimdImaging.PlanRefusals { get; set; }
+  SimdImaging.PlanExplanation.Sections : System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSectionExplanation> { get; set; }
+  SimdImaging.PlanExplanation.Steps : System.Collections.Generic.IReadOnlyList<SimdImaging.PlanStepExplanation> { get; set; }
+  SimdImaging.PlanExplanation.ToString() -> System.String
+  SimdImaging.PlanExplanation.Workspace : SimdImaging.PlanWorkspaceReport { get; set; }
+  SimdImaging.PlanExplanation.op_Equality(SimdImaging.PlanExplanation? left, SimdImaging.PlanExplanation? right) -> System.Boolean
+  SimdImaging.PlanExplanation.op_Inequality(SimdImaging.PlanExplanation? left, SimdImaging.PlanExplanation? right) -> System.Boolean
+  SimdImaging.PlanOutputGeometry.#ctor(System.Boolean SizeKnown, System.Int32 Width, System.Int32 Height, System.Int64 RegionSourceArea, System.Int64 RegionOutputArea, System.Int32 RegionCount)
+  SimdImaging.PlanOutputGeometry.Deconstruct(System.Boolean& SizeKnown, System.Int32& Width, System.Int32& Height, System.Int64& RegionSourceArea, System.Int64& RegionOutputArea, System.Int32& RegionCount) -> System.Void
+  SimdImaging.PlanOutputGeometry.Equals(SimdImaging.PlanOutputGeometry? other) -> System.Boolean
+  SimdImaging.PlanOutputGeometry.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.PlanOutputGeometry.GetHashCode() -> System.Int32
+  SimdImaging.PlanOutputGeometry.Height : System.Int32 { get; set; }
+  SimdImaging.PlanOutputGeometry.RegionAmplification : System.Double { get; }
+  SimdImaging.PlanOutputGeometry.RegionCount : System.Int32 { get; set; }
+  SimdImaging.PlanOutputGeometry.RegionOutputArea : System.Int64 { get; set; }
+  SimdImaging.PlanOutputGeometry.RegionSourceArea : System.Int64 { get; set; }
+  SimdImaging.PlanOutputGeometry.SizeKnown : System.Boolean { get; set; }
+  SimdImaging.PlanOutputGeometry.ToString() -> System.String
+  SimdImaging.PlanOutputGeometry.Width : System.Int32 { get; set; }
+  SimdImaging.PlanOutputGeometry.op_Equality(SimdImaging.PlanOutputGeometry? left, SimdImaging.PlanOutputGeometry? right) -> System.Boolean
+  SimdImaging.PlanOutputGeometry.op_Inequality(SimdImaging.PlanOutputGeometry? left, SimdImaging.PlanOutputGeometry? right) -> System.Boolean
+  SimdImaging.PlanRefusals.#ctor(SimdImaging.Processing.StreamRefusal Stream, SimdImaging.Processing.RegionRefusal Region, SimdImaging.PlanTileRefusal Tile)
+  SimdImaging.PlanRefusals.Deconstruct(SimdImaging.Processing.StreamRefusal& Stream, SimdImaging.Processing.RegionRefusal& Region, SimdImaging.PlanTileRefusal& Tile) -> System.Void
+  SimdImaging.PlanRefusals.Equals(SimdImaging.PlanRefusals? other) -> System.Boolean
+  SimdImaging.PlanRefusals.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.PlanRefusals.GetHashCode() -> System.Int32
+  SimdImaging.PlanRefusals.Region : SimdImaging.Processing.RegionRefusal { get; set; }
+  SimdImaging.PlanRefusals.Stream : SimdImaging.Processing.StreamRefusal { get; set; }
+  SimdImaging.PlanRefusals.Tile : SimdImaging.PlanTileRefusal { get; set; }
+  SimdImaging.PlanRefusals.ToString() -> System.String
+  SimdImaging.PlanRefusals.op_Equality(SimdImaging.PlanRefusals? left, SimdImaging.PlanRefusals? right) -> System.Boolean
+  SimdImaging.PlanRefusals.op_Inequality(SimdImaging.PlanRefusals? left, SimdImaging.PlanRefusals? right) -> System.Boolean
+  SimdImaging.PlanSectionExplanation.#ctor(SimdImaging.PlanSectionKind Kind, System.Int32 RecipeIndex, System.Int32 StepCount, System.Boolean Fused)
+  SimdImaging.PlanSectionExplanation.Deconstruct(SimdImaging.PlanSectionKind& Kind, System.Int32& RecipeIndex, System.Int32& StepCount, System.Boolean& Fused) -> System.Void
+  SimdImaging.PlanSectionExplanation.Equals(SimdImaging.PlanSectionExplanation? other) -> System.Boolean
+  SimdImaging.PlanSectionExplanation.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.PlanSectionExplanation.Fused : System.Boolean { get; set; }
+  SimdImaging.PlanSectionExplanation.GetHashCode() -> System.Int32
+  SimdImaging.PlanSectionExplanation.Kind : SimdImaging.PlanSectionKind { get; set; }
+  SimdImaging.PlanSectionExplanation.RecipeIndex : System.Int32 { get; set; }
+  SimdImaging.PlanSectionExplanation.StepCount : System.Int32 { get; set; }
+  SimdImaging.PlanSectionExplanation.ToString() -> System.String
+  SimdImaging.PlanSectionExplanation.op_Equality(SimdImaging.PlanSectionExplanation? left, SimdImaging.PlanSectionExplanation? right) -> System.Boolean
+  SimdImaging.PlanSectionExplanation.op_Inequality(SimdImaging.PlanSectionExplanation? left, SimdImaging.PlanSectionExplanation? right) -> System.Boolean
+  SimdImaging.PlanSectionKind.Format = 2
+  SimdImaging.PlanSectionKind.Geometry = 1
+  SimdImaging.PlanSectionKind.OperatorRun = 0
   SimdImaging.PlanSourceRegion.#ctor(System.Int32 Port, Sdcb.SimdCodecs.Abstractions.PixelRect Region)
   SimdImaging.PlanSourceRegion.Deconstruct(System.Int32& Port, Sdcb.SimdCodecs.Abstractions.PixelRect& Region) -> System.Void
   SimdImaging.PlanSourceRegion.Equals(SimdImaging.PlanSourceRegion other) -> System.Boolean
@@ -468,9 +529,9 @@
   SimdImaging.PlanSourceRegion.ToString() -> System.String
   SimdImaging.PlanSourceRegion.op_Equality(SimdImaging.PlanSourceRegion left, SimdImaging.PlanSourceRegion right) -> System.Boolean
   SimdImaging.PlanSourceRegion.op_Inequality(SimdImaging.PlanSourceRegion left, SimdImaging.PlanSourceRegion right) -> System.Boolean
-  SimdImaging.PlanStepExplanation.#ctor(System.String Name, System.Boolean IsGeometry, System.Int32 Width, System.Int32 Height, SimdImaging.Abstractions.WorkingFormat Format, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSourceRegion> SourceRegions, System.Int64 SourceArea, System.Int64 OutputArea)
+  SimdImaging.PlanStepExplanation.#ctor(System.String Name, System.Boolean IsGeometry, System.Int32 Width, System.Int32 Height, SimdImaging.Abstractions.WorkingFormat Format, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSourceRegion> SourceRegions, System.Int64 SourceArea, System.Int64 OutputArea, SimdImaging.PlanStepRequirements Requirements)
   SimdImaging.PlanStepExplanation.Amplification : System.Double { get; }
-  SimdImaging.PlanStepExplanation.Deconstruct(System.String& Name, System.Boolean& IsGeometry, System.Int32& Width, System.Int32& Height, SimdImaging.Abstractions.WorkingFormat& Format, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSourceRegion>& SourceRegions, System.Int64& SourceArea, System.Int64& OutputArea) -> System.Void
+  SimdImaging.PlanStepExplanation.Deconstruct(System.String& Name, System.Boolean& IsGeometry, System.Int32& Width, System.Int32& Height, SimdImaging.Abstractions.WorkingFormat& Format, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSourceRegion>& SourceRegions, System.Int64& SourceArea, System.Int64& OutputArea, SimdImaging.PlanStepRequirements& Requirements) -> System.Void
   SimdImaging.PlanStepExplanation.Equals(SimdImaging.PlanStepExplanation? other) -> System.Boolean
   SimdImaging.PlanStepExplanation.Equals(System.Object? obj) -> System.Boolean
   SimdImaging.PlanStepExplanation.Format : SimdImaging.Abstractions.WorkingFormat { get; set; }
@@ -479,12 +540,77 @@
   SimdImaging.PlanStepExplanation.IsGeometry : System.Boolean { get; set; }
   SimdImaging.PlanStepExplanation.Name : System.String { get; set; }
   SimdImaging.PlanStepExplanation.OutputArea : System.Int64 { get; set; }
+  SimdImaging.PlanStepExplanation.Requirements : SimdImaging.PlanStepRequirements { get; set; }
   SimdImaging.PlanStepExplanation.SourceArea : System.Int64 { get; set; }
   SimdImaging.PlanStepExplanation.SourceRegions : System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSourceRegion> { get; set; }
   SimdImaging.PlanStepExplanation.ToString() -> System.String
   SimdImaging.PlanStepExplanation.Width : System.Int32 { get; set; }
   SimdImaging.PlanStepExplanation.op_Equality(SimdImaging.PlanStepExplanation? left, SimdImaging.PlanStepExplanation? right) -> System.Boolean
   SimdImaging.PlanStepExplanation.op_Inequality(SimdImaging.PlanStepExplanation? left, SimdImaging.PlanStepExplanation? right) -> System.Boolean
+  SimdImaging.PlanStepRequirements.#ctor(SimdImaging.Processing.Contracts.Partitioning Partitioning, SimdImaging.Processing.Contracts.PassModel Pass, SimdImaging.Processing.Contracts.StateScope State, SimdImaging.Processing.Contracts.ExecutionOrder Order, SimdImaging.Processing.Contracts.Determinism Determinism)
+  SimdImaging.PlanStepRequirements.Deconstruct(SimdImaging.Processing.Contracts.Partitioning& Partitioning, SimdImaging.Processing.Contracts.PassModel& Pass, SimdImaging.Processing.Contracts.StateScope& State, SimdImaging.Processing.Contracts.ExecutionOrder& Order, SimdImaging.Processing.Contracts.Determinism& Determinism) -> System.Void
+  SimdImaging.PlanStepRequirements.Determinism : SimdImaging.Processing.Contracts.Determinism { get; set; }
+  SimdImaging.PlanStepRequirements.Equals(SimdImaging.PlanStepRequirements? other) -> System.Boolean
+  SimdImaging.PlanStepRequirements.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.PlanStepRequirements.GetHashCode() -> System.Int32
+  SimdImaging.PlanStepRequirements.Order : SimdImaging.Processing.Contracts.ExecutionOrder { get; set; }
+  SimdImaging.PlanStepRequirements.Partitioning : SimdImaging.Processing.Contracts.Partitioning { get; set; }
+  SimdImaging.PlanStepRequirements.Pass : SimdImaging.Processing.Contracts.PassModel { get; set; }
+  SimdImaging.PlanStepRequirements.State : SimdImaging.Processing.Contracts.StateScope { get; set; }
+  SimdImaging.PlanStepRequirements.ToString() -> System.String
+  SimdImaging.PlanStepRequirements.op_Equality(SimdImaging.PlanStepRequirements? left, SimdImaging.PlanStepRequirements? right) -> System.Boolean
+  SimdImaging.PlanStepRequirements.op_Inequality(SimdImaging.PlanStepRequirements? left, SimdImaging.PlanStepRequirements? right) -> System.Boolean
+  SimdImaging.PlanTileRefusal.BlockAlignedOperator = 4
+  SimdImaging.PlanTileRefusal.CompositeStep = 3
+  SimdImaging.PlanTileRefusal.FormatChange = 6
+  SimdImaging.PlanTileRefusal.GlobalStep = 2
+  SimdImaging.PlanTileRefusal.NoRegionSink = 1
+  SimdImaging.PlanTileRefusal.None = 0
+  SimdImaging.PlanTileRefusal.NotTileable = 5
+  SimdImaging.PlanTileRefusal.WholeSourceStep = 7
+  SimdImaging.PlanUnmanagedTerm.#ctor(System.String Name, System.String Note)
+  SimdImaging.PlanUnmanagedTerm.Deconstruct(System.String& Name, System.String& Note) -> System.Void
+  SimdImaging.PlanUnmanagedTerm.Equals(SimdImaging.PlanUnmanagedTerm? other) -> System.Boolean
+  SimdImaging.PlanUnmanagedTerm.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.PlanUnmanagedTerm.GetHashCode() -> System.Int32
+  SimdImaging.PlanUnmanagedTerm.Name : System.String { get; set; }
+  SimdImaging.PlanUnmanagedTerm.Note : System.String { get; set; }
+  SimdImaging.PlanUnmanagedTerm.ToString() -> System.String
+  SimdImaging.PlanUnmanagedTerm.op_Equality(SimdImaging.PlanUnmanagedTerm? left, SimdImaging.PlanUnmanagedTerm? right) -> System.Boolean
+  SimdImaging.PlanUnmanagedTerm.op_Inequality(SimdImaging.PlanUnmanagedTerm? left, SimdImaging.PlanUnmanagedTerm? right) -> System.Boolean
+  SimdImaging.PlanWorkspaceKind.Destination = 1
+  SimdImaging.PlanWorkspaceKind.FormatStep = 9
+  SimdImaging.PlanWorkspaceKind.PerWorkerScratch = 3
+  SimdImaging.PlanWorkspaceKind.ResizeBatch = 7
+  SimdImaging.PlanWorkspaceKind.ResizeRing = 5
+  SimdImaging.PlanWorkspaceKind.ResizeStaging = 6
+  SimdImaging.PlanWorkspaceKind.ResizeWorkerRows = 8
+  SimdImaging.PlanWorkspaceKind.Source = 0
+  SimdImaging.PlanWorkspaceKind.WholeImageScratch = 4
+  SimdImaging.PlanWorkspaceKind.Window = 2
+  SimdImaging.PlanWorkspaceReport.#ctor(System.Int64 PredictedBytes, System.Boolean IsLowerBound, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanWorkspaceTerm> Terms, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanUnmanagedTerm> Unmanaged)
+  SimdImaging.PlanWorkspaceReport.Deconstruct(System.Int64& PredictedBytes, System.Boolean& IsLowerBound, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanWorkspaceTerm>& Terms, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanUnmanagedTerm>& Unmanaged) -> System.Void
+  SimdImaging.PlanWorkspaceReport.Equals(SimdImaging.PlanWorkspaceReport? other) -> System.Boolean
+  SimdImaging.PlanWorkspaceReport.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.PlanWorkspaceReport.GetHashCode() -> System.Int32
+  SimdImaging.PlanWorkspaceReport.IsLowerBound : System.Boolean { get; set; }
+  SimdImaging.PlanWorkspaceReport.PredictedBytes : System.Int64 { get; set; }
+  SimdImaging.PlanWorkspaceReport.Terms : System.Collections.Generic.IReadOnlyList<SimdImaging.PlanWorkspaceTerm> { get; set; }
+  SimdImaging.PlanWorkspaceReport.ToString() -> System.String
+  SimdImaging.PlanWorkspaceReport.Unmanaged : System.Collections.Generic.IReadOnlyList<SimdImaging.PlanUnmanagedTerm> { get; set; }
+  SimdImaging.PlanWorkspaceReport.op_Equality(SimdImaging.PlanWorkspaceReport? left, SimdImaging.PlanWorkspaceReport? right) -> System.Boolean
+  SimdImaging.PlanWorkspaceReport.op_Inequality(SimdImaging.PlanWorkspaceReport? left, SimdImaging.PlanWorkspaceReport? right) -> System.Boolean
+  SimdImaging.PlanWorkspaceTerm.#ctor(SimdImaging.PlanWorkspaceKind Kind, System.Int64 Bytes, System.String Note)
+  SimdImaging.PlanWorkspaceTerm.Bytes : System.Int64 { get; set; }
+  SimdImaging.PlanWorkspaceTerm.Deconstruct(SimdImaging.PlanWorkspaceKind& Kind, System.Int64& Bytes, System.String& Note) -> System.Void
+  SimdImaging.PlanWorkspaceTerm.Equals(SimdImaging.PlanWorkspaceTerm? other) -> System.Boolean
+  SimdImaging.PlanWorkspaceTerm.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.PlanWorkspaceTerm.GetHashCode() -> System.Int32
+  SimdImaging.PlanWorkspaceTerm.Kind : SimdImaging.PlanWorkspaceKind { get; set; }
+  SimdImaging.PlanWorkspaceTerm.Note : System.String { get; set; }
+  SimdImaging.PlanWorkspaceTerm.ToString() -> System.String
+  SimdImaging.PlanWorkspaceTerm.op_Equality(SimdImaging.PlanWorkspaceTerm? left, SimdImaging.PlanWorkspaceTerm? right) -> System.Boolean
+  SimdImaging.PlanWorkspaceTerm.op_Inequality(SimdImaging.PlanWorkspaceTerm? left, SimdImaging.PlanWorkspaceTerm? right) -> System.Boolean
   SimdImaging.ProcessMode.Materialized = 1
   SimdImaging.ProcessMode.Streamed = 0
   SimdImaging.ProcessOptions.#ctor()
@@ -652,6 +778,23 @@
   SimdImaging.Processing.ColorVisionDeficiency.Deuteranopia = 1
   SimdImaging.Processing.ColorVisionDeficiency.Protanopia = 0
   SimdImaging.Processing.ColorVisionDeficiency.Tritanopia = 2
+  SimdImaging.Processing.Contracts.Determinism.CoordinateDeterministic = 0
+  SimdImaging.Processing.Contracts.Determinism.OrderDependent = 2
+  SimdImaging.Processing.Contracts.Determinism.SeededSequence = 1
+  SimdImaging.Processing.Contracts.ExecutionOrder.Any = 0
+  SimdImaging.Processing.Contracts.ExecutionOrder.SourceOrder = 1
+  SimdImaging.Processing.Contracts.Partitioning.RowBands = 1
+  SimdImaging.Processing.Contracts.Partitioning.Tiles = 2
+  SimdImaging.Processing.Contracts.Partitioning.WholeImage = 0
+  SimdImaging.Processing.Contracts.PassModel.GatherThenApply = 2
+  SimdImaging.Processing.Contracts.PassModel.MultiPass = 3
+  SimdImaging.Processing.Contracts.PassModel.SeparableRows = 1
+  SimdImaging.Processing.Contracts.PassModel.Single = 0
+  SimdImaging.Processing.Contracts.PassModel.WholeFrameAlgorithm = 4
+  SimdImaging.Processing.Contracts.StateScope.None = 0
+  SimdImaging.Processing.Contracts.StateScope.PerCall = 3
+  SimdImaging.Processing.Contracts.StateScope.PerImage = 2
+  SimdImaging.Processing.Contracts.StateScope.PerWorker = 1
   SimdImaging.Processing.CurvePoint.#ctor(System.Single X, System.Single Y)
   SimdImaging.Processing.CurvePoint.Deconstruct(System.Single& X, System.Single& Y) -> System.Void
   SimdImaging.Processing.CurvePoint.Equals(SimdImaging.Processing.CurvePoint other) -> System.Boolean
@@ -1281,7 +1424,15 @@ class SimdImaging.ImageOpPipeline`1
 class SimdImaging.ImagePipeline
 class SimdImaging.ImagePipelineExtensions
 class SimdImaging.ImageTranscode
+class SimdImaging.PlanExplanation
+class SimdImaging.PlanOutputGeometry
+class SimdImaging.PlanRefusals
+class SimdImaging.PlanSectionExplanation
 class SimdImaging.PlanStepExplanation
+class SimdImaging.PlanStepRequirements
+class SimdImaging.PlanUnmanagedTerm
+class SimdImaging.PlanWorkspaceReport
+class SimdImaging.PlanWorkspaceTerm
 class SimdImaging.ProcessOptions
 class SimdImaging.Processing.AlphaOps
 class SimdImaging.Processing.AnalysisOps
@@ -1352,12 +1503,21 @@ enum SimdImaging.Abstractions.SampleTransferCurve
 enum SimdImaging.Abstractions.SeamAxis
 enum SimdImaging.Abstractions.WorkingFormat
 enum SimdImaging.Abstractions.WorkingFormatMask
+enum SimdImaging.PlanBackend
+enum SimdImaging.PlanSectionKind
+enum SimdImaging.PlanTileRefusal
+enum SimdImaging.PlanWorkspaceKind
 enum SimdImaging.ProcessMode
 enum SimdImaging.Processing.BlendMode
 enum SimdImaging.Processing.ChromaSubsampling
 enum SimdImaging.Processing.ChromaticAdaptation
 enum SimdImaging.Processing.ColorSpace
 enum SimdImaging.Processing.ColorVisionDeficiency
+enum SimdImaging.Processing.Contracts.Determinism
+enum SimdImaging.Processing.Contracts.ExecutionOrder
+enum SimdImaging.Processing.Contracts.Partitioning
+enum SimdImaging.Processing.Contracts.PassModel
+enum SimdImaging.Processing.Contracts.StateScope
 enum SimdImaging.Processing.DitherKernel
 enum SimdImaging.Processing.FusionFallbackReason
 enum SimdImaging.Processing.Geometry.Anchor
