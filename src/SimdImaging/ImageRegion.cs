@@ -1,6 +1,7 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Compilation;
 using SimdImaging.Processing.Geometry;
 
 namespace SimdImaging;
@@ -355,12 +356,6 @@ public sealed partial class Image
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var refusal = RegionExecutor.Classify(plan.Steps, plan.HasResize, out var refusingStep);
-        if (refusal != RegionRefusal.None)
-            throw new NotSupportedException(
-                $"This plan cannot run over a region: {refusal} at step '{refusingStep}'. Run it over a whole image "
-                + "with Load + Apply instead.");
-
         if (!region.FitsIn(source.Width, source.Height) || region.Width <= 0 || region.Height <= 0)
             throw new ArgumentException($"The region {region} does not lie inside {source.Width}x{source.Height}.",
                 nameof(region));
@@ -371,15 +366,36 @@ public sealed partial class Image
                 $"The region would be {region.Width}x{region.Height} = {pixels} pixels, above the "
                 + $"{options.Load.MaxPixels} pixel limit.");
 
+        // One compile for the region: backend choice, refusal reason, region cost and per-step source regions all
+        // come from the same plan the explanation reports.
+        var compiled = PipelineCompiler.Compile(BuildRecipe(plan), new CompileOptions
+        {
+            SourceWidth = source.Width,
+            SourceHeight = source.Height,
+            SourceFormat = source.Format,
+            Source = SourceCapabilities.Seekable | SourceCapabilities.RandomRegion |
+                     SourceCapabilities.StableContent,
+            Sink = SinkCapabilities.None,
+            BandRows = plan.BandRows,
+            Region = region,
+            Execute = options.Execute ?? new ExecuteOptions(),
+        });
+
+        if (compiled.Backend != ExecutionBackend.Region)
+            throw new NotSupportedException(
+                $"This plan cannot run over a region: {compiled.RegionRefusal}. Run it over a whole image with " +
+                "Load + Apply instead.");
+
         var layout = source.Layout;
         var buffer = WorkingBuffer.Rent(region.Width, region.Height, source.Format, options.Region?.Pool);
         try
         {
-            var result = plan.TryExecuteRegion(source, region, buffer.View, options.Execute, options.Region?.Pool);
+            var result = CompiledPlanExecutor.ExecuteRegion(compiled, source, region, buffer.View,
+                options.Execute, options.Region?.Pool);
             if (!result.Succeeded)
                 throw new NotSupportedException(
-                    $"The plan refused the region at step '{result.RefusingStep}' ({result.Refusal}); CanExecuteRegion "
-                    + "said it could. That is a bug in the capability check, not in the caller.");
+                    $"The plan refused the region at step '{result.RefusingStep}' ({result.Refusal}); the compiled " +
+                    "backend said it could. That is a bug in the capability check, not in the caller.");
 
             var output = new ImageInfo(region.Width, region.Height, 4, source.Format.ToSampleFormat())
             {

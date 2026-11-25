@@ -103,7 +103,7 @@ public sealed partial class Image
         return PlanExplanation.From(compiled);
     }
 
-    private PipelineRecipe BuildRecipe(ProcessingPlan plan)
+    private static PipelineRecipe BuildRecipe(ProcessingPlan plan)
     {
         var builder = new PipelineRecipeBuilder();
         foreach (var step in plan.Steps)

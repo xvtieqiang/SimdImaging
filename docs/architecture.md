@@ -760,7 +760,7 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
 会把 recipe 里尚未执行的格式步骤算进去，所以 `ConvertColorSpace(...).Composite(Rgba32F overlay, ...)` 的格式校验仍
 在调用点通过。
 
-至此没有算子只存在于 barrier 里：连 `ApplyGainMap` 的 gain map 也走注入式第二输入（§6.3.12），以整图格式段执行。
+至此没有算子只存在于 barrier 里：连 `ApplyGainMap` 的 gain map 也走注入式第二输入（§6.3.13），以整图格式段执行。
 
 ### 6.3.7 P3 收尾：反卷积、绘制与增益图
 
@@ -814,7 +814,7 @@ orientation 复位（§6.3.10）。
 
 仍保守的地方：Warp / Perspective / 内容派生尺寸按整图；区域集合目前实际只产生单矩形（模型支持多矩形）；成本只用于拒绝 Region，
 没有拿它和 Frame/Stream/Tile 做成本比较。解释有两条出口：内部 `Explanation` 字符串，以及公开的
-`Image.Explain(plan, region)`，后者把同一份 `CompiledExecutionPlan` 投影成结构化的 `PlanExplanation`（§6.3.11）。
+`Image.Explain(plan, region)`，后者把同一份 `CompiledExecutionPlan` 投影成结构化的 `PlanExplanation`（§6.3.12）。
 
 ### 6.3.10 编译入口、AutoOrient 与 WorkspaceManager
 
@@ -827,10 +827,17 @@ orientation 复位（§6.3.10）。
   `ExecuteOptions.Workspace` 传入；计划、流窗口、resize ring、tile 各自预留；`ImageTranscode` 使用调用方给的账户，
   没有就为本次运行自建一个，`ProcessReport` 带 `PeakWorkingBytes` 与 `PredictedWorkingBytes`（编译期上界）。
 
-仍未统一：`Image.ProcessTo` / `ProcessRegion` / `ResizeRegion` 仍走 `ProcessingPlan`/`RegionExecutor`；WorkspaceManager
-没有 spool/物化缓存项，也没有把 M2–M4 的出口条件补验。
+区域入口现在也统一了：`Image.ProcessRegion` 先把计划编译一次（`Region` 后端 + 区域成本），再走
+`CompiledPlanExecutor.ExecuteRegion`，所以拒绝原因、每步源区域和解释与其它入口同源。仍未统一：`Image.ProcessTo` /
+`ResizeRegion` 仍走 `ProcessingPlan`/行泵；WorkspaceManager 没有 spool/物化缓存项，也没有把 M2–M4 的出口条件补验。
 
-### 6.3.11 计划解释（Plan Explanation）
+### 6.3.11 区域执行也走编译入口
+
+`Image.ProcessRegion` 现在先 `PipelineCompiler.Compile`（`Region = rect`，源能力含 `RandomRegion`），要求
+`Backend = Region`，再交给 `CompiledPlanExecutor.ExecuteRegion`。区域成本上限（`MaxRegionReadAmplification`，内部旋钮）、
+格式/几何/全局步骤的拒绝原因都来自同一份编译结果；`RegionExecutor` 仍是实际的逐矩形执行器。
+
+### 6.3.12 计划解释（Plan Explanation）
 
 `Image.Explain(plan, region)` 返回 `PlanExplanation`——编译但不执行、不持有缓冲，是设计文档 §5.4 的结构化形式：
 
@@ -854,7 +861,7 @@ requirements 与工作空间；文件侧的选路由 `ImageTranscode.Explain()` 
 不消耗一次运行，因此 `Backend.Stream` 与 `Refusals.Stream` 在编码器打开前就能看到。带 `Region` 的转码仍走
 `RegionExecutor`，没有编译计划可解释，入口显式拒绝而不是给出一份错的计划。
 
-### 6.3.12 多输入：第二视图记录在步骤上
+### 6.3.13 多输入：第二视图记录在步骤上
 
 - `PlanStep.Secondary` 记录第二输入视图；`ProcessingPlan.Add(op, PixelView)` 注入并校验端口格式，`Add(op)` 对需要注入
   的算子直接拒绝（不会等到执行时才用一个抛异常的内核）。

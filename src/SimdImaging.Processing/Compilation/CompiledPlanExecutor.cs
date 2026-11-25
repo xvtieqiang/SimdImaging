@@ -1,3 +1,4 @@
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Geometry;
 
@@ -137,6 +138,23 @@ internal static class CompiledPlanExecutor
         }
 
         return owned.Count == 0 ? current : new OwnedRowChain(current, owned);
+    }
+
+    /// <summary>
+    /// Runs the plan over one rectangle of an <see cref="IRegionSource"/>: the compiler picked the region backend and
+    /// derived the source regions; the per-rectangle work is <see cref="RegionExecutor"/>'s.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The plan did not choose the region backend.</exception>
+    internal static RegionResult ExecuteRegion(CompiledExecutionPlan plan, IRegionSource source, PixelRect region,
+        PixelView destination, ExecuteOptions? options = null, IPixelPool? pool = null)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        if (plan.Backend != ExecutionBackend.Region)
+            throw new InvalidOperationException(
+                $"The compiler chose {plan.Backend}, so there is no region run ({plan.RegionRefusal}).");
+
+        return RegionExecutor.Execute(ProcessingPlan.FromCompiled(plan.Steps, plan.BandRows), source, region,
+            destination, options, pool);
     }
 
     private static void CheckBudget(ExecuteOptions options, long bytes, string what)
