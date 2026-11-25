@@ -1,7 +1,9 @@
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Compilation;
 using SimdImaging.Processing.Contracts;
+using SimdImaging.Processing.Geometry;
 using Shouldly;
 using Xunit;
 
@@ -128,6 +130,56 @@ public sealed class CompositeStepTests
 
         seen.ShouldBe(["Invert", "Composite"]);
         plan.Backend.ShouldBe(ExecutionBackend.Frame);
+    }
+
+    [Fact]
+    public void DrawImageAsAPlanStep_MatchesTheDirectChain()
+    {
+        using var background = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
+        using var overlay = TestImages.Gradient(12, 9, WorkingFormat.Rgba8);
+        var rect = new PixelRect(10, 8, 20, 15);
+
+        using var scaled = SimdImaging.Processing.Geometry.Canvas.Resize(overlay[0].Pixels.View, rect.Width,
+            rect.Height, Resampler.Bilinear, ResizeMode.Stretch, Anchor.Centre, default);
+        using var faded = PointOps.Opacity(scaled.View, 0.6f);
+        using var expected = AlphaOps.Composite(background[0].Pixels.View, faded.View, rect.X, rect.Y);
+
+        using var planned = new ProcessingPlan().Add(PlanOps.DrawImage(overlay[0].Pixels.View, rect, 0.6f))
+            .Execute(background[0].Pixels.View);
+        using var piped = background.Pipe().DrawImage(overlay, rect, 0.6f).ToImage();
+
+        Rows(planned.View).ShouldBe(Rows(expected.View));
+        Rows(piped[0].Pixels.View).ShouldBe(Rows(expected.View));
+    }
+
+    [Fact]
+    public void ApplyGainMap_ChangesFormat_AndMatchesTheDirectCall()
+    {
+        using var baseImage = TestImages.Gradient(32, 32, WorkingFormat.Rgba8);
+        using var gainMap = TestImages.Gradient(32, 32, WorkingFormat.Rgba8);
+
+        using var expected = HdrOps.ApplyGainMap(baseImage[0].Pixels.View, gainMap[0].Pixels.View, 4f, 0.8f);
+        using var actual = baseImage.Pipe().ApplyGainMap(gainMap, 4f, 0.8f).ToImage();
+
+        actual.Format.ShouldBe(WorkingFormat.Rgba32F);
+        Rows(actual[0].Pixels.View).ShouldBe(Rows(expected.View));
+    }
+
+    [Fact]
+    public void Watermark_AppliesTheOpacityItWasGiven()
+    {
+        using var background = TestImages.Gradient(40, 32, WorkingFormat.Rgba8);
+        using var mark = TestImages.Gradient(8, 6, WorkingFormat.Rgba8);
+
+        const int x = 40 - 8 - 2;
+        const int y = 32 - 6 - 2;
+        using var faded = PointOps.Opacity(mark[0].Pixels.View, 0.5f);
+        using var expected = AlphaOps.Composite(background[0].Pixels.View, faded.View, x, y);
+
+        using var actual = background.Pipe()
+            .Watermark(mark, WatermarkPosition.BottomRight, margin: 2, opacity: 0.5f).ToImage();
+
+        Rows(actual[0].Pixels.View).ShouldBe(Rows(expected.View));
     }
 
     private static byte[] Rows(PixelView view)

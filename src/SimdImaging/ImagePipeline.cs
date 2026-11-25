@@ -298,18 +298,15 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline RichardsonLucy(float sigma, int iterations = 10) =>
-        Reshape(v => RichardsonLucyOps.RichardsonLucy(v, sigma, iterations, _pool));
+        Step(PlanOps.RichardsonLucy(sigma, iterations));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline RichardsonLucyMotion(int length, float angleDegrees, int iterations = 10) =>
-        Reshape(v => RichardsonLucyOps.RichardsonLucyMotion(v, length, angleDegrees, iterations, _pool));
+        Step(PlanOps.RichardsonLucyMotion(length, angleDegrees, iterations));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
-    public ImagePipeline Perspective(ReadOnlySpan<float> homography, int width, int height, RgbaColor background = default)
-    {
-        var copy = homography.ToArray();
-        return Reshape(v => Mapping.Perspective(v, copy, width, height, background, _pool));
-    }
+    public ImagePipeline Perspective(ReadOnlySpan<float> homography, int width, int height, RgbaColor background = default) =>
+        AppendGeometry(GeometrySteps.Perspective(homography, width, height, background));
 
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline PerspectiveWithOptions(ReadOnlySpan<float> homography, int width, int height,
@@ -479,8 +476,13 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     }
 
     /// <summary>Applies a gain map, as an HDR image carries alongside its base.</summary>
-    public ImagePipeline ApplyGainMap(Image gainMap, float headroom = 4f, float weight = 1f) =>
-        Reshape(v => HdrOps.ApplyGainMap(v, gainMap[0].Pixels.View, headroom, weight, _pool));
+    /// <summary>Applies a gain map to the base, producing linear light in Rgba32F.</summary>
+    /// <remarks>The gain map is read when the chain runs; keep it alive until <see cref="ToImage"/>.</remarks>
+    public ImagePipeline ApplyGainMap(Image gainMap, float headroom = 4f, float weight = 1f)
+    {
+        ArgumentNullException.ThrowIfNull(gainMap);
+        return Step(PlanOps.ApplyGainMap(gainMap[0].Pixels.View, headroom, weight));
+    }
 
     /// <summary>Maps to a caller-supplied palette.</summary>
     public ImagePipeline MapToPalette(ColorPalette palette) =>
@@ -523,38 +525,39 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         Step(PlanOps.ReduceColors(maxColors, quantizer, kernel, maxError));
 
     /// <summary>Draws another image into a destination rectangle.</summary>
-    public ImagePipeline DrawImage(Image source, PixelRect destination, float opacity = 1f) =>
-        Reshape(v =>
-        {
-            using var scaled = Canvas.Resize(source[0].Pixels.View, destination.Width, destination.Height,
-                Resampler.Bilinear, ResizeMode.Stretch, Anchor.Centre, default, _pool);
-
-            if (opacity >= 1f)
-                return AlphaOps.Composite(v, scaled.View, destination.X, destination.Y, _pool);
-
-            using var faded = PointOps.Opacity(scaled.View, opacity, _pool);
-            return AlphaOps.Composite(v, faded.View, destination.X, destination.Y, _pool);
-        });
+    /// <summary>Draws <paramref name="source"/> into <paramref name="destination"/>, resized to fit and faded by
+    /// <paramref name="opacity"/>.</summary>
+    /// <remarks>The overlay is read when the chain runs, not here: keep it alive until <see cref="ToImage"/>.</remarks>
+    public ImagePipeline DrawImage(Image source, PixelRect destination, float opacity = 1f)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        EnsureOverlayFormat(source);
+        return Step(PlanOps.DrawImage(source[0].Pixels.View, destination, opacity));
+    }
 
     /// <summary>Stamps a watermark at one of the usual positions.</summary>
     public ImagePipeline Watermark(Image mark, WatermarkPosition position = WatermarkPosition.BottomRight,
-        int margin = 0, float opacity = 0.5f) =>
-        Geometry(image =>
+        int margin = 0, float opacity = 0.5f)
+    {
+        ArgumentNullException.ThrowIfNull(mark);
+
+        // The position depends on the image's size at this point in the chain, so the prefix has to be materialised
+        // first; the draw itself stays a step and keeps the mark's lifetime rule.
+        var image = Flush();
+        var x = position switch
         {
-            var x = position switch
-            {
-                WatermarkPosition.TopLeft or WatermarkPosition.BottomLeft => margin,
-                WatermarkPosition.TopRight or WatermarkPosition.BottomRight => image.Width - mark.Width - margin,
-                _ => (image.Width - mark.Width) / 2,
-            };
-            var y = position switch
-            {
-                WatermarkPosition.TopLeft or WatermarkPosition.TopRight => margin,
-                WatermarkPosition.BottomLeft or WatermarkPosition.BottomRight => image.Height - mark.Height - margin,
-                _ => (image.Height - mark.Height) / 2,
-            };
-            return image.Pipe(_pool).Composite(mark, x, y, PorterDuff.SourceOver).ToImage();
-        });
+            WatermarkPosition.TopLeft or WatermarkPosition.BottomLeft => margin,
+            WatermarkPosition.TopRight or WatermarkPosition.BottomRight => image.Width - mark.Width - margin,
+            _ => (image.Width - mark.Width) / 2,
+        };
+        var y = position switch
+        {
+            WatermarkPosition.TopLeft or WatermarkPosition.TopRight => margin,
+            WatermarkPosition.BottomLeft or WatermarkPosition.BottomRight => image.Height - mark.Height - margin,
+            _ => (image.Height - mark.Height) / 2,
+        };
+        return DrawImage(mark, new PixelRect(x, y, mark.Width, mark.Height), opacity);
+    }
 
     /// <summary>Ends the current pass, applies geometry, and starts a fresh pass on the result.</summary>
     private ImagePipeline Geometry(Func<Image, Image> reshape)

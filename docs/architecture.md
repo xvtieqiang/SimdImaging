@@ -742,6 +742,18 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
 仍是非计划步骤：`IccTransform`（同格式，LUT/配置文件）、`ChromaResample`（两行依赖）、`Glow` / `RichardsonLucy`
 （halo 分别为 `ceil(3σ)` 与 `iterations × PSF 半径`）、`ApplyGainMap` / `DrawImage` / `Watermark`（第二输入或尺寸依赖）。
 
+### 6.3.7 P3 收尾：反卷积、绘制与增益图
+
+- `RichardsonLucy` / `RichardsonLucyMotion`：Neighborhood 步骤，halo = `2 × PSF 半径 × iterations`。旧的 `1 ×` 少了
+  一半——一次迭代是正向卷积 + 反向卷积，输出依赖两个半径；融合与逐步使用同一窗口，看不见这条缝，Frame vs Stream 的
+  逐字节测试暴露了它。
+- `DrawImage`：Composite 步骤，overlay 在内核里缩放到目标矩形并按 opacity 淡化；overlay 必须活到 `ToImage`。
+- `ApplyGainMap`：Composite + 输出 `Rgba32F`，走格式段；Stream / Region / Tile 以 `FormatChange` 拒绝。
+- `Watermark`：位置依赖当前尺寸，先 `Flush` 再追加 `DrawImage`；opacity 现在真的生效（旧实现忽略了这个参数）。
+- `Perspective`：补成 GeometryStep，之前是唯一还在 `Reshape` 的几何重载。
+
+剩余 barrier：`Glow`（内部整图高光缓冲）、`IccTransform`（同格式 LUT/配置文件）、`ChromaResample`（两行依赖）。
+
 ### 6.4 超限行为
 
 - `MaxWorkingBytes` 不够 → 先尝试降档（Rgba32F → Rgba16，若算子是精确整数语义）→ 仍不够则抛，**不静默改精度**。

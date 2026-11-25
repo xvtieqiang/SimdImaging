@@ -116,10 +116,6 @@ internal sealed class OperatorContract
                 $"The operator '{name}' declares no supported format; None means 'cannot run', which no plan step is.",
                 nameof(formats));
 
-        if (outputFormat is not null && category == OpCategory.Composite)
-            throw new ArgumentException(
-                $"The composite operator '{name}' cannot also change the working format.", nameof(outputFormat));
-
         if (category == OpCategory.Geometric)
             throw new ArgumentException(
                 "A Geometric step changes the image size, which a same-size plan cannot represent; geometry belongs to " +

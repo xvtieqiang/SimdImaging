@@ -906,6 +906,7 @@
   SimdImaging.Processing.PlanObserver.Invoke(System.Int32 index, System.String name, SimdImaging.Abstractions.PixelView result) -> System.Void
   SimdImaging.Processing.PlanOps.AdaptiveThreshold(System.Int32 radius, System.Single offset) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.AlphaThreshold(System.Single threshold) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.ApplyGainMap(SimdImaging.Abstractions.PixelView gainMap, System.Single headroom, System.Single weight) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Bilateral(System.Int32 radius, System.Single sigmaRange) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.BlackWhite(System.Single threshold, System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Blend(SimdImaging.Abstractions.PixelView overlay, System.Int32 x, System.Int32 y, SimdImaging.Processing.BlendMode mode) -> SimdImaging.Processing.ImageOp
@@ -931,6 +932,7 @@
   SimdImaging.Processing.PlanOps.DistanceTransform(System.Single threshold) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Dither(System.Int32 bits, SimdImaging.Processing.DitherKernel kernel) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.DitherToPalette(SimdImaging.Abstractions.ColorPalette palette, SimdImaging.Processing.DitherKernel kernel, System.Single maxError) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.DrawImage(SimdImaging.Abstractions.PixelView image, Sdcb.SimdCodecs.Abstractions.PixelRect destination, System.Single opacity) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Emboss(System.Single strength) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Equalize() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Erode3x3() -> SimdImaging.Processing.ImageOp
@@ -966,6 +968,8 @@
   SimdImaging.Processing.PlanOps.Quantize(System.Int32 maxColors, SimdImaging.Processing.Quantizer quantizer) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.QuantizeWebSafe() -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.ReduceColors(System.Int32 maxColors, SimdImaging.Processing.Quantizer quantizer, SimdImaging.Processing.DitherKernel kernel, System.Single maxError) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.RichardsonLucy(System.Single sigma, System.Int32 iterations) -> SimdImaging.Processing.ImageOp
+  SimdImaging.Processing.PlanOps.RichardsonLucyMotion(System.Int32 length, System.Single angleDegrees, System.Int32 iterations) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Saturation(System.Single amount, System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Scharr(System.Boolean bt709) -> SimdImaging.Processing.ImageOp
   SimdImaging.Processing.PlanOps.Sepia(System.Single amount) -> SimdImaging.Processing.ImageOp

@@ -191,6 +191,19 @@ public sealed class CompiledBackendsTests
     }
 
     [Fact]
+    public void RichardsonLucy_MatchesBetweenFrameAndStream_WithItsIterationHalo()
+    {
+        var recipe = Recipe(PlanOps.RichardsonLucy(1f, iterations: 1));
+        using var image = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
+
+        var frame = Compile(recipe, 32, 24, WorkingFormat.Rgba8, stream: false, bandRows: 7);
+        var stream = Compile(recipe, 32, 24, WorkingFormat.Rgba8, stream: true, bandRows: 7);
+        stream.Backend.ShouldBe(ExecutionBackend.Stream);
+
+        Frame(frame, image[0].Pixels.View).ShouldBe(StreamBytes(stream, image[0].Pixels.View));
+    }
+
+    [Fact]
     public void Noise_IsDeterministic_AndRefusedByStream()
     {
         var recipe = Recipe(PlanOps.Noise(0.05f, NoiseKind.Gaussian, seed: 7));

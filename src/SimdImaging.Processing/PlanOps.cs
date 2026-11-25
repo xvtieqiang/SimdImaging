@@ -1,5 +1,6 @@
 using SimdImaging.Processing.Internal;
 using SimdImaging.Processing.Contracts;
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 
 namespace SimdImaging.Processing;
@@ -31,6 +32,27 @@ public static class PlanOps
         new(OperatorContract.Create(name, category, formats, footprint, workspace, requirements, pass, semantics,
                 input: input, input2: input2, outputFormat: outputFormat, haloX: haloX, haloY: haloY),
             kernels);
+
+    /// <summary>
+    /// A step that changes the working format. Its plan kernel throws: a same-format plan cannot carry it, and the
+    /// compiler executes the whole-image form as a format section. The throw is a guard against a caller who
+    /// reaches the kernel by bypassing <see cref="ProcessingPlan.Add(ImageOp)"/>.
+    /// </summary>
+    private static ImageOp FormatStep(string name, Func<PixelView, WorkingBuffer> op,
+        Func<int, int, int, WorkingFormat, long> scratch, IInputFootprint footprint, WorkingFormat outputFormat,
+        PassModel pass, PixelSemantics semantics, InputPort? second = null)
+    {
+        return Create(name, second is null ? OpCategory.Global : OpCategory.Composite, footprint,
+            WorkspaceModel.Of(scratch, WorkspaceScope.WholeImage),
+            new KernelImplementations(
+                (_, _, _, _) => throw new NotSupportedException(
+                    $"'{name}' changes the working format; run it through a compiled recipe."),
+                op),
+            WorkingFormatMask.All, ExecutionRequirements.WholeImage, pass, semantics,
+            input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
+            input2: second,
+            outputFormat: outputFormat);
+    }
 
     /// <summary>
     /// Point steps need no per-pixel scratch beyond a row buffer that already exists in the executor, so they
@@ -358,6 +380,51 @@ public static class PlanOps
             input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true));
     }
 
+    /// <summary>
+    /// Richardson-Lucy deconvolution of a Gaussian blur. The band halo is <c>2 × ceil(3σ) × iterations</c>: each
+    /// iteration convolves forward and back, then the next widens the dependency by the same amount.
+    /// </summary>
+    public static ImageOp RichardsonLucy(float sigma, int iterations = 10) =>
+        Neighborhood(nameof(RichardsonLucyOps.RichardsonLucy),
+            RichardsonLucyOps.RequiredHalo(sigma, iterations),
+            v => RichardsonLucyOps.RichardsonLucy(v, sigma, iterations),
+            (width, _, rows, format) => RichardsonLucyOps.ScratchBytes(width, rows, format));
+
+    /// <summary>Richardson-Lucy for a motion trail; the halo follows the trail radius per iteration.</summary>
+    public static ImageOp RichardsonLucyMotion(int length, float angleDegrees, int iterations = 10) =>
+        Neighborhood(nameof(RichardsonLucyOps.RichardsonLucyMotion),
+            RichardsonLucyOps.RequiredHaloMotion(length, iterations),
+            v => RichardsonLucyOps.RichardsonLucyMotion(v, length, angleDegrees, iterations),
+            (width, _, rows, format) => RichardsonLucyOps.ScratchBytes(width, rows, format));
+
+    /// <summary>
+    /// Draws another image into a destination rectangle, resizing it to fit and fading it by
+    /// <paramref name="opacity"/>. Like <see cref="Composite"/>, the overlay is read when the step runs.
+    /// </summary>
+    public static ImageOp DrawImage(PixelView image, PixelRect destination, float opacity = 1f)
+    {
+        var formats = FormatMask(image.Format);
+        return Create("draw-image", OpCategory.Composite, WholeSourceFootprint.Instance,
+            WorkspaceModel.Of(
+                (_, _, _, format) => (long)destination.Width * destination.Height * format.BytesPerPixel()
+                    * (opacity < 1f ? 2 : 1),
+                WorkspaceScope.WholeImage),
+            new KernelImplementations(PlanSteps.DrawImage(image, destination, opacity)),
+            formats, ExecutionRequirements.WholeImage,
+            input: new InputPort("source", PortRole.Source, formats, Required: true),
+            input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true));
+    }
+
+    /// <summary>
+    /// Applies a gain map to the base and returns linear light in Rgba32F. The output format differs, so this is a
+    /// compiled-recipe format boundary with a second input.
+    /// </summary>
+    public static ImageOp ApplyGainMap(PixelView gainMap, float headroom = 4f, float weight = 1f) =>
+        FormatStep("apply-gain-map", v => HdrOps.ApplyGainMap(v, gainMap, headroom, weight),
+            (width, _, _, _) => 32L * width, WholeSourceFootprint.Instance, WorkingFormat.Rgba32F,
+            PassModel.Single, PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded },
+            second: new InputPort("gain-map", PortRole.Overlay, WorkingFormatMask.All, Required: true));
+
     /// <summary>Warm or cool shift.</summary>
     /// <param name="amount">Positive warms, negative cools.</param>
     public static ImageOp Temperature(float amount) =>
@@ -488,12 +555,11 @@ public static class PlanOps
     /// input, so this step can only run in a compiled recipe, never in a same-format <c>ProcessingPlan</c>.
     /// </summary>
     public static ImageOp DistanceTransform(float threshold = 0.5f) =>
-        Global("distance-transform", v => DistanceTransformOps.SquaredEuclidean(v, threshold),
+        FormatStep("distance-transform", v => DistanceTransformOps.SquaredEuclidean(v, threshold),
             (width, height, _, _) =>
                 (4L * width * height) + (256L * height) + (16L * Math.Max(width, height)) + (16L * width),
-            pass: PassModel.GatherThenApply,
-            outputFormat: WorkingFormat.Rgba32F,
-            semantics: PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
+            WholeSourceFootprint.Instance, WorkingFormat.Rgba32F, PassModel.GatherThenApply,
+            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
 
     /// <summary>
     /// Converts to a colour model (XYZ, Lab, YCbCr, ...) in Rgba32F. The output format differs from the input, so
@@ -502,12 +568,10 @@ public static class PlanOps
     public static ImageOp ConvertColorSpace(ColorSpace target, YCbCrStandard ycbcr = YCbCrStandard.Bt709,
         bool limitedRange = false, WhitePoint white = WhitePoint.D65,
         ChromaticAdaptation adaptation = ChromaticAdaptation.Bradford) =>
-        Global("convert-color-space",
+        FormatStep("convert-color-space",
             v => ColorConversionOps.Convert(v, target, ycbcr, limitedRange, white, adaptation),
-            (width, _, _, _) => 16L * width,
-            footprint: IdentityFootprint.Instance,
-            outputFormat: WorkingFormat.Rgba32F,
-            semantics: PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
+            (width, _, _, _) => 16L * width, IdentityFootprint.Instance, WorkingFormat.Rgba32F, PassModel.Single,
+            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
 
     /// <summary>HDR tone mapping. Auto-exposure needs the whole image's geometric mean first.</summary>
     public static ImageOp ToneMap(ToneMapCurve curve = ToneMapCurve.Aces, float exposure = 0f,

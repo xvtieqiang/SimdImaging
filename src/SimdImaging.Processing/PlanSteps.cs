@@ -1,4 +1,6 @@
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Processing;
@@ -195,6 +197,29 @@ internal static class PlanSteps
             // The audit caught this: correct output, needless slow-down.
             using var result = @operator(source);
             CopyRows(result.View, 0, destination, 0, source.Height);
+        };
+    }
+
+    /// <summary>
+    /// Adapts "draw another image into a rectangle": the overlay is resized to the destination rect, optionally
+    /// faded, and composited in place. Composite steps are whole-image, so one seed copy is the right cost.
+    /// </summary>
+    public static OpKernel DrawImage(PixelView image, PixelRect destination, float opacity)
+    {
+        return (source, target, _, _) =>
+        {
+            CopyRows(source, 0, target, 0, source.Height);
+            using var scaled = Canvas.Resize(image, destination.Width, destination.Height, Resampler.Bilinear,
+                ResizeMode.Stretch, Anchor.Centre, default);
+            if (opacity >= 1f)
+            {
+                AlphaOps.CompositeInto(target, scaled.View, destination.X, destination.Y, PorterDuff.SourceOver,
+                    target);
+                return;
+            }
+
+            using var faded = PointOps.Opacity(scaled.View, opacity);
+            AlphaOps.CompositeInto(target, faded.View, destination.X, destination.Y, PorterDuff.SourceOver, target);
         };
     }
 

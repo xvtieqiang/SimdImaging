@@ -126,6 +126,14 @@ internal static class GeometrySteps
         new($"warp {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Sampling.WarpWithOptions(view, width, height, map, resampler, options, background, pool));
 
+    internal static GeometryDescriptor Perspective(ReadOnlySpan<float> homography, int width, int height,
+        RgbaColor background)
+    {
+        var matrix = homography.ToArray();
+        return new($"perspective {width}x{height}", new FixedSizeRule(width, height),
+            (view, pool) => Mapping.Perspective(view, matrix, width, height, background, pool));
+    }
+
     internal static GeometryDescriptor PerspectiveWithOptions(ReadOnlySpan<float> homography, int width,
         int height, Resampler resampler, SampleOptions options, RgbaColor background)
     {

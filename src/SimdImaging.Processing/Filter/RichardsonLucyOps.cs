@@ -98,10 +98,11 @@ public static class RichardsonLucyOps
 
     /// <summary>
     /// The halo a band executor must declare when this operator runs as a plan step. It is
-    /// <c>iterations × PSF radius</c>, not the radius: the estimate after one iteration depends on the input
-    /// within one radius, the next iteration widens that to two, and so on. Declaring the radius alone leaves a
-    /// one-bit seam at every band boundary — which a fused-versus-step-by-step comparison cannot see, because
-    /// both sides use the same windows.
+    /// <c>2 × PSF radius × iterations</c>: one iteration convolves the estimate with the PSF and then convolves
+    /// the ratio back, so the output at one pixel depends on the input within two radii; each further iteration
+    /// widens that by another two. The earlier <c>radius × iterations</c> was short by a factor of two and left a
+    /// one-bit seam at band boundaries, which a fused-versus-stepwise comparison cannot see because both sides use
+    /// the same windows.
     /// </summary>
     /// <param name="sigma">Same sigma the call will use.</param>
     /// <param name="iterations">Same iteration count the call will use.</param>
@@ -113,7 +114,7 @@ public static class RichardsonLucyOps
             throw new ArgumentOutOfRangeException(nameof(sigma), sigma, "Sigma must be finite and greater than 0.");
 
         ArgumentOutOfRangeException.ThrowIfNegative(iterations);
-        return RadiusOf(sigma) * iterations;
+        return 2 * RadiusOf(sigma) * iterations;
     }
 
     /// <summary>The same computation for a motion PSF.</summary>
@@ -125,7 +126,7 @@ public static class RichardsonLucyOps
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
         ArgumentOutOfRangeException.ThrowIfNegative(iterations);
-        return RadiusOfMotion(length) * iterations;
+        return 2 * RadiusOfMotion(length) * iterations;
     }
 
     /// <summary>Gaussian taps, normalized in double then truncated once to float.</summary>
