@@ -839,8 +839,10 @@ orientation 复位（§6.3.10）。
 变为公开类型：解释与契约共用一套术语，而不是另造一份字符串。几何步的 requirements 取 `RowBands`（可包装的
 resize/crop/pad/flip）或 `WholeImage`（必须物化的 reshape），格式段固定 `WholeImage` + `Single`。
 
-边界：`Image.Explain` 的源是内存图像、目标是调用方缓冲，所以 `Backend` 通常是 `Frame`；它解释的是步骤、区域、
-requirements 与工作空间。文件侧的选路解释仍由 `ImageTranscode` 的预检在内部完成，尚未走同一公开投影。
+边界：`Image.Explain` 的源是内存图像、目标是调用方缓冲，所以 `Backend` 通常是 `Frame`，它解释的是步骤、区域、
+requirements 与工作空间；文件侧的选路由 `ImageTranscode.Explain()` 走同一投影——只读头部、恢复可 seek 流的位置、
+不消耗一次运行，因此 `Backend.Stream` 与 `Refusals.Stream` 在编码器打开前就能看到。带 `Region` 的转码仍走
+`RegionExecutor`，没有编译计划可解释，入口显式拒绝而不是给出一份错的计划。
 
 ### 6.4 超限行为
 

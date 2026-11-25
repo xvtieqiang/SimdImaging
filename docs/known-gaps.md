@@ -1278,7 +1278,8 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   区域成本与 `RegionCost` 拒绝、公开的 `Image.Explain`（`PlanExplanation`：后端与拒绝原因、编译段与融合、工作空间
   逐项预测、每步的区域/放大比与 `Partitioning`/`PassModel`/`StateScope`/`ExecutionOrder`/`Determinism`、文字 notes）。
   仍缺：Warp/Perspective/内容派生尺寸的区域反推（当前整图）、`AaMode.Elliptical`（足迹随 Jacobian 变化，当前整图）、
-  真实的多矩形集合、成本驱动的后端比较/切分；文件侧选路（`ImageTranscode` 预检）尚未走同一公开解释投影；
+  真实的多矩形集合、成本驱动的后端比较/切分；文件侧选路已由 `ImageTranscode.Explain()` 公开（读头部、不消耗流），
+  带 `Region` 的转码仍走 `RegionExecutor`、没有编译计划可解释；
   `Image.Apply/ApplyWithOptions` 已统一到 Compiler，`ProcessTo/ProcessRegion/ResizeRegion` 仍走旧
   `ProcessingPlan` 路径。
 - **Tile 后端（P5 第一刀已落地）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与

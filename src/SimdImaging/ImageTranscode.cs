@@ -1,3 +1,4 @@
+using Sdcb.SimdCodecs;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
@@ -185,6 +186,83 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         }
 
         return (width, height);
+    }
+
+    /// <summary>
+    /// What this transcode would do before the encoder opens: the compiler's backend, refusals, sections, per-step
+    /// regions and workspace prediction.
+    /// <para>It reads the source header and restores a seekable stream's position; it decodes no pixels and does not
+    /// consume the single run a stream source allows. A forward-only stream cannot be explained (the header cannot be
+    /// replayed), and a region transcode has no compiled plan to explain.</para>
+    /// </summary>
+    /// <exception cref="NotSupportedException">The source is forward-only, or the transcode carries a region.</exception>
+    public PlanExplanation Explain(CancellationToken cancellationToken = default)
+    {
+        if (_region is not null)
+            throw new NotSupportedException(
+                "A region transcode runs through the region executor, which has no compiled plan to explain. Run it, " +
+                "or explain the whole-file path and use Image.Explain on the decoded region.");
+
+        if (_stream is not null && !_stream.CanSeek)
+            throw new NotSupportedException(
+                "Explaining a stream transcode reads the header, which a forward-only stream cannot replay. Use a " +
+                "seekable stream or a path source.");
+
+        using var file = _path is not null
+            ? new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read)
+            : null;
+        var source = file ?? _stream!;
+        var start = source.Position;
+
+        try
+        {
+            var load = _options.Load ?? LoadOptions.Default;
+            var (working, rowStream, _) = Image.ResolveFormat(source, start, load, preserveMetadata: false,
+                cancellationToken);
+            var decode = new DecodeOptions
+            {
+                Region = load.Region,
+                ScaleDenominator = load.ScaleDenominator ?? 1,
+                ApplyOrientation = load.ApplyOrientation,
+            };
+
+            int width;
+            int height;
+            using (var reader = ImageCodecs.OpenRowReader(rowStream, working.ToPixelFormat(), decode,
+                       leaveOpen: true, cancellationToken))
+            {
+                width = reader.Width;
+                height = reader.Height;
+            }
+
+            // A whole-input load cannot stream before the decoder has settled its size; the compiler would pick
+            // Stream for the recipe alone, so the prediction is compiled without a row sink and the reason is
+            // reported on top.
+            var wholeInput = Image.RequiresWholeInput(load);
+            var compiled = PipelineCompiler.Compile(_recipe.Build(), new CompileOptions
+            {
+                SourceWidth = width,
+                SourceHeight = height,
+                SourceFormat = working,
+                Source = SourceCapabilitiesFor(),
+                Sink = wholeInput ? SinkCapabilities.None : SinkCapabilities.RowWritable,
+                Execute = _options.Execute,
+            });
+
+            var explanation = PlanExplanation.From(compiled);
+            return wholeInput
+                ? explanation with
+                {
+                    Backend = PlanBackend.Frame,
+                    Refusals = explanation.Refusals with { Stream = StreamRefusal.DecodeNeedsWholeInput },
+                }
+                : explanation;
+        }
+        finally
+        {
+            if (source.CanSeek)
+                source.Position = start;
+        }
     }
 
     /// <summary>Runs the chain and writes the result to <paramref name="destinationPath"/>.</summary>

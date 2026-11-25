@@ -15,6 +15,67 @@ public class ImageTranscodeTests
         new ProcessingPlan().Add(PlanOps.GaussianBlur(1f)).Add(PlanOps.Contrast(1.1f));
 
     [Fact]
+    public void Explain_ReportsTheStreamBackendAndTheGeometryOutput()
+    {
+        var source = Temp(".png");
+        var destination = Temp(".png");
+        try
+        {
+            using (var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+
+            var transcode = ImageTranscode.From(source).Invert().Resize(32, 24);
+            var explanation = transcode.Explain();
+
+            explanation.Backend.ShouldBe(PlanBackend.Stream);
+            explanation.Refusals.Stream.ShouldBe(StreamRefusal.None);
+            explanation.Output.Width.ShouldBe(32);
+            explanation.Output.Height.ShouldBe(24);
+            explanation.Steps.Count.ShouldBe(2);
+            explanation.Steps[0].Name.ShouldBe("Invert");
+            explanation.Steps[1].IsGeometry.ShouldBeTrue();
+
+            // Explaining reads the header only: the same builder still runs, and it still streams.
+            transcode.Run(destination).Mode.ShouldBe(ProcessMode.Streamed);
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
+    [Fact]
+    public void Explain_ReportsWhyAWholeImageStepCannotStream()
+    {
+        var source = Temp(".png");
+        try
+        {
+            using (var image = TestImages.Gradient(32, 24, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+
+            var explanation = ImageTranscode.From(source).Noise(0.05f, seed: 3).Explain();
+
+            explanation.Backend.ShouldBe(PlanBackend.Frame);
+            explanation.Refusals.Stream.ShouldBe(StreamRefusal.GlobalStep);
+            explanation.Notes.ShouldContain(note => note.Contains("stream refused"));
+        }
+        finally
+        {
+            File.Delete(source);
+        }
+    }
+
+    [Fact]
+    public void Explain_RefusesAForwardOnlyStream()
+    {
+        var bytes = Image.Encode(TestImages.Gradient(16, 12, WorkingFormat.Rgba8), ImageFormat.Png);
+        using var stream = new NonSeekableStream(bytes);
+
+        Should.Throw<NotSupportedException>(() => ImageTranscode.From(stream).Invert().Explain());
+    }
+
+    [Fact]
     public void ApplySave_MatchesProcessTo()
     {
         var source = Temp(".png");

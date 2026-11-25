@@ -356,7 +356,7 @@ public sealed partial class Image
     /// <paramref name="preserveMetadata"/> asks the codec for the file's metadata blocks as well, which the codec
     /// documents as a whole-file read — the caller's explicit trade, not the default.</para>
     /// </summary>
-    private static (WorkingFormat Format, Stream Rows, ImageMetadata? Metadata) ResolveFormat(Stream source,
+    internal static (WorkingFormat Format, Stream Rows, ImageMetadata? Metadata) ResolveFormat(Stream source,
         long start, LoadOptions load, bool preserveMetadata, CancellationToken cancellationToken)
     {
         // The only path that may walk the whole file, and only when the caller asked for metadata.

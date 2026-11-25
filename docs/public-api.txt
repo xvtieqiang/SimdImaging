@@ -436,6 +436,7 @@
   SimdImaging.ImagePipeline.Watermark(SimdImaging.Image mark, SimdImaging.WatermarkPosition position, System.Int32 margin, System.Single opacity) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipelineExtensions.Pipe(SimdImaging.Image image, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.ImagePipeline
   SimdImaging.ImageTranscode.Crop(Sdcb.SimdCodecs.Abstractions.PixelRect rect) -> SimdImaging.ImageTranscode
+  SimdImaging.ImageTranscode.Explain(System.Threading.CancellationToken cancellationToken) -> SimdImaging.PlanExplanation
   SimdImaging.ImageTranscode.FlipHorizontal() -> SimdImaging.ImageTranscode
   SimdImaging.ImageTranscode.From(System.IO.Stream stream) -> SimdImaging.ImageTranscode
   SimdImaging.ImageTranscode.From(System.String path) -> SimdImaging.ImageTranscode
