@@ -294,6 +294,7 @@
   SimdImaging.Image.Metadata : Sdcb.SimdCodecs.Abstractions.ImageMetadata { get; }
   SimdImaging.Image.MinMax() -> System.ValueTuple<SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange>
   SimdImaging.Image.Mutate(System.Action<SimdImaging.ImagePipeline> steps, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
+  SimdImaging.Image.OpenRegionSource(System.String path, SimdImaging.RegionOptions? options) -> SimdImaging.ImageRegionSource
   SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Abstractions.IRegionSink sink, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.IPixelPool? pool) -> System.Void
   SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Image.ProcessTilesTo(SimdImaging.Abstractions.IRegionSource source, System.IO.Stream destination, Sdcb.SimdCodecs.Abstractions.ImageFormat format, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.SaveOptions? save, SimdImaging.Abstractions.IPixelPool? pool, System.Threading.CancellationToken cancellationToken) -> SimdImaging.ProcessReport
@@ -437,6 +438,11 @@
   SimdImaging.ImagePipeline.WarpWithOptions(System.Int32 width, System.Int32 height, SimdImaging.Processing.Geometry.PixelWarp map, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipeline.Watermark(SimdImaging.Image mark, SimdImaging.WatermarkPosition position, System.Int32 margin, System.Single opacity) -> SimdImaging.ImagePipeline
   SimdImaging.ImagePipelineExtensions.Pipe(SimdImaging.Image image, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.ImagePipeline
+  SimdImaging.ImageRegionSource.Dispose() -> System.Void
+  SimdImaging.ImageRegionSource.Format : SimdImaging.Abstractions.WorkingFormat { get; }
+  SimdImaging.ImageRegionSource.Height : System.Int32 { get; }
+  SimdImaging.ImageRegionSource.ReadRegion(Sdcb.SimdCodecs.Abstractions.PixelRect region, SimdImaging.Abstractions.PixelView destination) -> System.Void
+  SimdImaging.ImageRegionSource.Width : System.Int32 { get; }
   SimdImaging.ImageTranscode.Crop(Sdcb.SimdCodecs.Abstractions.PixelRect rect) -> SimdImaging.ImageTranscode
   SimdImaging.ImageTranscode.Explain(System.Threading.CancellationToken cancellationToken) -> SimdImaging.PlanExplanation
   SimdImaging.ImageTranscode.FlipHorizontal() -> SimdImaging.ImageTranscode
@@ -1439,6 +1445,7 @@ class SimdImaging.ImageFrame
 class SimdImaging.ImageOpPipeline`1
 class SimdImaging.ImagePipeline
 class SimdImaging.ImagePipelineExtensions
+class SimdImaging.ImageRegionSource
 class SimdImaging.ImageTranscode
 class SimdImaging.PlanExplanation
 class SimdImaging.PlanOutputGeometry

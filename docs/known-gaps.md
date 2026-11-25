@@ -1286,8 +1286,8 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。公开入口：
   `Image.ProcessTiles` 的缓冲与 Sink 两个重载、`Image.ProcessTilesTo(IRegionSource, Stream, …)`（编码器端 sink：
   持一条 `tileHeight` 行的带、行填满即写、`ProcessMode.Tiled`）与 `ProcessTilesTo(path, path, …)`（TIFF 区域源）。
-  未做：公开的通用文件级区域源（目前只有 TIFF 内部实现）；tile 吞吐已有两个基准条目（`tile invert` / `tile gaussian`，
-  512×512 tile、4K 源），但还没有版本化基线。tile 计划不能带几何步（含尾部 resize），编译期以 `NotTileable` 拒绝。
+  公开的文件级区域源是 `Image.OpenRegionSource`（TIFF 布局，可释放）；其它格式仍要调用方自己实现 `IRegionSource`。
+  tile 吞吐已有两个基准条目（`tile invert` / `tile gaussian`，512×512 tile、4K 源），但还没有版本化基线。tile 计划不能带几何步（含尾部 resize），编译期以 `NotTileable` 拒绝。
 - **需求选路（P1 补完）**：`StateScope.PerCall` / `ExecutionOrder.SourceOrder` 现在参与 Stream/Region 拒绝
   （`StatefulStep`），并由 `RequirementsSelectionTests` 用一个合成的行可分步验证；`PassModel` 与 `Determinism`
   仍只用于解释与预算，不改变后端选择（当前非默认项都是 Global，分类已被 Category 拦下）。

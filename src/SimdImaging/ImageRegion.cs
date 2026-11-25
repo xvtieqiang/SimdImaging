@@ -105,6 +105,22 @@ public sealed partial class Image
         return Describe(source);
     }
 
+    /// <summary>
+    /// Opens a file as a random-region source for <see cref="ProcessTiles(IRegionSource, ProcessingPlan, int, int, ExecuteOptions?, IPixelPool?)"/>
+    /// or <see cref="ProcessTilesTo(IRegionSource, Stream, ImageFormat, ProcessingPlan, int, int, ExecuteOptions?, SaveOptions?, IPixelPool?, CancellationToken)"/>.
+    /// The caller disposes it to close the file. TIFF only: it is the one layout this build reads as arbitrary
+    /// rectangles, and the same layout refusals as <see cref="DescribeRegion(string, int)"/> apply.
+    /// </summary>
+    /// <exception cref="NotSupportedException">The file is not a TIFF, or its page layout is not region-readable.</exception>
+    /// <exception cref="InvalidDataException">The bytes are not a recognised image.</exception>
+    public static ImageRegionSource OpenRegionSource(string path, RegionOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        options ??= RegionOptions.Default;
+        return new ImageRegionSource(TiffRegionSource.Open(path, options.PageIndex, options.Format,
+            options.MaxSegmentBytes));
+    }
+
     private static RegionCapabilities Describe(TiffRegionSource source)
     {
         var layout = source.Layout;
@@ -382,4 +398,30 @@ public sealed partial class Image
             throw;
         }
     }
+}
+
+/// <summary>
+/// A file opened as a random-region source: the public form of <see cref="Image.OpenRegionSource"/>. It reads only
+/// the strips or tiles that intersect a requested rectangle, and owns the file until disposed.
+/// </summary>
+public sealed class ImageRegionSource : IRegionSource, IDisposable
+{
+    private readonly TiffRegionSource _source;
+
+    internal ImageRegionSource(TiffRegionSource source) => _source = source;
+
+    /// <inheritdoc />
+    public int Width => _source.Width;
+
+    /// <inheritdoc />
+    public int Height => _source.Height;
+
+    /// <inheritdoc />
+    public WorkingFormat Format => _source.Format;
+
+    /// <inheritdoc />
+    public void ReadRegion(PixelRect region, PixelView destination) => _source.ReadRegion(region, destination);
+
+    /// <summary>Closes the file.</summary>
+    public void Dispose() => _source.Dispose();
 }

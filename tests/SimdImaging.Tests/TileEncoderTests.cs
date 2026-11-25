@@ -11,6 +11,32 @@ namespace SimdImaging.Tests;
 public sealed class TileEncoderTests
 {
     [Fact]
+    public void OpenRegionSource_FeedsTheTilePath()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"simd-tile-{Guid.NewGuid():N}.tif");
+        try
+        {
+            File.WriteAllBytes(path, TiffFixture.Strips(41, 29, PixelFormat.Rgb24, Pattern(41, 29)));
+            var plan = new ProcessingPlan().Add(PlanOps.Invert());
+
+            using var source = Image.OpenRegionSource(path);
+            source.Width.ShouldBe(41);
+            source.Height.ShouldBe(29);
+            source.Format.ShouldBe(WorkingFormat.Rgba8);
+
+            using var tiled = Image.ProcessTiles(source, plan, 16, 12);
+            using var loaded = Image.Load(path);
+            using var expected = loaded.Pipe().Invert().ToImage();
+
+            tiled.View.Span.ToArray().ShouldBe(expected.WritablePixels.ToArray());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ProcessTilesTo_MatchesTheBufferTilePath()
     {
         using var image = TestImages.Gradient(37, 23, WorkingFormat.Rgba8);

@@ -675,6 +675,9 @@ Tile 的验收是逐字节：`TileExecutionTests` 在 3 种格式、3 组 tile �
 性由契约的 `Requirements.SupportsTiles` 显式声明：Point / 局部 Neighborhood 为 true，Global / Composite / 整图 / 块对齐
 为 false，编译器按声明拒绝。内存侧有 `TileExecution_HoldsWellUnderOneFrame` 钉住「一块 tile + halo」的峰值。
 
+公开的文件级区域源是 `Image.OpenRegionSource(path, RegionOptions)`（返回可释放的 `ImageRegionSource`，目前只有
+TIFF 布局可读），可以直接喂给 `ProcessTiles` / `ProcessTilesTo`。
+
 `ProcessTilesTo` 是编码器端的 `IRegionSink`：sink 持有一条 `tileHeight` 行的编码带，按「每行已填列数」判断何时可写
 ——一块 tile 接一块 tile 地到达，行必须自上而下提交，band 内允许任意顺序；所有行写满后调用
 `StreamFrameEncoder.WriteRows`，最后 `Complete()` 断言没有截断。它不解码整图，只多一条宽的带（`width × tileHeight`
