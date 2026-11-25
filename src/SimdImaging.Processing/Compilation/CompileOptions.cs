@@ -37,4 +37,13 @@ internal sealed record CompileOptions
 
     /// <summary>True when the caller asked for a two-dimensional tile execution.</summary>
     internal bool TileRequested { get; init; }
+
+    /// <summary>The tile width the caller will use; 0 means the whole output for region-cost purposes.</summary>
+    internal int TileWidth { get; init; }
+
+    /// <summary>The tile height the caller will use; 0 means the whole output.</summary>
+    internal int TileHeight { get; init; }
+
+    /// <summary>Refuses a region run whose source read is more than this multiple of the output; 0 disables.</summary>
+    internal double MaxRegionReadAmplification { get; init; }
 }

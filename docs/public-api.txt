@@ -1097,6 +1097,7 @@
   SimdImaging.Processing.RegionRefusal.GeometricStep = 4
   SimdImaging.Processing.RegionRefusal.GlobalStep = 1
   SimdImaging.Processing.RegionRefusal.None = 0
+  SimdImaging.Processing.RegionRefusal.RegionCost = 6
   SimdImaging.Processing.RegionRefusal.StepNeedsWholeSource = 3
   SimdImaging.Processing.RegionResult.#ctor(SimdImaging.Processing.RegionRefusal Refusal, System.Int32 BandCount, System.Int32 WorkerCount)
   SimdImaging.Processing.RegionResult.BandCount : System.Int32 { get; set; }

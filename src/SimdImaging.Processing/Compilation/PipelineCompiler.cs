@@ -1,3 +1,4 @@
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Fusion;
@@ -22,6 +23,7 @@ internal static class PipelineCompiler
         var explanation = new List<string>();
         var steps = new List<PlanStep>();
         var sections = new List<CompiledSection>();
+        var states = new List<SectionState>();
         var width = options.SourceWidth;
         var height = options.SourceHeight;
         var sizeKnown = true;
@@ -39,6 +41,8 @@ internal static class PipelineCompiler
                 ValidateFormat(formatStep, currentFormat);
                 explanation.Add($"step {index} {formatStep.Name}: format {currentFormat} -> {outputFormat}, materialises");
                 sections.Add(new CompiledSection(CompiledSectionKind.Format, -1, 0, index));
+                states.Add(new SectionState(CompiledSectionKind.Format, -1, 0, index, width, height, width, height,
+                    currentFormat, outputFormat));
                 currentFormat = outputFormat;
                 index++;
                 continue;
@@ -48,6 +52,9 @@ internal static class PipelineCompiler
             {
                 var first = steps.Count;
                 var recipeFirst = index;
+                var runWidth = width;
+                var runHeight = height;
+                var runFormat = currentFormat;
                 while (index < recipe.Count &&
                        recipe.Steps[index] is OperatorStep op &&
                        op.Operator.Contract.Output.Format is null)
@@ -66,14 +73,21 @@ internal static class PipelineCompiler
                 {
                     Fused = fused,
                 });
+                states.Add(new SectionState(CompiledSectionKind.OperatorRun, first, count, recipeFirst, runWidth,
+                    runHeight, runWidth, runHeight, runFormat, currentFormat));
                 continue;
             }
 
             var geometry = (GeometryStep)recipe.Steps[index];
+            var geometryWidth = width;
+            var geometryHeight = height;
+            var geometryFormat = currentFormat;
             ApplyGeometrySize(geometry, ref width, ref height, ref sizeKnown);
             explanation.Add($"step {index} {geometry.Name}: {geometry.Geometry.Describe}, " +
                 (geometry.CanWrap ? "row-wrappable" : "materialises"));
             sections.Add(new CompiledSection(CompiledSectionKind.Geometry, -1, 0, index));
+            states.Add(new SectionState(CompiledSectionKind.Geometry, -1, 0, index, geometryWidth, geometryHeight,
+                width, height, geometryFormat, currentFormat));
             index++;
         }
 
@@ -89,6 +103,13 @@ internal static class PipelineCompiler
         }
         var streamRefusal = ClassifyStream(recipe, steps, options, out var streamBlocked);
         var regionRefusal = ClassifyRegion(recipe, steps, options, out var regionBlocked);
+        var (stepInfo, regionCost) = DeriveStepInfo(recipe, steps, states, options, width, height);
+        if (options.Region is not null && regionRefusal == RegionRefusal.None
+            && options.MaxRegionReadAmplification > 0
+            && regionCost.Amplification > options.MaxRegionReadAmplification)
+        {
+            regionRefusal = RegionRefusal.RegionCost;
+        }
 
         ExecutionBackend backend;
         if (tilePossible)
@@ -130,6 +151,14 @@ internal static class PipelineCompiler
                 explanation.Add($"region unavailable: {regionBlocked}");
         }
 
+        foreach (var info in stepInfo)
+        {
+            var ports = string.Join("; ", info.SourceRegions.Select(port =>
+                $"port {port.Port} {port.Region.X},{port.Region.Y} {port.Region.Width}x{port.Region.Height}"));
+            explanation.Add($"step {info.Index} {info.Name}: output {info.Width}x{info.Height} {info.Format}, " +
+                $"source {ports}, x{info.Amplification:0.00}");
+        }
+
         explanation.Add(sizeKnown ? $"output: {width}x{height}" : "output: size depends on content");
 
         var workspace = WorkspacePlanner.Estimate(recipe, steps, sections, backend, options, width, height);
@@ -143,7 +172,93 @@ internal static class PipelineCompiler
 
         var bandRows = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
         return new CompiledExecutionPlan(recipe, steps, sections, backend, streamRefusal, regionRefusal,
-            tileRefusal, width, height, sizeKnown, bandRows, workspace, explanation);
+            tileRefusal, width, height, sizeKnown, bandRows, workspace, stepInfo, regionCost, explanation);
+    }
+
+    private readonly record struct SectionState(CompiledSectionKind Kind, int FirstStep, int StepCount,
+        int RecipeIndex, int InputWidth, int InputHeight, int OutputWidth, int OutputHeight,
+        WorkingFormat InputFormat, WorkingFormat OutputFormat);
+
+    /// <summary>
+    /// Walks the sections backwards from the requested output rectangle. An operator step maps its output region
+    /// through its footprint; a geometry step through its inverse mapping; a format change leaves it alone. Each
+    /// step's read is normalized and clamped, and the chain cost is the final source area over the output area.
+    /// </summary>
+    private static (IReadOnlyList<CompiledStepInfo> Info, RegionCost Cost) DeriveStepInfo(PipelineRecipe recipe,
+        IReadOnlyList<PlanStep> steps, IReadOnlyList<SectionState> states, CompileOptions options, int width,
+        int height)
+    {
+        var outputRegion = options.Region ?? new PixelRect(0, 0, width, height);
+        if (options.Region is null && options.TileRequested && options.TileWidth > 0 && options.TileHeight > 0)
+        {
+            outputRegion = new PixelRect(0, 0, Math.Min(options.TileWidth, width),
+                Math.Min(options.TileHeight, height));
+        }
+
+        var region = SourceRegionSet.Of(outputRegion).Clamp(width, height);
+        var infos = new List<CompiledStepInfo>();
+        for (var s = states.Count - 1; s >= 0; s--)
+        {
+            var state = states[s];
+            if (state.Kind == CompiledSectionKind.OperatorRun)
+            {
+                for (var j = state.FirstStep + state.StepCount - 1; j >= state.FirstStep; j--)
+                {
+                    var step = steps[j];
+                    var outputArea = region.Area;
+                    var set = step.Definition.Contract.Footprint
+                        .MapSourceRegions(region.BoundingBox, state.InputWidth, state.InputHeight)
+                        .Normalize().Clamp(state.InputWidth, state.InputHeight);
+
+                    var ports = new List<PortRegion>();
+                    foreach (var rect in set.Regions)
+                        ports.Add(new PortRegion(0, rect));
+
+                    for (var p = 1; p < step.Definition.Contract.Inputs.Count; p++)
+                    {
+                        if (step.Definition.Contract.Inputs[p].Footprint is not { } portFootprint)
+                            continue;
+                        var portSet = portFootprint
+                            .MapSourceRegions(region.BoundingBox, state.InputWidth, state.InputHeight)
+                            .Normalize().Clamp(state.InputWidth, state.InputHeight);
+                        foreach (var rect in portSet.Regions)
+                            ports.Add(new PortRegion(p, rect));
+                    }
+
+                    infos.Add(new CompiledStepInfo(j, step.Name, false, state.OutputWidth, state.OutputHeight,
+                        state.OutputFormat, ports, set.Area, outputArea));
+                    region = set;
+                }
+            }
+            else if (state.Kind == CompiledSectionKind.Geometry)
+            {
+                var geometry = (GeometryStep)recipe.Steps[state.RecipeIndex];
+                var outputArea = region.Area;
+                var set = geometry.MapRegions?.Invoke(region.BoundingBox, state.InputWidth, state.InputHeight,
+                        state.OutputWidth, state.OutputHeight)
+                    ?? SourceRegionSet.Of(new PixelRect(0, 0, state.InputWidth, state.InputHeight));
+                set = set.Normalize().Clamp(state.InputWidth, state.InputHeight);
+
+                var ports = new List<PortRegion>();
+                foreach (var rect in set.Regions)
+                    ports.Add(new PortRegion(0, rect));
+                infos.Add(new CompiledStepInfo(state.RecipeIndex, geometry.Name, true, state.OutputWidth,
+                    state.OutputHeight, state.OutputFormat, ports, set.Area, outputArea));
+                region = set;
+            }
+            else
+            {
+                var ports = new List<PortRegion>();
+                foreach (var rect in region.Regions)
+                    ports.Add(new PortRegion(0, rect));
+                infos.Add(new CompiledStepInfo(state.RecipeIndex, "format change", false, state.OutputWidth,
+                    state.OutputHeight, state.OutputFormat, ports, region.Area, region.Area));
+            }
+        }
+
+        infos.Reverse();
+        var finalArea = (long)outputRegion.Width * outputRegion.Height;
+        return (infos, new RegionCost(region.Area, finalArea, region.Count));
     }
 
     /// <summary>

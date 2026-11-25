@@ -1,3 +1,4 @@
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Contracts;
 
@@ -42,13 +43,14 @@ internal sealed class OperatorStep(int index, ImageOp op) : RecipeStep(index, op
 internal sealed class GeometryStep : RecipeStep
 {
     internal GeometryStep(int index, string name, GeometryRule geometry, GeometryKind kind, Resampler? resampler,
-        ReshapeGeometry reshape, WrapRowSource? wrap = null)
+        ReshapeGeometry reshape, WrapRowSource? wrap = null, MapGeometryRegions? mapRegions = null)
         : base(index, name, geometry)
     {
         Kind = kind;
         Resampler = resampler;
         Reshape = reshape ?? throw new ArgumentNullException(nameof(reshape));
         Wrap = wrap;
+        MapRegions = mapRegions;
     }
 
     internal GeometryKind Kind { get; }
@@ -61,6 +63,9 @@ internal sealed class GeometryStep : RecipeStep
 
     internal WrapRowSource? Wrap { get; }
 
+    /// <summary>The inverse region mapping when the step can express one; null means the whole source.</summary>
+    internal MapGeometryRegions? MapRegions { get; }
+
     /// <summary>True when a stream backend can run this step without materialising.</summary>
     internal bool CanWrap => Wrap is not null;
 }
@@ -68,8 +73,12 @@ internal sealed class GeometryStep : RecipeStep
 /// <summary>
 /// A geometry step as the builder receives it: the execution forms without the position, which the builder assigns.
 /// </summary>
+internal delegate SourceRegionSet MapGeometryRegions(PixelRect destination, int sourceWidth, int sourceHeight,
+    int destWidth, int destHeight);
+
 internal sealed record GeometryDescriptor(string Name, GeometryRule Geometry, ReshapeGeometry Reshape,
-    WrapRowSource? Wrap = null, GeometryKind Kind = GeometryKind.Other, Resampler? Resampler = null);
+    WrapRowSource? Wrap = null, GeometryKind Kind = GeometryKind.Other, Resampler? Resampler = null,
+    MapGeometryRegions? MapRegions = null);
 
 /// <summary>The geometry operations the library exposes as steps. The compiler does not need this; the file-side
 /// paths do, to recognise the one geometry step a region pipeline can carry.</summary>
@@ -134,7 +143,7 @@ internal sealed class PipelineRecipeBuilder
     {
         ArgumentNullException.ThrowIfNull(geometry);
         _steps.Add(new GeometryStep(_steps.Count, geometry.Name, geometry.Geometry, geometry.Kind,
-            geometry.Resampler, geometry.Reshape, geometry.Wrap));
+            geometry.Resampler, geometry.Reshape, geometry.Wrap, geometry.MapRegions));
         _version++;
         return this;
     }

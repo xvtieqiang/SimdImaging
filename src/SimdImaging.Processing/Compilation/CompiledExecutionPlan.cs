@@ -86,6 +86,8 @@ internal sealed class CompiledExecutionPlan
         bool sizeKnown,
         int bandRows,
         WorkspacePlan workspace,
+        IReadOnlyList<CompiledStepInfo> stepInfo,
+        RegionCost regionCost,
         IReadOnlyList<string> explanation)
     {
         Recipe = recipe;
@@ -100,6 +102,8 @@ internal sealed class CompiledExecutionPlan
         SizeKnown = sizeKnown;
         BandRows = bandRows;
         Workspace = workspace;
+        StepInfo = Array.AsReadOnly(stepInfo.ToArray());
+        RegionCost = regionCost;
         Explanation = Array.AsReadOnly(explanation.ToArray());
     }
 
@@ -134,6 +138,12 @@ internal sealed class CompiledExecutionPlan
 
     /// <summary>What the plan is predicted to hold, and what the engine cannot see. Report only.</summary>
     internal WorkspacePlan Workspace { get; }
+
+    /// <summary>Per-step output geometry and source regions, derived backwards from the requested output.</summary>
+    internal IReadOnlyList<CompiledStepInfo> StepInfo { get; }
+
+    /// <summary>The source pixels the whole chain reads for the requested output rectangle.</summary>
+    internal RegionCost RegionCost { get; }
 
     /// <summary>One line per decision: step semantics, fusion, backend, refusal.</summary>
     internal IReadOnlyList<string> Explanation { get; }

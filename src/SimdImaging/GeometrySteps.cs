@@ -20,18 +20,30 @@ internal static class GeometrySteps
             (view, pool) => Canvas.Resize(view, width, height, resampler, ResizeMode.Stretch, Anchor.Centre,
                 default, pool),
             (source, pool, executeOptions) => new ResizeRowSource(source, width, height, resampler,
-                executeOptions ?? execute), Kind: GeometryKind.Resize, Resampler: resampler);
+                executeOptions ?? execute), Kind: GeometryKind.Resize, Resampler: resampler,
+            MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)));
 
     internal static GeometryDescriptor Resize(int width, int height, ResizeMode mode, Anchor anchor,
-        Resampler resampler, RgbaColor background) =>
-        new($"resize {width}x{height} {mode}", new FixedSizeRule(width, height),
-            (view, pool) => Canvas.Resize(view, width, height, resampler, mode, anchor, background, pool));
+        Resampler resampler, RgbaColor background)
+    {
+        MapGeometryRegions? map = mode == ResizeMode.Stretch
+            ? (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler))
+            : null;
+        return new($"resize {width}x{height} {mode}", new FixedSizeRule(width, height),
+            (view, pool) => Canvas.Resize(view, width, height, resampler, mode, anchor, background, pool),
+            MapRegions: map);
+    }
 
     internal static GeometryDescriptor Crop(PixelRect region) =>
         new($"crop {region.Width}x{region.Height}", new FixedSizeRule(region.Width, region.Height),
             (view, pool) => Transforms.Crop(view, region, pool),
             (source, pool, _) => new CropRowSource(source, region.X, region.Y, region.Width, region.Height, pool),
-            Kind: GeometryKind.Crop);
+            Kind: GeometryKind.Crop,
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
+                new PixelRect(destination.X + region.X, destination.Y + region.Y, destination.Width,
+                    destination.Height)).Clamp(sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor Rotate90(bool clockwise) =>
         new("rotate90", new SwappedSizeRule(),
@@ -43,7 +55,10 @@ internal static class GeometrySteps
     internal static GeometryDescriptor FlipHorizontal() =>
         new("flip-horizontal", GeometryRule.SameSize,
             (view, pool) => Transforms.FlipHorizontal(view, pool),
-            (source, pool, _) => new FlipRowSource(source), Kind: GeometryKind.FlipHorizontal);
+            (source, pool, _) => new FlipRowSource(source), Kind: GeometryKind.FlipHorizontal,
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
+                new PixelRect(sourceWidth - (destination.X + destination.Width), destination.Y,
+                    destination.Width, destination.Height)).Clamp(sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor FlipVertical() =>
         new("flip-vertical", GeometryRule.SameSize, (view, pool) => Transforms.FlipVertical(view, pool));
@@ -104,7 +119,10 @@ internal static class GeometrySteps
                 $"pad {left},{top},{right},{bottom}"),
             (view, pool) => Transforms.Pad(view, left, top, right, bottom, background, pool),
             (source, pool, _) => new PadRowSource(source, left, top, right, bottom, background),
-            Kind: GeometryKind.Pad);
+            Kind: GeometryKind.Pad,
+            MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
+                new PixelRect(destination.X - left, destination.Y - top, destination.Width,
+                    destination.Height)).Clamp(sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor Affine(AffineMatrix forward, int width, int height, RgbaColor background) =>
         new($"affine {width}x{height}", new FixedSizeRule(width, height),
@@ -146,7 +164,9 @@ internal static class GeometrySteps
     internal static GeometryDescriptor ResizeWithOptions(int width, int height, Resampler resampler,
         SampleOptions options, RgbaColor background) =>
         new($"resize {width}x{height}", new FixedSizeRule(width, height),
-            (view, pool) => Resample.ResizeWithOptions(view, width, height, resampler, options, background, pool));
+            (view, pool) => Resample.ResizeWithOptions(view, width, height, resampler, options, background, pool),
+            MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)));
 
     internal static GeometryDescriptor ResizeToWidth(int width, Resampler resampler) =>
         new($"resize to width {width}", new RelativeRule(
@@ -154,7 +174,9 @@ internal static class GeometrySteps
                 $"resize to width {width}"),
             (view, pool) => Canvas.Resize(view, width,
                 Math.Max(1, (int)MathF.Round((float)view.Height * width / view.Width)), resampler,
-                ResizeMode.Stretch, Anchor.Centre, default, pool));
+                ResizeMode.Stretch, Anchor.Centre, default, pool),
+            MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)));
 
     internal static GeometryDescriptor ResizeToHeight(int height, Resampler resampler) =>
         new($"resize to height {height}", new RelativeRule(
@@ -162,7 +184,9 @@ internal static class GeometrySteps
                 $"resize to height {height}"),
             (view, pool) => Canvas.Resize(view,
                 Math.Max(1, (int)MathF.Round((float)view.Width * height / view.Height)), height, resampler,
-                ResizeMode.Stretch, Anchor.Centre, default, pool));
+                ResizeMode.Stretch, Anchor.Centre, default, pool),
+            MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)));
 
     internal static GeometryDescriptor Thumbnail(int maxWidth, int maxHeight, Resampler resampler,
         float sharpenAmount) =>
@@ -182,7 +206,10 @@ internal static class GeometrySteps
                 return sharpenAmount > 0f
                     ? FilterOps.Sharpen(resized.View, sharpenAmount, 0.8f, pool)
                     : resized.Clone(pool);
-            });
+            },
+            MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight,
+                    Support(resampler) + 1));
 
     internal static GeometryDescriptor Rotate(float degrees, RgbaColor background) =>
         new($"rotate {degrees}", RotateRule(degrees),
@@ -215,5 +242,40 @@ internal static class GeometrySteps
         return scale >= 1f
             ? (width, height)
             : (Math.Max(1, (int)MathF.Round(width * scale)), Math.Max(1, (int)MathF.Round(height * scale)));
+    }
+
+    /// <summary>The largest source-pixel distance a resampler's kernel reaches.</summary>
+    private static int Support(Resampler resampler) => resampler switch
+    {
+        Resampler.Nearest => 0,
+        Resampler.Bilinear or Resampler.Triangle => 1,
+        Resampler.Bicubic => 2,
+        Resampler.Lanczos3 => 3,
+        _ => 4,
+    };
+
+    /// <summary>
+    /// The source rectangle a scaled output rectangle reads: the inverse-mapped rectangle widened by the kernel
+    /// support, clamped to the source. It is a conservative single region; a caller that can read rectangles uses
+    /// it as the tile/region request.
+    /// </summary>
+    private static SourceRegionSet ScaleRegion(PixelRect destination, int sourceWidth, int sourceHeight,
+        int destWidth, int destHeight, int support)
+    {
+        if (destWidth <= 0 || destHeight <= 0)
+            return SourceRegionSet.Empty;
+
+        var scaleX = (double)sourceWidth / destWidth;
+        var scaleY = (double)sourceHeight / destHeight;
+        var left = (int)Math.Floor(destination.X * scaleX) - support;
+        var top = (int)Math.Floor(destination.Y * scaleY) - support;
+        var right = (int)Math.Ceiling((destination.X + destination.Width) * scaleX) + support;
+        var bottom = (int)Math.Ceiling((destination.Y + destination.Height) * scaleY) + support;
+
+        left = Math.Clamp(left, 0, sourceWidth);
+        top = Math.Clamp(top, 0, sourceHeight);
+        right = Math.Clamp(right, 0, sourceWidth);
+        bottom = Math.Clamp(bottom, 0, sourceHeight);
+        return SourceRegionSet.Of(new PixelRect(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top)));
     }
 }

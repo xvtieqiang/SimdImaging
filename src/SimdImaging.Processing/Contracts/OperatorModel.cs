@@ -74,6 +74,12 @@ internal enum PassModel : byte
 
     /// <summary>A whole-image statistic is gathered before any output pixel is written.</summary>
     GatherThenApply = 2,
+
+    /// <summary>The operator scans or iterates several times (deconvolution, iterative relaxation).</summary>
+    MultiPass = 3,
+
+    /// <summary>The algorithm needs a global solution over the whole frame (seam path, global optimisation).</summary>
+    WholeFrameAlgorithm = 4,
 }
 
 /// <summary>The colour domain an operator computes in.</summary>
@@ -137,6 +143,8 @@ internal readonly record struct ExecutionRequirements(
 /// <summary>The colour and alpha rules an optimisation must not change.</summary>
 internal readonly record struct PixelSemantics(PixelDomain Domain, AlphaPolicy Alpha, Precision Precision)
 {
+    /// <summary>The edge rule the operator applies when it reads outside the image.</summary>
+    internal BorderMode Border { get; init; } = BorderMode.Clamp;
     /// <summary>Encoded samples, alpha preserved, one rounding after float work — the default.</summary>
     internal static PixelSemantics EncodedFloat { get; } = new(
         PixelDomain.Encoded, AlphaPolicy.Preserve, Precision.SingleRoundFloat);
@@ -169,7 +177,8 @@ internal enum PortRole : byte
 }
 
 /// <summary>One input a step reads.</summary>
-internal readonly record struct InputPort(string Name, PortRole Role, WorkingFormatMask Formats, bool Required);
+internal readonly record struct InputPort(string Name, PortRole Role, WorkingFormatMask Formats, bool Required,
+    IInputFootprint? Footprint = null);
 
 /// <summary>What a step produces. <paramref name="Format"/> is null when the output keeps the input's working
 /// format; a non-null value makes the step a format boundary that only the compiled recipe can place.</summary>

@@ -311,7 +311,8 @@ public static class PlanOps
             // The band window is still widened by the radius: the taps it reads locally need their neighbours.
             requirements: ExecutionRequirements.RowBands,
             haloX: radius,
-            haloY: radius);
+            haloY: radius,
+            semantics: PixelSemantics.EncodedFloat with { Border = border });
     }
 
     /// <summary>
@@ -364,7 +365,8 @@ public static class PlanOps
             new KernelImplementations(PlanSteps.Composite(overlay, x, y, mode)),
             formats, ExecutionRequirements.WholeImage,
             input: new InputPort("source", PortRole.Source, formats, Required: true),
-            input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true));
+            input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true,
+                new FixedFootprint(new PixelRect(x, y, overlay.Width, overlay.Height))));
     }
 
     /// <summary>W3C blend of <paramref name="overlay"/> at (<paramref name="x"/>, <paramref name="y"/>); same
@@ -377,7 +379,8 @@ public static class PlanOps
             new KernelImplementations(PlanSteps.BlendOverlay(overlay, x, y, mode)),
             formats, ExecutionRequirements.WholeImage,
             input: new InputPort("source", PortRole.Source, formats, Required: true),
-            input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true));
+            input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true,
+                new FixedFootprint(new PixelRect(x, y, overlay.Width, overlay.Height))));
     }
 
     /// <summary>
@@ -388,14 +391,16 @@ public static class PlanOps
         Neighborhood(nameof(RichardsonLucyOps.RichardsonLucy),
             RichardsonLucyOps.RequiredHalo(sigma, iterations),
             v => RichardsonLucyOps.RichardsonLucy(v, sigma, iterations),
-            (width, _, rows, format) => RichardsonLucyOps.ScratchBytes(width, rows, format));
+            (width, _, rows, format) => RichardsonLucyOps.ScratchBytes(width, rows, format),
+            pass: PassModel.MultiPass);
 
     /// <summary>Richardson-Lucy for a motion trail; the halo follows the trail radius per iteration.</summary>
     public static ImageOp RichardsonLucyMotion(int length, float angleDegrees, int iterations = 10) =>
         Neighborhood(nameof(RichardsonLucyOps.RichardsonLucyMotion),
             RichardsonLucyOps.RequiredHaloMotion(length, iterations),
             v => RichardsonLucyOps.RichardsonLucyMotion(v, length, angleDegrees, iterations),
-            (width, _, rows, format) => RichardsonLucyOps.ScratchBytes(width, rows, format));
+            (width, _, rows, format) => RichardsonLucyOps.ScratchBytes(width, rows, format),
+            pass: PassModel.MultiPass);
 
     /// <summary>
     /// Draws another image into a destination rectangle, resizing it to fit and fading it by
@@ -412,7 +417,8 @@ public static class PlanOps
             new KernelImplementations(PlanSteps.DrawImage(image, destination, opacity)),
             formats, ExecutionRequirements.WholeImage,
             input: new InputPort("source", PortRole.Source, formats, Required: true),
-            input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true));
+            input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true,
+                new FixedFootprint(new PixelRect(0, 0, image.Width, image.Height))));
     }
 
     /// <summary>
@@ -423,7 +429,8 @@ public static class PlanOps
         FormatStep("apply-gain-map", v => HdrOps.ApplyGainMap(v, gainMap, headroom, weight),
             (width, _, _, _) => 32L * width, WholeSourceFootprint.Instance, WorkingFormat.Rgba32F,
             PassModel.Single, PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded },
-            second: new InputPort("gain-map", PortRole.Overlay, WorkingFormatMask.All, Required: true));
+            second: new InputPort("gain-map", PortRole.Overlay, WorkingFormatMask.All, Required: true,
+                new FixedFootprint(new PixelRect(0, 0, gainMap.Width, gainMap.Height))));
 
     /// <summary>Thresholded bloom. The highlights and the blurred copy are both full frames, so this is a whole-image
     /// step (Frame only) rather than a banded one.</summary>
@@ -740,7 +747,8 @@ public static class PlanOps
                 v => GuidedFilterOps.GuidedFilter(v, guide, radius, epsilon, bandRows), radius, radius)),
             WorkingFormatMask.All, ExecutionRequirements.WholeImage,
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
-            input2: new InputPort("guide", PortRole.Guide, WorkingFormatMask.All, Required: true));
+            input2: new InputPort("guide", PortRole.Guide, WorkingFormatMask.All, Required: true,
+                new FixedFootprint(new PixelRect(0, 0, guide.Width, guide.Height))));
     }
 
     /// <summary>

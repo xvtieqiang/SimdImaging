@@ -1273,6 +1273,10 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 - **统一预算（P4 部分完成）**：编译期用 `WorkspacePlan.BoundedBytes` 上界做第一道总门；执行期计划段、流窗口、
   resize ring、格式帧、几何目标、tile 缓冲各自检查 `MaxWorkingBytes`。仍缺：跨阶段的单一执行期账户、spool/物化缓存、
   以及实际峰值与预测值的报告对账。下一步是把这些项汇总到一个执行期预算对象。
+- **区域推导（P1 部分完成）**：已有 `SourceRegionSet`、反向逐段推导、Resize/Crop/Pad/Flip 反向映射、每个输入端口
+  的 footprint、区域成本与 `RegionCost` 拒绝、每步解释。仍缺：Warp/Affine/旋转的区域反推（当前整图）、真实的
+  多矩形集合、成本驱动的后端比较/切分、公开的结构化解释；`Image.Apply/ProcessTo/ProcessRegion` 仍走旧
+  `ProcessingPlan` 路径，没有统一到 Compiler。
 - **Tile 后端（P5 第一刀已落地）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。未做：编码器端
   的 `IRegionSink` 实现（目前只有测试里的内存 Sink）、算子显式声明 `Partitioning.Tiles`（当前以 RowBands + halo 判定

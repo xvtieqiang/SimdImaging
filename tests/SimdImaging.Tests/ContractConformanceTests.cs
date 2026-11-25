@@ -85,9 +85,9 @@ public sealed class ContractConformanceTests
         new("median", () => PlanOps.Median(2), WorkingFormatMask.All, InputFootprintKind.Halo, 2),
         new("convolve", () => PlanOps.Convolve(new float[9], 1), WorkingFormatMask.All, InputFootprintKind.WholeSource, 1),
         new("richardson-lucy", () => PlanOps.RichardsonLucy(1f, 2), WorkingFormatMask.All,
-            InputFootprintKind.Halo, 12),
+            InputFootprintKind.Halo, 12, Pass: PassModel.MultiPass),
         new("richardson-lucy-motion", () => PlanOps.RichardsonLucyMotion(7, 30f, 2), WorkingFormatMask.All,
-            InputFootprintKind.Halo, 12),
+            InputFootprintKind.Halo, 12, Pass: PassModel.MultiPass),
         new("prewitt", () => PlanOps.Prewitt(), WorkingFormatMask.All, InputFootprintKind.Halo, 1),
         new("scharr", () => PlanOps.Scharr(), WorkingFormatMask.All, InputFootprintKind.Halo, 1),
         new("laplacian", () => PlanOps.Laplacian(), WorkingFormatMask.All, InputFootprintKind.Halo, 1),
@@ -251,6 +251,15 @@ public sealed class ContractConformanceTests
         step.HaloX.ShouldBe(op.HaloX);
         step.Kernel.ShouldBeSameAs(op.Kernel);
         step.Scratch.ShouldBeSameAs(op.Scratch);
+    }
+
+    [Fact]
+    public void MultiPassAndBorderSemantics_AreDeclared()
+    {
+        PlanOps.RichardsonLucy(1f, 2).Contract.Pass.ShouldBe(PassModel.MultiPass);
+        PlanOps.Convolve(new float[9], 1, BorderMode.Mirror).Contract.Semantics.Border
+            .ShouldBe(BorderMode.Mirror);
+        PlanOps.GaussianBlur(1f).Contract.Semantics.Border.ShouldBe(BorderMode.Clamp);
     }
 
     [Fact]

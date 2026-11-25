@@ -29,6 +29,9 @@ public enum RegionRefusal : byte
 
     /// <summary>A step changes the working format, which the region path's single destination format cannot carry.</summary>
     FormatChange,
+
+    /// <summary>The derived source read is far larger than the output region; a whole-frame run is cheaper.</summary>
+    RegionCost,
 }
 
 /// <summary>What <see cref="ProcessingPlan.TryExecuteRegion"/> did.</summary>

@@ -781,6 +781,26 @@ Workspace 为每个格式步记一帧 `FormatStep`，并用链中最宽的格式
 这仍然是**逐阶段 + 编译期上界**，不是单一执行期跟踪器：各段串行，前一段释放后下一段才开始；真正的全局账户
 （spool/物化缓存、实际峰值与预测的对账）留给 P4 后续。
 
+### 6.3.9 区域推导（P1 缺口补齐）
+
+编译器现在从请求的输出矩形 **反向** 推导每一步的源区域：
+
+- `SourceRegionSet` 表示一组源矩形，带 `Area`、`BoundingBox`、`Count`；`Normalize` 合并相接/重叠矩形，超过上限
+  （默认 32）时收敛为总包围盒；`Clamp` 裁到图像内。
+- `IInputFootprint.MapSourceRegions` 取代单一 `MapSourceRect` 作为推导入口；Identity / Halo / WholeSource /
+  BlockAligned / Fixed 五种。
+- 几何步带 `MapRegions`：Resize（按缩放比例 + 重采样核支持半径）、Crop（偏移）、Pad（负偏移）、FlipHorizontal
+  （镜像）；Rotate / Transpose / Warp / Affine / Perspective / 内容派生尺寸仍保守返回整图。
+- 每个 `OperatorStep` 的端口分别推导：主输入用算子 footprint，第二端口用 `InputPort.Footprint`（Composite / Blend /
+  DrawImage / ApplyGainMap / GuidedFilter 已声明 Fixed）。
+- 编译器把每步的 `CompiledStepInfo`（输出尺寸/格式、各端口源矩形、读取面积、放大比）放进
+  `CompiledExecutionPlan`，并写进 `Explanation`。
+- `RegionCost` 汇总整条链的源读取面积 / 输出面积；`CompileOptions.MaxRegionReadAmplification` 超限时把 Region
+  后端拒绝为 `RegionRefusal.RegionCost`。
+
+仍保守的地方：Warp/Affine/旋转按整图；区域集合目前实际只产生单矩形（模型支持多矩形）；成本只用于拒绝 Region，
+没有拿它和 Frame/Stream/Tile 做成本比较；解释仍是内部字符串。
+
 ### 6.4 超限行为
 
 - `MaxWorkingBytes` 不够 → 先尝试降档（Rgba32F → Rgba16，若算子是精确整数语义）→ 仍不够则抛，**不静默改精度**。

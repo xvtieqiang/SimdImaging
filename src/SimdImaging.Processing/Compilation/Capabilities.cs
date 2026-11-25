@@ -41,7 +41,12 @@ internal enum SinkCapabilities : byte
     /// <summary>An <c>IRowSink</c> can take rows as they are produced.</summary>
     RowWritable = 4,
 
-    /// <summary>An arbitrary rectangle can be written. No sink in the library advertises this yet, which is why
-    /// the Tile backend refuses every request.</summary>
+    /// <summary>An arbitrary rectangle can be written; the tile executor's sink contract.</summary>
     RandomRegionWrite = 8,
+
+    /// <summary>The sink can place a tile independently of its neighbours.</summary>
+    TileWrite = 16,
+
+    /// <summary>Concurrent tile or region writes are allowed.</summary>
+    ConcurrentWrite = 32,
 }

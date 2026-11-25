@@ -59,6 +59,8 @@ public sealed partial class Image
                      SourceCapabilities.StableContent,
             Sink = SinkCapabilities.RandomRegionWrite,
             TileRequested = true,
+            TileWidth = tileWidth,
+            TileHeight = tileHeight,
             Execute = options ?? new ExecuteOptions(),
         });
 
