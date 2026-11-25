@@ -637,7 +637,13 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 - **解释**：每个决定一行 `Explanation`，测试直接断言这些行。
 
 `ImagePipeline` 已接入：`_pending` 换成 `PipelineRecipeBuilder`，几何方法只追加步骤，`ToImage()`/barrier 时才
-编译并顺序执行 section；几何不再在调用点物化。`ImageTranscode` 的接入是下一步。
+编译并顺序执行 section；几何不再在调用点物化。
+
+`ImageTranscode` 也已接入：`_before` / `_after` / `_hasResize` / `_preStages` 全部删除，链是一条 recipe，顺序就是
+调用顺序。这修掉一个真实的顺序错误——此前 `Resize(...).Crop(...)` 的 crop 会作为 preStage 在 resize **之前**执行，
+现在按书写顺序在 resize 之后执行（`CropAfterResize_CropsTheResizedImage` 钉住）。`BuildChain` 由编译出的 section
+组装拉链；`ToImageCore` 走同一份 section 列表的物化路径；region 只接受「算子步 + 末尾一个 resize」，其余组合显式
+拒绝而不是静默丢弃。
 
 ### 6.4 超限行为
 

@@ -7,7 +7,7 @@ namespace SimdImaging.Processing.Compilation;
 internal delegate WorkingBuffer ReshapeGeometry(PixelView source, IPixelPool? pool);
 
 /// <summary>Presents a geometry step as a row source: what it does when the image is streamed.</summary>
-internal delegate IRowSource WrapRowSource(IRowSource source, IPixelPool? pool);
+internal delegate IRowSource WrapRowSource(IRowSource source, IPixelPool? pool, ExecuteOptions? execute);
 
 /// <summary>
 /// One step of a <see cref="PipelineRecipe"/>: either an operator or a geometry change.
@@ -41,13 +41,21 @@ internal sealed class OperatorStep(int index, ImageOp op) : RecipeStep(index, op
 /// </summary>
 internal sealed class GeometryStep : RecipeStep
 {
-    internal GeometryStep(int index, string name, GeometryRule geometry, ReshapeGeometry reshape,
-        WrapRowSource? wrap = null)
+    internal GeometryStep(int index, string name, GeometryRule geometry, GeometryKind kind, Resampler? resampler,
+        ReshapeGeometry reshape, WrapRowSource? wrap = null)
         : base(index, name, geometry)
     {
+        Kind = kind;
+        Resampler = resampler;
         Reshape = reshape ?? throw new ArgumentNullException(nameof(reshape));
         Wrap = wrap;
     }
+
+    internal GeometryKind Kind { get; }
+
+    /// <summary>The resampler a resize step uses; null for every other kind. The region path needs it because
+    /// <c>Image.ResizeRegion</c> takes the resampler as an argument rather than closing over it.</summary>
+    internal Resampler? Resampler { get; }
 
     internal ReshapeGeometry Reshape { get; }
 
@@ -61,7 +69,18 @@ internal sealed class GeometryStep : RecipeStep
 /// A geometry step as the builder receives it: the execution forms without the position, which the builder assigns.
 /// </summary>
 internal sealed record GeometryDescriptor(string Name, GeometryRule Geometry, ReshapeGeometry Reshape,
-    WrapRowSource? Wrap = null);
+    WrapRowSource? Wrap = null, GeometryKind Kind = GeometryKind.Other, Resampler? Resampler = null);
+
+/// <summary>The geometry operations the library exposes as steps. The compiler does not need this; the file-side
+/// paths do, to recognise the one geometry step a region pipeline can carry.</summary>
+internal enum GeometryKind : byte
+{
+    Other = 0,
+    Resize = 1,
+    Crop = 2,
+    Pad = 3,
+    FlipHorizontal = 4,
+}
 
 /// <summary>
 /// An immutable chain of operator and geometry steps. Built once by a builder and then compiled as often as the
@@ -99,6 +118,10 @@ internal sealed class PipelineRecipeBuilder
 
     internal bool IsEmpty => _steps.Count == 0;
 
+    /// <summary>The steps appended so far, in order. Read-only by contract; callers use it to answer questions like
+    /// "is there already a resize", not to edit the chain.</summary>
+    internal IReadOnlyList<RecipeStep> Steps => _steps;
+
     internal PipelineRecipeBuilder Append(ImageOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
@@ -110,8 +133,8 @@ internal sealed class PipelineRecipeBuilder
     internal PipelineRecipeBuilder Append(GeometryDescriptor geometry)
     {
         ArgumentNullException.ThrowIfNull(geometry);
-        _steps.Add(new GeometryStep(_steps.Count, geometry.Name, geometry.Geometry, geometry.Reshape,
-            geometry.Wrap));
+        _steps.Add(new GeometryStep(_steps.Count, geometry.Name, geometry.Geometry, geometry.Kind,
+            geometry.Resampler, geometry.Reshape, geometry.Wrap));
         _version++;
         return this;
     }

@@ -1,6 +1,7 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Compilation;
 using SimdImaging.Processing.Geometry;
 
 namespace SimdImaging;
@@ -31,27 +32,21 @@ public sealed record TranscodeOptions
 
 /// <summary>
 /// A file (or stream) described as a pipeline: <c>ImageTranscode.From(path).GaussianBlur(1f).Resize(w, h).Save(dest)</c>.
-/// It is the file side of <c>Image.Pipe()</c>, where there is no <see cref="Image"/> to pipe; the chain is described
-/// with the same <see cref="ProcessingPlan"/> the in-memory pipeline compiles to, and <see cref="Run(string, CancellationToken)"/>
-/// routes it to the streaming entry points, so the whole thing runs one pass.
-/// <para>Without <see cref="Region(PixelRect)"/> every stage streams: decode → plan → resize → encode, holding a band
-/// and a ring. With a region only the rectangle is decoded (TIFF), and <see cref="ToImage"/> materialises the result
-/// by nature.</para>
-/// <para>A chain is single use: the source stream is read once and destination streams are written once.</para>
+/// The chain is one <see cref="PipelineRecipe"/>, the same object <see cref="ImagePipeline"/> builds; the compiler
+/// decides whether it runs as rows or has to be materialised, and why. <see cref="Run(string, CancellationToken)"/>
+/// routes the compiled result to the existing executors.
+/// <para>Without <see cref="Region(PixelRect)"/> every stage streams or materialises as one chain, holding a band and
+/// a ring. With a region only the rectangle is decoded (TIFF), and <see cref="ToImage"/> materialises the result by
+/// nature.</para>
+/// <para>A chain is single use over a stream: the source stream is read once and destination streams are written once.
+/// A path source reopens, so it can be run more than once.</para>
 /// </summary>
 public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
 {
     private readonly string? _path;
     private readonly Stream? _stream;
-    private readonly ProcessingPlan _before = new();
-    private readonly ProcessingPlan _after = new();
-
-    private bool _hasResize;
-    private int _resizeWidth;
-    private int _resizeHeight;
-    private Resampler _resampler = Resampler.Bicubic;
+    private readonly PipelineRecipeBuilder _recipe = new();
     private PixelRect? _region;
-    private readonly List<PreStage> _preStages = [];
     private TranscodeOptions _options = TranscodeOptions.Default;
     private bool _ran;
 
@@ -94,7 +89,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
     /// Starts the chain from a rectangle of the source. It runs before every other stage, so the plan and the resize
     /// see the crop as their image; with <see cref="Region"/> the rectangle is already chosen, and this is refused.
     /// </summary>
-    /// <exception cref="InvalidOperationException">A crop or a region is already set.</exception>
+    /// <exception cref="InvalidOperationException">A region is already set.</exception>
     public ImageTranscode Crop(PixelRect rect)
     {
         if (_region is not null)
@@ -102,7 +97,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 "Region already selects the rectangle; a crop on top of it is not supported.");
         if (rect.Width <= 0 || rect.Height <= 0)
             throw new ArgumentException($"The crop {rect} is empty.", nameof(rect));
-        _preStages.Add(new CropStage(rect));
+        _recipe.Append(GeometrySteps.Crop(rect));
         return this;
     }
 
@@ -117,14 +112,14 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         ArgumentOutOfRangeException.ThrowIfNegative(top);
         ArgumentOutOfRangeException.ThrowIfNegative(right);
         ArgumentOutOfRangeException.ThrowIfNegative(bottom);
-        _preStages.Add(new PadStage(left, top, right, bottom, background));
+        _recipe.Append(GeometrySteps.Pad(left, top, right, bottom, background));
         return this;
     }
 
     /// <summary>Mirrors every row left to right. Row-local: streamable (vertical flips are not).</summary>
     public ImageTranscode FlipHorizontal()
     {
-        _preStages.Add(new FlipHorizontalStage());
+        _recipe.Append(GeometrySteps.FlipHorizontal());
         return this;
     }
 
@@ -136,13 +131,17 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         if (plan.HasResize)
             throw new InvalidOperationException(
                 "A plan that ends with a resize cannot be a stage; call Resize on the transcode instead.");
-        if (_hasResize)
-        {
-            _after.Append(plan);
-            return this;
-        }
+        foreach (var step in plan.Steps)
+            _recipe.Append(step.Definition);
+        return this;
+    }
 
-        _before.Append(plan);
+    /// <summary>Appends one plan step at the current position.</summary>
+    protected override ImageTranscode Step(ImageOp op) => Append(op);
+
+    private ImageTranscode Append(ImageOp op)
+    {
+        _recipe.Append(op);
         return this;
     }
 
@@ -152,18 +151,12 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
-        if (_hasResize)
+        if (_recipe.Steps.Any(step => step is GeometryStep { Kind: GeometryKind.Resize }))
             throw new InvalidOperationException("The chain already has a resize; a second one is a second call.");
 
-        _hasResize = true;
-        _resizeWidth = width;
-        _resizeHeight = height;
-        _resampler = resampler;
+        _recipe.Append(GeometrySteps.Resize(width, height, resampler));
         return this;
     }
-
-    /// <summary>Appends one plan step at the current position (before or after the resize).</summary>
-    protected override ImageTranscode Step(ImageOp op) => Append(new ProcessingPlan().Add(op));
 
     /// <summary>Replaces the read / write / execution options. The chain itself is unchanged.</summary>
     public ImageTranscode WithOptions(TranscodeOptions options)
@@ -175,14 +168,22 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
     /// <summary>The output size with every stage applied, given the decoded size.</summary>
     private (int Width, int Height) SizeOf(int sourceWidth, int sourceHeight)
     {
-        if (_hasResize)
-            return (_resizeWidth, _resizeHeight);
+        var width = sourceWidth;
+        var height = sourceHeight;
+        foreach (var step in _recipe.Steps)
+        {
+            if (step is not GeometryStep geometry)
+                continue;
 
-        int? width = sourceWidth;
-        int? height = sourceHeight;
-        foreach (var stage in _preStages)
-            (width, height) = stage.Size(width, height);
-        return (width!.Value, height!.Value);
+            if (!geometry.Geometry.SizeKnown)
+                throw new NotSupportedException(
+                    $"The geometry step '{geometry.Name}' derives its size from the content; this path needs the " +
+                    "output size before it can encode.");
+
+            (width, height) = geometry.Geometry.Map(width, height);
+        }
+
+        return (width, height);
     }
 
     /// <summary>Runs the chain and writes the result to <paramref name="destinationPath"/>.</summary>
@@ -223,57 +224,15 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         Task.Run(() => ToImage(cancellationToken), cancellationToken);
 
     /// <summary>
-    /// Runs the chain, writes the result and reports how it ran. Without a region this streams end to end; with one
-    /// the region is materialised and encoded.
+    /// Runs the chain, writes the result and reports how it ran. Without a region this streams when the compiler says
+    /// the stream can run the whole recipe; with one the region is materialised and encoded.
     /// </summary>
     public ProcessReport Run(string destinationPath, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(destinationPath);
         EnsureSingleUse();
-
-        if (_region is { } region)
-        {
-            using var image = ToImageCore(cancellationToken);
-            Image.Save(image, destinationPath, _options.Save, cancellationToken);
-            return MaterializedReport(image, StreamRefusal.None);
-        }
-
-        var refusal = _before.CanStream();
-        if (refusal == StreamRefusal.None && _after.Steps.Count > 0)
-            refusal = _after.CanStream();
-        if (refusal != StreamRefusal.None)
-        {
-            using var materialisedImage = ToImageCore(cancellationToken);
-            Image.Save(materialisedImage, destinationPath, _options.Save, cancellationToken);
-            return MaterializedReport(materialisedImage, refusal);
-        }
-
-        // A forward-only source cannot be rewound, so a whole-input decode has to happen here: ToImageCore reads
-        // the stream exactly once, which is all such a source allows. ProcessChain would have to refuse it.
-        if (_stream is not null && !_stream.CanSeek && Image.RequiresWholeInput(_options.Load))
-        {
-            using var wholeInput = ToImageCore(cancellationToken);
-            Image.Save(wholeInput, destinationPath, _options.Save, cancellationToken);
-            return MaterializedReport(wholeInput, StreamRefusal.DecodeNeedsWholeInput);
-        }
-
-        // Both source shapes end in the same row chain: a file is opened and handed to ProcessChain, and a stream
-        // is handed to it directly. The stream form used to fall through to ToImageCore, which decoded the whole
-        // image and then encoded it — a materialisation caused by the entry point, not by the plan, and one the
-        // report could not even name (`Refusal = None`).
-        var format = Image.FormatFromExtension(Path.GetExtension(destinationPath));
-        if (_path is not null)
-        {
-            // Source first: a missing input must not truncate an existing destination.
-            using var input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-            return Image.ProcessChain(input, output, format, SizeOf, BuildChain, ProcessOptions(), cancellationToken);
-        }
-
-        using var destination = new FileStream(destinationPath, FileMode.Create, FileAccess.Write,
-            FileShare.None);
-        return Image.ProcessChain(_stream!, destination, format, SizeOf, BuildChain, ProcessOptions(),
-            cancellationToken);
+        return Execute(destinationPath, destination: null,
+            Image.FormatFromExtension(Path.GetExtension(destinationPath)), cancellationToken);
     }
 
     /// <summary>The stream form of <see cref="Run(string, CancellationToken)"/>; the container is
@@ -288,79 +247,143 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 "The source and the destination are the same stream; writing while reading would corrupt both. " +
                 "Use two streams, a path, or write to a separate destination.", nameof(destination));
         EnsureSingleUse();
+        return Execute(null, destination, format, cancellationToken);
+    }
+
+    private ProcessReport Execute(string? destinationPath, Stream? destination, ImageFormat format,
+        CancellationToken cancellationToken)
+    {
+        var recipe = _recipe.Build();
 
         if (_region is { } region)
         {
-            using var image = ToImageCore(cancellationToken);
-            var bytes = Image.Encode(image, format, _options.Save, cancellationToken);
-            destination.Write(bytes, 0, bytes.Length);
-            return MaterializedReport(image, StreamRefusal.None);
+            using var image = ToRegionCore(region, cancellationToken);
+            return Write(image, destinationPath, destination, format, StreamRefusal.None, cancellationToken);
         }
 
-        var refusal = _before.CanStream();
-        if (refusal == StreamRefusal.None && _after.Steps.Count > 0)
-            refusal = _after.CanStream();
+        // The plan-level refusals first: they keep the reason the caller sees, and materialising is the only thing a
+        // whole-image step can do.
+        var refusal = PipelineCompiler.CanStream(recipe, PreflightOptions(), out _);
         if (refusal != StreamRefusal.None)
         {
-            using var materialisedImage = ToImageCore(cancellationToken);
-            var bytes = Image.Encode(materialisedImage, format, _options.Save, cancellationToken);
-            destination.Write(bytes, 0, bytes.Length);
-            return MaterializedReport(materialisedImage, refusal);
+            using var image = ToImageCore(cancellationToken);
+            return Write(image, destinationPath, destination, format, refusal, cancellationToken);
         }
 
-        // Same one-pass materialisation as the path form, for the same reason.
+        // A forward-only source cannot be rewound, so a whole-input decode has to happen here: ToImageCore reads
+        // the stream exactly once, which is all such a source allows. ProcessChain would have to refuse it.
         if (_stream is not null && !_stream.CanSeek && Image.RequiresWholeInput(_options.Load))
         {
-            using var wholeInput = ToImageCore(cancellationToken);
-            var bytes = Image.Encode(wholeInput, format, _options.Save, cancellationToken);
-            destination.Write(bytes, 0, bytes.Length);
-            return MaterializedReport(wholeInput, StreamRefusal.DecodeNeedsWholeInput);
+            using var image = ToImageCore(cancellationToken);
+            return Write(image, destinationPath, destination, format, StreamRefusal.DecodeNeedsWholeInput,
+                cancellationToken);
+        }
+
+        // Source first: a missing input must not truncate an existing destination.
+        if (destinationPath is not null)
+        {
+            if (_path is not null)
+            {
+                using var input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write,
+                    FileShare.None);
+                return Image.ProcessChain(input, output, format, SizeOf, BuildChain, ProcessOptions(),
+                    cancellationToken);
+            }
+
+            using var destinationFile = new FileStream(destinationPath, FileMode.Create, FileAccess.Write,
+                FileShare.None);
+            return Image.ProcessChain(_stream!, destinationFile, format, SizeOf, BuildChain, ProcessOptions(),
+                cancellationToken);
         }
 
         if (_path is not null)
         {
             using var input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            return Image.ProcessChain(input, destination, format, SizeOf, BuildChain, ProcessOptions(),
+            return Image.ProcessChain(input, destination!, format, SizeOf, BuildChain, ProcessOptions(),
                 cancellationToken);
         }
 
-        return Image.ProcessChain(_stream!, destination, format, SizeOf, BuildChain, ProcessOptions(),
+        return Image.ProcessChain(_stream!, destination!, format, SizeOf, BuildChain, ProcessOptions(),
             cancellationToken);
     }
 
-    /// <summary>The pull chain the stages describe, with every stage's buffers owned by the returned source.</summary>
+    private ProcessReport Write(Image image, string? destinationPath, Stream? destination, ImageFormat format,
+        StreamRefusal refusal, CancellationToken cancellationToken)
+    {
+        if (destinationPath is not null)
+            Image.Save(image, destinationPath, _options.Save, cancellationToken);
+        else
+        {
+            var bytes = Image.Encode(image, format, _options.Save, cancellationToken);
+            destination!.Write(bytes, 0, bytes.Length);
+        }
+
+        return MaterializedReport(image, refusal);
+    }
+
+    /// <summary>What the compiler needs to know before the source is decoded. Sizes do not affect the stream
+    /// decision (only the sections do), so they are placeholders here.</summary>
+    private CompileOptions PreflightOptions() => new()
+    {
+        SourceWidth = 1,
+        SourceHeight = 1,
+        SourceFormat = WorkingFormat.Rgba8,
+        Source = SourceCapabilitiesFor(),
+        Sink = SinkCapabilities.RowWritable,
+        Execute = _options.Execute,
+    };
+
+    private SourceCapabilities SourceCapabilitiesFor()
+    {
+        if (_path is not null)
+            return SourceCapabilities.Seekable | SourceCapabilities.Replayable | SourceCapabilities.StableContent;
+        return _stream!.CanSeek
+            ? SourceCapabilities.Seekable | SourceCapabilities.StableContent
+            : SourceCapabilities.ForwardOnly;
+    }
+
+    /// <summary>The pull chain the compiled sections describe, with every stage's buffers owned by the returned
+    /// source.</summary>
     private IRowSource BuildChain(IRowSource source)
     {
+        var recipe = _recipe.Build();
+        var compiled = PipelineCompiler.Compile(recipe, new CompileOptions
+        {
+            SourceWidth = source.Width,
+            SourceHeight = source.Height,
+            SourceFormat = source.Format,
+            Source = SourceCapabilitiesFor(),
+            Sink = SinkCapabilities.RowWritable,
+            Execute = _options.Execute,
+        });
+
+        if (compiled.Backend != ExecutionBackend.Stream)
+            throw new InvalidOperationException(
+                $"The stream pre-flight accepted a plan the compiler refused ({compiled.StreamRefusal}).");
+
         var owned = new List<IDisposable>();
         IRowSource current = source;
-
-        foreach (var preStage in _preStages)
+        foreach (var section in compiled.Sections)
         {
-            var next = preStage.Wrap(current, _options.Region?.Pool);
+            if (section.Kind == CompiledSectionKind.OperatorRun)
+            {
+                var steps = new PlanStep[section.StepCount];
+                for (var i = 0; i < steps.Length; i++)
+                    steps[i] = compiled.Steps[section.FirstStep + i];
+
+                var stage = new PlanRowSource(ProcessingPlan.FromCompiled(steps, ProcessingPlan.DefaultBandRows),
+                    current, _options.Execute);
+                owned.Add(stage);
+                current = stage;
+                continue;
+            }
+
+            var geometry = (GeometryStep)recipe.Steps[section.RecipeIndex];
+            var next = geometry.Wrap!(current, _options.Region?.Pool, _options.Execute);
             if (next is IDisposable disposable)
                 owned.Add(disposable);
             current = next;
-        }
-
-        if (_before.Steps.Count > 0)
-        {
-            var stage = new PlanRowSource(_before, current, _options.Execute);
-            owned.Add(stage);
-            current = stage;
-        }
-
-        if (_hasResize)
-        {
-            var stage = new ResizeRowSource(current, _resizeWidth, _resizeHeight, _resampler, _options.Execute);
-            owned.Add(stage);
-            current = stage;
-        }
-
-        if (_after.Steps.Count > 0)
-        {
-            var stage = new PlanRowSource(_after, current, _options.Execute);
-            owned.Add(stage);
-            current = stage;
         }
 
         return owned.Count == 0 ? current : new OwnedChain(current, owned);
@@ -381,8 +404,8 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
     }
 
     /// <summary>
-    /// Runs the chain into memory. With a region this decodes the rectangle only; without one it is
-    /// <c>Load → Apply → Resize → Apply</c>.
+    /// Runs the chain into memory. With a region this decodes the rectangle only; without one it loads the source,
+    /// then executes the compiled sections: operator runs as plans, geometry as the reshape it used to call.
     /// </summary>
     public Image ToImage(CancellationToken cancellationToken = default)
     {
@@ -393,58 +416,48 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
     private Image ToImageCore(CancellationToken cancellationToken)
     {
         if (_region is { } region)
-        {
-            if (_preStages.Count > 0)
-                throw new NotSupportedException(
-                    "Region already selects the rectangle; crop/pad/flip stages on top of it are not supported. " +
-                    "Use Region for the rectangle and run the rest on the returned image.");
+            return ToRegionCore(region, cancellationToken);
 
-            if (_path is not null)
-            {
-                return _hasResize
-                    ? Image.ResizeRegion(_path, _before, region, _resizeWidth, _resizeHeight, _resampler, _options,
-                        cancellationToken)
-                    : Image.ProcessRegion(_path, _before, region, _options, cancellationToken);
-            }
-
-            return _hasResize
-                ? Image.ResizeRegion(_stream!, _before, region, _resizeWidth, _resizeHeight, _resampler, _options,
-                    cancellationToken)
-                : Image.ProcessRegion(_stream!, _before, region, _options, cancellationToken);
-        }
-
+        var recipe = _recipe.Build();
         var current = _path is not null
             ? Image.Load(_path, _options.Load, cancellationToken)
             : Image.Load(_stream!, _options.Load, cancellationToken);
 
         try
         {
-            foreach (var preStage in _preStages)
-            {
-                var next = preStage.Apply(current);
-                current.Dispose();
-                current = next;
-            }
+            if (recipe.Count == 0)
+                return current;
 
-            if (_before.Steps.Count > 0)
+            var compiled = PipelineCompiler.Compile(recipe, new CompileOptions
             {
-                var filtered = current.ApplyWithOptions(_before, _options.Execute);
-                current.Dispose();
-                current = filtered;
-            }
+                SourceWidth = current.Width,
+                SourceHeight = current.Height,
+                SourceFormat = current.Format,
+                Source = SourceCapabilitiesFor(),
+                Sink = SinkCapabilities.None,
+                Execute = _options.Execute,
+            });
 
-            if (_hasResize)
+            foreach (var section in compiled.Sections)
             {
-                var resized = current.Pipe().Resize(_resizeWidth, _resizeHeight, _resampler).ToImage();
-                current.Dispose();
-                current = resized;
-            }
+                if (section.Kind == CompiledSectionKind.OperatorRun)
+                {
+                    var steps = new PlanStep[section.StepCount];
+                    for (var i = 0; i < steps.Length; i++)
+                        steps[i] = compiled.Steps[section.FirstStep + i];
 
-            if (_after.Steps.Count > 0)
-            {
-                var finished = current.ApplyWithOptions(_after, _options.Execute);
+                    var next = current.ApplyWithOptions(
+                        ProcessingPlan.FromCompiled(steps, ProcessingPlan.DefaultBandRows), _options.Execute);
+                    current.Dispose();
+                    current = next;
+                    continue;
+                }
+
+                var geometry = (GeometryStep)recipe.Steps[section.RecipeIndex];
+                var reshaped = current.ReplaceBuffer(
+                    geometry.Reshape(current[0].Pixels.View, _options.Region?.Pool));
                 current.Dispose();
-                current = finished;
+                current = reshaped;
             }
 
             return current;
@@ -456,6 +469,51 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         }
     }
 
+    /// <summary>The region path: operator steps, then at most one trailing resize. Anything else would silently
+    /// produce a different image from the whole-file path.</summary>
+    private Image ToRegionCore(PixelRect region, CancellationToken cancellationToken)
+    {
+        var recipe = _recipe.Build();
+        var steps = new List<PlanStep>(recipe.Count);
+        GeometryStep? resize = null;
+        foreach (var step in recipe.Steps)
+        {
+            if (step is OperatorStep op)
+            {
+                if (resize is not null)
+                    throw new NotSupportedException(
+                        "A region run supports operator steps before the resize only; run the rest on the returned image.");
+                steps.Add(new PlanStep(op.Operator));
+                continue;
+            }
+
+            var geometry = (GeometryStep)step;
+            if (geometry.Kind == GeometryKind.Resize && step.Index == recipe.Count - 1)
+            {
+                resize = geometry;
+                continue;
+            }
+
+            throw new NotSupportedException(
+                "Region already selects the rectangle; crop/pad/flip and other geometry stages on top of it are not " +
+                "supported. Use Region for the rectangle and run the rest on the returned image.");
+        }
+
+        var plan = ProcessingPlan.FromCompiled(steps, ProcessingPlan.DefaultBandRows);
+        if (resize is not null)
+        {
+            var (width, height) = resize.Geometry.Map(region.Width, region.Height);
+            var resampler = resize.Resampler ?? Resampler.Bicubic;
+            return _path is not null
+                ? Image.ResizeRegion(_path, plan, region, width, height, resampler, _options, cancellationToken)
+                : Image.ResizeRegion(_stream!, plan, region, width, height, resampler, _options, cancellationToken);
+        }
+
+        return _path is not null
+            ? Image.ProcessRegion(_path, plan, region, _options, cancellationToken)
+            : Image.ProcessRegion(_stream!, plan, region, _options, cancellationToken);
+    }
+
     /// <summary>One options bag for the pipeline; the region-specific execution knobs are unified here so a caller
     /// never has to remember which of the two carries the degree.</summary>
     private ProcessOptions ProcessOptions() => new()
@@ -465,46 +523,6 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         Execute = _options.Execute,
         PreserveMetadata = _options.PreserveMetadata,
     };
-
-    /// <summary>One row-local geometry stage: crop, pad or horizontal flip.</summary>
-    private abstract record PreStage
-    {
-        public abstract (int? Width, int? Height) Size(int? width, int? height);
-
-        public abstract IRowSource Wrap(IRowSource source, IPixelPool? pool);
-
-        public abstract Image Apply(Image image);
-    }
-
-    private sealed record CropStage(PixelRect Rect) : PreStage
-    {
-        public override (int? Width, int? Height) Size(int? width, int? height) => (Rect.Width, Rect.Height);
-
-        public override IRowSource Wrap(IRowSource source, IPixelPool? pool) =>
-            new CropRowSource(source, Rect.X, Rect.Y, Rect.Width, Rect.Height, pool);
-
-        public override Image Apply(Image image) => image.Pipe().Crop(Rect).ToImage();
-    }
-
-    private sealed record PadStage(int Left, int Top, int Right, int Bottom, RgbaColor Color) : PreStage
-    {
-        public override (int? Width, int? Height) Size(int? width, int? height) =>
-            (width + Left + Right, height + Top + Bottom);
-
-        public override IRowSource Wrap(IRowSource source, IPixelPool? pool) =>
-            new PadRowSource(source, Left, Top, Right, Bottom, Color);
-
-        public override Image Apply(Image image) => image.Pipe().Pad(Left, Top, Right, Bottom, Color).ToImage();
-    }
-
-    private sealed record FlipHorizontalStage : PreStage
-    {
-        public override (int? Width, int? Height) Size(int? width, int? height) => (width, height);
-
-        public override IRowSource Wrap(IRowSource source, IPixelPool? pool) => new FlipRowSource(source);
-
-        public override Image Apply(Image image) => image.Pipe().FlipHorizontal().ToImage();
-    }
 
     /// <summary>A path source reopens for each call; a stream has only one pass in it, and reading it twice would
     /// silently produce a truncated image. Say so instead.</summary>

@@ -19,7 +19,8 @@ internal static class GeometrySteps
         new($"resize {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Canvas.Resize(view, width, height, resampler, ResizeMode.Stretch, Anchor.Centre,
                 default, pool),
-            (source, pool) => new ResizeRowSource(source, width, height, resampler, execute));
+            (source, pool, executeOptions) => new ResizeRowSource(source, width, height, resampler,
+                executeOptions ?? execute), Kind: GeometryKind.Resize, Resampler: resampler);
 
     internal static GeometryDescriptor Resize(int width, int height, ResizeMode mode, Anchor anchor,
         Resampler resampler, RgbaColor background) =>
@@ -29,7 +30,8 @@ internal static class GeometrySteps
     internal static GeometryDescriptor Crop(PixelRect region) =>
         new($"crop {region.Width}x{region.Height}", new FixedSizeRule(region.Width, region.Height),
             (view, pool) => Transforms.Crop(view, region, pool),
-            (source, pool) => new CropRowSource(source, region.X, region.Y, region.Width, region.Height, pool));
+            (source, pool, _) => new CropRowSource(source, region.X, region.Y, region.Width, region.Height, pool),
+            Kind: GeometryKind.Crop);
 
     internal static GeometryDescriptor Rotate90(bool clockwise) =>
         new("rotate90", new SwappedSizeRule(),
@@ -41,7 +43,7 @@ internal static class GeometrySteps
     internal static GeometryDescriptor FlipHorizontal() =>
         new("flip-horizontal", GeometryRule.SameSize,
             (view, pool) => Transforms.FlipHorizontal(view, pool),
-            (source, pool) => new FlipRowSource(source));
+            (source, pool, _) => new FlipRowSource(source), Kind: GeometryKind.FlipHorizontal);
 
     internal static GeometryDescriptor FlipVertical() =>
         new("flip-vertical", GeometryRule.SameSize, (view, pool) => Transforms.FlipVertical(view, pool));

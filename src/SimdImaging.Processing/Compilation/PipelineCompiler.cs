@@ -106,6 +106,24 @@ internal static class PipelineCompiler
             tileRefusal, width, height, sizeKnown, explanation);
     }
 
+    /// <summary>
+    /// Whether the stream backend can run this recipe, without needing the source dimensions: the file-side paths
+    /// ask this before they open a row reader, and the full <see cref="Compile"/> asks the same method again with
+    /// the decoded size for the sections. <paramref name="blocked"/> names a non-refusal reason (observer, sink,
+    /// source) or is null.
+    /// </summary>
+    internal static StreamRefusal CanStream(PipelineRecipe recipe, CompileOptions options, out string? blocked)
+    {
+        var steps = new List<PlanStep>(recipe.Count);
+        foreach (var step in recipe.Steps)
+        {
+            if (step is OperatorStep op)
+                steps.Add(new PlanStep(op.Operator));
+        }
+
+        return ClassifyStream(recipe, steps, options, out blocked);
+    }
+
     private static void ValidateFormats(PipelineRecipe recipe, WorkingFormat format)
     {
         var mask = Mask(format);

@@ -41,7 +41,7 @@ public sealed class CompilerTests
 
     private static GeometryDescriptor FixedGeometry(int width, int height, bool wrap = true)
     {
-        WrapRowSource? wrapper = wrap ? (source, pool) => source : null;
+        WrapRowSource? wrapper = wrap ? (source, pool, execute) => source : null;
         return new($"resize-{width}x{height}", new FixedSizeRule(width, height),
             (source, pool) => Transforms.Copy(source, pool), wrapper);
     }
