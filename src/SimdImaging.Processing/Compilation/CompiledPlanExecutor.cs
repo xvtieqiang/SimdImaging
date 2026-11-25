@@ -65,6 +65,24 @@ internal static class CompiledPlanExecutor
     }
 
     /// <summary>
+    /// Runs the plan one rectangle at a time through an <see cref="IRegionSource"/> and an
+    /// <see cref="IRegionSink"/>; the per-tile work is <see cref="RegionExecutor"/>'s, the walk is
+    /// <see cref="TileExecutor"/>'s.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The plan did not choose the tile backend.</exception>
+    internal static void ExecuteTiles(CompiledExecutionPlan plan, IRegionSource source, IRegionSink sink,
+        int tileWidth, int tileHeight, ExecuteOptions? options = null, IPixelPool? pool = null)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        if (plan.Backend != ExecutionBackend.Tile)
+            throw new InvalidOperationException(
+                $"The compiler chose {plan.Backend}, so there is no tile walk to run ({plan.TileRefusal}).");
+
+        TileExecutor.Execute(ProcessingPlan.FromCompiled(plan.Steps, plan.BandRows), source, sink, tileWidth,
+            tileHeight, options, pool);
+    }
+
+    /// <summary>
     /// Builds the pull chain the stream backend promised: one <see cref="PlanRowSource"/> per operator section, one
     /// geometry wrapper per geometry section, all owned by the returned source. The caller disposes it when the sink
     /// has taken the last row.

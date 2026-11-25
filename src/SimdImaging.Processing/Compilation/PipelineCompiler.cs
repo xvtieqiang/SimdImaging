@@ -77,12 +77,26 @@ internal static class PipelineCompiler
             index++;
         }
 
-        var tileRefusal = options.TileRequested ? RefuseTile(recipe, options) : (TileRefusal?)null;
+        TileRefusal? tileRefusal = null;
+        var tilePossible = false;
+        if (options.TileRequested)
+        {
+            var refusal = RefuseTile(recipe, options);
+            if (refusal == TileRefusal.None)
+                tilePossible = true;
+            else
+                tileRefusal = refusal;
+        }
         var streamRefusal = ClassifyStream(recipe, steps, options, out var streamBlocked);
         var regionRefusal = ClassifyRegion(recipe, steps, options, out var regionBlocked);
 
         ExecutionBackend backend;
-        if (tileRefusal is not null)
+        if (tilePossible)
+        {
+            backend = ExecutionBackend.Tile;
+            explanation.Add("backend: Tile");
+        }
+        else if (tileRefusal is not null)
         {
             backend = ExecutionBackend.TileRefused;
             explanation.Add($"backend: TileRefused ({tileRefusal})");
@@ -247,6 +261,7 @@ internal static class PipelineCompiler
         if ((options.Sink & SinkCapabilities.RandomRegionWrite) == 0)
             return TileRefusal.NoRegionSink;
 
+        var planSteps = new List<PlanStep>(recipe.Count);
         foreach (var step in recipe.Steps)
         {
             if (step is not OperatorStep op)
@@ -260,10 +275,17 @@ internal static class PipelineCompiler
                 return TileRefusal.GlobalStep;
             if (op.Operator.Category == OpCategory.Composite)
                 return TileRefusal.CompositeStep;
+
+            planSteps.Add(new PlanStep(op.Operator));
         }
 
-        // No operator declares tile partitioning yet; the Tile backend has nothing to run.
-        return TileRefusal.NotTileable;
+        var refusal = RegionExecutor.Classify(planSteps, hasResize: false, out _);
+        return refusal switch
+        {
+            RegionRefusal.None => TileRefusal.None,
+            RegionRefusal.StepNeedsWholeSource => TileRefusal.WholeSourceStep,
+            _ => TileRefusal.NotTileable,
+        };
     }
 
     private static WorkingFormatMask Mask(WorkingFormat format) => format switch

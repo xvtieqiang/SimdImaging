@@ -1271,10 +1271,10 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   未做的部分：`PlanStep` / `ProcessingPlan` 没有真正的第二输入字段（overlay 是闭包捕获的 `PixelView`，没有逐端口
   footprint、没有所有权与生命周期托管），`DrawImage` / `Watermark` / `ApplyGainMap` 仍是 barrier。下一步要打开的
   是通用多输入执行（第二视图 + 每端口区域 + 生命周期），不是再加一个捕获式算子。
-- **Tile 后端未实现（P1 只拒绝）**：编译器已能识别 Tile 请求并给出 `TileRefusal`（`NoRegionSink` /
-  `BlockAlignedOperator` / `GlobalStep` / `CompositeStep` / `NotTileable`），但没有任何 Sink 实现
-  `RandomRegionWrite`，也没有算子声明 `Partitioning.Tiles`。复访条件：先定义 `IRegionSink`（随机区域写入 + 生命周期），
-  再让 Point / Neighborhood 的内核声明 Tiles 并逐字节对拍；在那之前保持拒绝，不用包围盒近似。
+- **Tile 后端（P5 第一刀已落地）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
+  Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。未做：编码器端
+  的 `IRegionSink` 实现（目前只有测试里的内存 Sink）、算子显式声明 `Partitioning.Tiles`（当前以 RowBands + halo 判定
+  可 tile）、以及 tile 的内存/吞吐基线。
 - **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 19 MiB
   （ring + staging + 输出批 + worker 行，一个账本；超限先缩 chunk 再拒绝）。
 - **一次流水线只支持一个缩放**：`ResizeTo(..., plan, after)` 覆盖「计划 → 缩放 → 计划」；两次缩放连用仍要分两次调用

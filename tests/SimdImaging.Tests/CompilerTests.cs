@@ -241,7 +241,9 @@ public sealed class CompilerTests
         };
         PipelineCompiler.Compile(Recipe(PlanOps.Equalize()), withSink).TileRefusal.ShouldBe(TileRefusal.GlobalStep);
         PipelineCompiler.Compile(Recipe(PlanOps.Pixelate(8)), withSink).TileRefusal.ShouldBe(TileRefusal.BlockAlignedOperator);
-        PipelineCompiler.Compile(Recipe(PlanOps.Invert()), withSink).TileRefusal.ShouldBe(TileRefusal.NotTileable);
+        var tileable = PipelineCompiler.Compile(Recipe(PlanOps.Invert()), withSink);
+        tileable.Backend.ShouldBe(ExecutionBackend.Tile);
+        tileable.TileRefusal.ShouldBeNull();
     }
 
     [Fact]

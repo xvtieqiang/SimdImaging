@@ -650,20 +650,27 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 组装拉链；`ToImageCore` 走同一份 section 列表的物化路径；region 只接受「算子步 + 末尾一个 resize」，其余组合显式
 拒绝而不是静默丢弃。
 
-### 6.3.2 Tile 后端：只拒绝，不近似
+### 6.3.2 Tile 后端：点与邻域可执行，其余拒绝
 
-P1 只做选路，不做二维 Tile 执行。请求 Tile 时编译器返回 `Backend=TileRefused` 和第一个真实阻塞原因：
+`IRegionSink`（随机矩形写入）定义了目标端契约；`TileExecutor.Execute` 按 `tileWidth × tileHeight` 走遍目标，每个
+tile 交给 `RegionExecutor` 读取含 halo 的源区域、执行步骤、再把 tile 写进 Sink。tile 大小是唯一的内存旋钮：同一时刻
+只有一块 tile 加它的 halo 窗口常驻。
+
+编译器在 `TileRequested`、Sink 有 `RandomRegionWrite`、且所有步骤都可按矩形执行时选择 `Backend=Tile`；否则返回
+`TileRefused` 和第一个真实原因：
 
 | 原因 | 条件 |
 |---|---|
-| `NoRegionSink` | 目标没有 `RandomRegionWrite`。目前**没有**任何 Sink 声明它，所以这是实际会命中的那一条 |
+| `NoRegionSink` | 目标没有 `RandomRegionWrite` |
 | `BlockAlignedOperator` | 步骤的 footprint 是块网格（Pixelate），块会跨 Tile 边界 |
 | `GlobalStep` | 步骤需要全图统计才能写第一个像素 |
-| `CompositeStep` | 步骤需要 Tile 路径不携带的第二路输入 |
-| `NotTileable` | 没有步骤声明 `Partitioning.Tiles`，Tile 后端无内核可跑 |
+| `CompositeStep` | 步骤需要第二路输入 |
+| `FormatChange` | 步骤改变工作格式 |
+| `WholeSourceStep` | 步骤需要整图（Mirror/Wrap 边界），halo 不够 |
+| `NotTileable` | 其余不可矩形执行的情况（几何步等） |
 
-拒绝发生在选路阶段，目标一个字节都不会被写。将来打开 Tile 的条件写在 `known-gaps.md`：先有 `IRegionSink` 契约、
-再有声明 `Tiles` 的内核。
+Tile 的验收是逐字节：`TileExecutionTests` 在 3 种格式、3 组 tile 尺寸下与 Frame 结果比较，并断言 tile 恰好覆盖每个
+像素一次。编码器端的 `IRegionSink` 实现、以及算子显式声明 `Partitioning.Tiles`，仍留给后续。
 
 ### 6.3.3 代表算子闭环（P2）
 

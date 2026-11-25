@@ -14,6 +14,9 @@ internal enum ExecutionBackend : byte
 
     /// <summary>A tile request that cannot be honoured; the reason is in <see cref="CompiledExecutionPlan.TileRefusal"/>.</summary>
     TileRefused = 3,
+
+    /// <summary>Rectangles in, rectangles out.</summary>
+    Tile = 4,
 }
 
 /// <summary>A contiguous run of compiled steps: either operator steps or one geometry change.</summary>
@@ -59,6 +62,9 @@ internal enum TileRefusal : byte
 
     /// <summary>A step changes the working format, which a tile destination cannot splice.</summary>
     FormatChange = 6,
+
+    /// <summary>A step needs the whole source image (Mirror/Wrap borders); a tile's halo is not enough.</summary>
+    WholeSourceStep = 7,
 }
 
 /// <summary>
@@ -112,7 +118,7 @@ internal sealed class CompiledExecutionPlan
     /// <summary>The first reason a region backend was refused, or <see cref="RegionRefusal.None"/>.</summary>
     internal RegionRefusal RegionRefusal { get; }
 
-    /// <summary>Set only when a tile backend was requested.</summary>
+    /// <summary>Set only when a tile backend was requested and refused.</summary>
     internal TileRefusal? TileRefusal { get; }
 
     /// <summary>Output width after every geometry step; meaningless when <see cref="SizeKnown"/> is false.</summary>

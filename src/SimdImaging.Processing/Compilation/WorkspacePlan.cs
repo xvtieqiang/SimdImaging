@@ -69,6 +69,12 @@ internal static class WorkspacePlanner
             new("codec buffers", "decoder and encoder rows are outside the engine's allocator"),
         };
 
+        if (backend == ExecutionBackend.Tile)
+        {
+            unmanaged.Add(new UnmanagedTerm("tile dimensions",
+                "the caller's tile size sets the real window; this report uses the frame estimate, which is larger"));
+        }
+
         return backend == ExecutionBackend.Stream
             ? EstimateStream(recipe, steps, options, terms, unmanaged)
             : EstimateFrame(recipe, steps, sections, options, outputWidth, outputHeight, terms, unmanaged);

@@ -57,6 +57,10 @@
   SimdImaging.Abstractions.IImageOp.Name : System.String { get; }
   SimdImaging.Abstractions.IPixelPool.Name : System.String { get; }
   SimdImaging.Abstractions.IPixelPool.Rent(System.Int32 length) -> System.Buffers.IMemoryOwner<System.Byte>
+  SimdImaging.Abstractions.IRegionSink.Format : SimdImaging.Abstractions.WorkingFormat { get; }
+  SimdImaging.Abstractions.IRegionSink.Height : System.Int32 { get; }
+  SimdImaging.Abstractions.IRegionSink.Width : System.Int32 { get; }
+  SimdImaging.Abstractions.IRegionSink.WriteRegion(Sdcb.SimdCodecs.Abstractions.PixelRect region, SimdImaging.Abstractions.PixelView source) -> System.Void
   SimdImaging.Abstractions.IRegionSource.Format : SimdImaging.Abstractions.WorkingFormat { get; }
   SimdImaging.Abstractions.IRegionSource.Height : System.Int32 { get; }
   SimdImaging.Abstractions.IRegionSource.ReadRegion(Sdcb.SimdCodecs.Abstractions.PixelRect region, SimdImaging.Abstractions.PixelView destination) -> System.Void
@@ -1329,6 +1333,7 @@ enum SimdImaging.Processing.YCbCrStandard
 enum SimdImaging.WatermarkPosition
 interface SimdImaging.Abstractions.IImageOp
 interface SimdImaging.Abstractions.IPixelPool
+interface SimdImaging.Abstractions.IRegionSink
 interface SimdImaging.Abstractions.IRegionSource
 interface SimdImaging.Abstractions.IRowSink
 interface SimdImaging.Abstractions.IRowSource
