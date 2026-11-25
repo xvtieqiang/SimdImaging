@@ -223,6 +223,41 @@ public sealed class CompiledBackendsTests
     }
 
     [Fact]
+    public void CompiledFusion_MatchesCompiledStepwise()
+    {
+        var recipe = Recipe(PlanOps.GaussianBlur(1f), PlanOps.Invert(), PlanOps.Contrast(1.1f));
+        using var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
+
+        var fused = Compile(recipe, 64, 48, WorkingFormat.Rgba8, stream: false,
+            execute: new ExecuteOptions { ForceFusion = true });
+        var stepwise = Compile(recipe, 64, 48, WorkingFormat.Rgba8, stream: false,
+            execute: new ExecuteOptions { AllowFusion = false });
+
+        Frame(fused, image[0].Pixels.View).ShouldBe(Frame(stepwise, image[0].Pixels.View));
+    }
+
+    [Fact]
+    public void ACompiledFrame_InvokesTheObserverForEveryStep_WithGlobalIndices()
+    {
+        var recipe = Recipe(PlanOps.GaussianBlur(1f), PlanOps.Invert(), PlanOps.Contrast(1.1f));
+        var plan = Compile(recipe, new CompileOptions
+        {
+            SourceWidth = 64,
+            SourceHeight = 48,
+            SourceFormat = WorkingFormat.Rgba8,
+            ObserveSteps = true,
+        });
+        using var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
+
+        var seen = new List<(int Index, string Name)>();
+        using var result = CompiledPlanExecutor.ExecuteFrame(plan, image[0].Pixels.View,
+            observe: (index, name, _) => seen.Add((index, name)));
+
+        seen.Select(entry => entry.Index).ShouldBe([0, 1, 2]);
+        seen.Select(entry => entry.Name).ShouldBe(["GaussianBlur", "Invert", "Contrast"]);
+    }
+
+    [Fact]
     public void AnObserverForcesStepwiseFrame()
     {
         var recipe = Recipe(PlanOps.GaussianBlur(1f), PlanOps.Invert());
@@ -305,7 +340,7 @@ public sealed class CompiledBackendsTests
     }
 
     private static CompiledExecutionPlan Compile(PipelineRecipe recipe, int width, int height, WorkingFormat format,
-        bool stream, int bandRows = 0) =>
+        bool stream, int bandRows = 0, ExecuteOptions? execute = null) =>
         Compile(recipe, new CompileOptions
         {
             SourceWidth = width,
@@ -314,6 +349,7 @@ public sealed class CompiledBackendsTests
             Source = stream ? SourceCapabilities.ForwardOnly : SourceCapabilities.Seekable,
             Sink = stream ? SinkCapabilities.RowWritable : SinkCapabilities.None,
             BandRows = bandRows,
+            Execute = execute ?? new ExecuteOptions(),
         });
 
     private static CompiledExecutionPlan Compile(PipelineRecipe recipe, CompileOptions options) =>

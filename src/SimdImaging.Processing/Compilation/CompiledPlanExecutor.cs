@@ -15,7 +15,7 @@ internal static class CompiledPlanExecutor
     /// sections call the reshape they carry. The source view is not disposed; the returned buffer is the caller's.
     /// </summary>
     internal static WorkingBuffer ExecuteFrame(CompiledExecutionPlan plan, PixelView source, IPixelPool? pool = null,
-        ExecuteOptions? options = null)
+        ExecuteOptions? options = null, PlanObserver? observe = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         options ??= new ExecuteOptions();
@@ -30,7 +30,11 @@ internal static class CompiledPlanExecutor
                 if (section.Kind == CompiledSectionKind.OperatorRun)
                 {
                     var steps = Slice(plan.Steps, section.FirstStep, section.StepCount);
-                    next = ProcessingPlan.FromCompiled(steps, plan.BandRows).ExecuteWithOptions(current, options, pool);
+                    var sectionObserver = observe is null
+                        ? null
+                        : new PlanObserver((index, name, view) => observe(section.FirstStep + index, name, view));
+                    next = ProcessingPlan.FromCompiled(steps, plan.BandRows)
+                        .ExecuteWithOptions(current, options, pool, sectionObserver);
                 }
                 else
                 {

@@ -682,7 +682,11 @@ P1 只做选路，不做二维 Tile 执行。请求 Tile 时编译器返回 `Bac
 | Noise(seed) | ✓ | 拒绝 `GlobalStep` | 拒绝 | 同种子两次相同 |
 | SeamCarve | ✓ | 拒绝 `GeometricStep` | 拒绝 | 目标尺寸 40×34 |
 | Composite | 无执行体 | 拒绝 `CompositeStep` | 拒绝 `CompositeStep` | 多输入模型未建（见 `known-gaps.md`） |
-| Observer | ✓ | 拒绝（观察需求） | 拒绝 | 融合关闭、每段逐步 |
+| Observer | ✓ | 拒绝（观察需求） | 拒绝 | 融合关闭；回调索引跨段全局；每一步都可见 |
+
+`CompiledFusion_MatchesCompiledStepwise` 对同一 recipe 分别强制融合与强制逐步，逐字节相同；
+`ACompiledFrame_InvokesTheObserverForEveryStep_WithGlobalIndices` 证明 `ObserveSteps` 不只是报告字段——执行器按
+section 的全局起点重映射回调索引，每个算子步都真的被看到。
 
 流式侧走的是 `CompiledPlanExecutor.CreateStreamChain`，与 `ImageTranscode.BuildChain` 实际构建的链是同一段代码；
 `Region` 列指 `RegionExecutor` 对纯算子链，带几何的 recipe 由编译器拒绝。Workspace 对每条 Frame 链断言
