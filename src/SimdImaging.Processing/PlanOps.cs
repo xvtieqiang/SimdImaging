@@ -784,9 +784,9 @@ public static class PlanOps
     public static ImageOp GaussianSharpen(float amount = 0.5f, float sigma = 1f) =>
         Neighborhood(nameof(FilterOps.GaussianSharpen), (int)Math.Ceiling(3 * sigma),
             v => FilterOps.GaussianSharpen(v, amount, sigma),
-            (width, _, rows, format) =>
-                FilterOps.SeparablePlanWorkspaceBytes(width, rows, (int)Math.Ceiling(3 * sigma), format, sharpen: true),
-            pass: PassModel.SeparableRows, scratchIncludesResult: true);
+            (width, _, rows, _) =>
+                FilterOps.GaussianSharpenPlanScratchBytes(width, rows, (int)Math.Ceiling(3 * sigma)),
+            pass: PassModel.SeparableRows);
 
     /// <summary>3x3 erosion; one row and one column.</summary>
     public static ImageOp Erode3x3() => Neighborhood(nameof(FilterOps.Erode3x3), 1, v => FilterOps.Erode3x3(v),
