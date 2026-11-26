@@ -121,7 +121,7 @@ public sealed partial class Image
         using (var sink = new TileEncoderSink(source.Width, source.Height, source.Format, frame,
                    Math.Min(tileHeight, source.Height), pool, execute, cancellationToken))
         {
-            CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, execute, pool);
+            CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, tileOptions, pool);
             sink.Complete();
         }
 
