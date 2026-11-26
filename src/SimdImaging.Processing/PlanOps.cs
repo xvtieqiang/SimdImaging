@@ -929,11 +929,13 @@ public static class PlanOps
     public static ImageOp NonLocalMeans(int searchRadius, int patchRadius = 1, float h = 0.1f) =>
         Neighborhood(nameof(NonLocalMeansOps.NonLocalMeans), searchRadius + patchRadius,
             v => NonLocalMeansOps.NonLocalMeans(v, searchRadius, patchRadius, h),
-            // Per worker: the decoded ring (rows × one pixel per row) plus six scratch arrays of width entries —
-            // one long[] and five double[] — plus the output row of four floats. `rows` already carries the
-            // search + patch halo. ArrayPool may hand back a longer array, which this does not model.
+            // Per worker: the decoded ring (rows × one pixel per row) plus the output row of four floats.
+            // Integer formats also use a rolling SSD path with one long[] and five double[] accumulators;
+            // Rgba32F deliberately uses the exact per-tap path and does not allocate those six arrays.
+            // ArrayPool may hand back longer arrays; the declaration describes requested lengths.
             (width, _, rows, format) =>
-                ((long)rows * width * format.BytesPerPixel()) + ((long)width * (8 + 40 + 16)));
+                ((long)rows * width * format.BytesPerPixel()) +
+                ((long)width * (format == WorkingFormat.Rgba32F ? 16 : 8 + 40 + 16)));
 
     /// <summary>Oil paint; its histogram window is the radius.</summary>
     public static ImageOp OilPaint(int radius, int levels = 20) =>
