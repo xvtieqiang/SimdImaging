@@ -412,6 +412,21 @@ public class MemoryEstimateTests : IDisposable
         estimate.PeakBytes.ShouldBe((2 * fullBytes) + fullBytes);
     }
     [Fact]
+    public void PixelViewEstimatorUsesTheSameFusionThresholdAsExecution()
+    {
+        using var source = WorkingBuffer.Rent(640, 360, WorkingFormat.Rgba8);
+        var plan = new ProcessingPlan { BandRows = 64 }
+            .Add(PlanOps.GaussianBlur(1f))
+            .Add(PlanOps.GaussianBlur(1f));
+
+        var publicEstimate = MemoryEstimator.Estimate(source.View, plan, degree: 1);
+        var stepwiseEstimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, plan.Steps,
+            plan.BandRows, allowFusion: false, degree: 1);
+
+        publicEstimate.PlanScratchBytes.ShouldBe(stepwiseEstimate.PlanScratchBytes);
+        publicEstimate.PeakBytes.ShouldBe(stepwiseEstimate.PeakBytes);
+    }
+    [Fact]
     public void Estimate_CountsDeclaredOperatorScratch()
     {
         var plan = new ProcessingPlan()
