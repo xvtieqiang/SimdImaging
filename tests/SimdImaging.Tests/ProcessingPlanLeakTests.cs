@@ -168,6 +168,23 @@ public class ProcessingPlanLeakTests
     }
 
     [Fact]
+    public void TrailingResize_RejectsWorkingSetBeforeRentingDestination()
+    {
+        var pool = new CountingPool();
+        using var source = WorkingBuffer.Rent(Width, Height, WorkingFormat.Rgba8);
+        var plan = new ProcessingPlan().Resize(4, 3, SimdImaging.Processing.Resampler.Bicubic);
+
+        Should.Throw<InvalidOperationException>(() =>
+            plan.ExecuteWithOptions(source.View,
+                new ExecuteOptions { MaxWorkingBytes = 500, MaxDegreeOfParallelism = 1 }, pool));
+
+        // The empty-plan copy is allowed (192 bytes); the resize estimate is refused before its output is rented.
+        pool.RentCount.ShouldBe(1);
+        pool.DisposeCount.ShouldBe(1);
+        pool.DuplicateDisposeCount.ShouldBe(0);
+    }
+
+    [Fact]
     public void TrailingResize_Cancellation_ReleasesBothIntermediateAndDestination()
     {
         var pool = new CountingPool();
