@@ -1,4 +1,5 @@
 using SimdImaging.Processing;
+using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Tests;
@@ -38,6 +39,39 @@ public class MemoryEstimateTests : IDisposable
         // output plus the plan's own scratch.
         pool.PeakBytes.ShouldBeLessThanOrEqualTo(estimate.OutputBytes + estimate.PlanScratchBytes,
             $"{width}x{height}: rented {pool.PeakBytes}, estimated {estimate.OutputBytes + estimate.PlanScratchBytes}");
+    }
+
+    [Theory]
+    [InlineData(4, 2048)]
+    [InlineData(300, 2400)]
+    public void ResizeEstimate_IncludesVerticalTapScratch(int tapsY, long expectedTapScratch)
+    {
+        using var source = WorkingBuffer.Rent(64, 64, WorkingFormat.Rgba8);
+        const int width = 32;
+        const int height = 32;
+        const int degree = 1;
+        const long input = 64L * 64 * 4;
+        const long output = width * (long)height * 4;
+        const long stride = width * 4;
+        var ringRows = Math.Min(64, tapsY + 2);
+        var rowScratch = (64L * 4 + stride + stride * ringRows) * sizeof(float);
+
+        var estimate = Resample.EstimateWorkingBytes(source.View, width, height, tapsY, nearest: false, degree);
+
+        estimate.ShouldBe(input + output + rowScratch + expectedTapScratch);
+    }
+
+    [Fact]
+    public void ResizeWorkspaceRefusal_HappensBeforeDestinationRent()
+    {
+        using var source = WorkingBuffer.Rent(64, 64, WorkingFormat.Rgba8);
+        var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
+        var options = new ExecuteOptions { Workspace = new WorkspaceManager(limitBytes: 1) };
+
+        Should.Throw<InvalidOperationException>(() =>
+            Resample.Resize(source.View, 32, 32, Resampler.Bicubic, pool, options));
+
+        pool.Rents.ShouldBe(0);
     }
 
     [Fact]
