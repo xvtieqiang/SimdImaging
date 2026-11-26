@@ -92,6 +92,7 @@
   SimdImaging.Abstractions.MemoryEstimate.OutputBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.PeakBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.PerWorkerBytes : System.Int64 { get; set; }
+  SimdImaging.Abstractions.MemoryEstimate.PerWorkerPeakBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.PlanScratchBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.ToString() -> System.String
   SimdImaging.Abstractions.MemoryEstimate.UndeclaredSteps : System.Int32 { get; set; }
