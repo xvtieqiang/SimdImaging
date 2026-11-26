@@ -40,10 +40,11 @@ public static class PlanOps
     /// </summary>
     private static ImageOp FormatStep(string name, Func<PixelView, WorkingBuffer> op,
         Func<int, int, int, WorkingFormat, long> scratch, IInputFootprint footprint, WorkingFormat outputFormat,
-        PassModel pass, PixelSemantics semantics, InputPort? second = null)
+        PassModel pass, PixelSemantics semantics, InputPort? second = null,
+        WorkspaceScope scratchScope = WorkspaceScope.PerWorker)
     {
         return Create(name, second is null ? OpCategory.Global : OpCategory.Composite, footprint,
-            WorkspaceModel.Of(scratch, WorkspaceScope.WholeImage),
+            WorkspaceModel.Of(scratch, scratchScope),
             new KernelImplementations(
                 (_, _, _, _) => throw new NotSupportedException(
                     $"'{name}' changes the working format; run it through a compiled recipe."),
@@ -226,7 +227,8 @@ public static class PlanOps
         Func<int, int, int, WorkingFormat, long>? scratch = null, IInputFootprint? footprint = null,
         PassModel pass = PassModel.Single, StateScope state = StateScope.None,
         ExecutionOrder order = ExecutionOrder.Any, Determinism determinism = Determinism.CoordinateDeterministic,
-        PixelSemantics? semantics = null, WorkingFormat? outputFormat = null, bool scratchIncludesResult = false)
+        PixelSemantics? semantics = null, WorkingFormat? outputFormat = null, bool scratchIncludesResult = false,
+        WorkspaceScope scratchScope = WorkspaceScope.PerWorker)
     {
         var requirements = ExecutionRequirements.WholeImage with
         {
@@ -235,15 +237,36 @@ public static class PlanOps
             Determinism = determinism,
         };
 
-        var workspace = scratch is null
-            ? WorkspaceModel.Undeclared
-            : WorkspaceModel.Of((width, height, rows, format) =>
+        WorkspaceModel workspace;
+        if (scratch is null)
+        {
+            workspace = WorkspaceModel.Undeclared;
+        }
+        else if (scratchScope == WorkspaceScope.WholeImage)
+        {
+            workspace = WorkspaceModel.Of((width, height, rows, format) =>
             {
                 var bytes = scratch(width, height, rows, format);
                 return scratchIncludesResult
                     ? bytes
                     : checked(bytes + ((long)width * height * format.BytesPerPixel()));
-            });
+            }, WorkspaceScope.WholeImage);
+        }
+        else if (scratchScope == WorkspaceScope.PerCall)
+        {
+            workspace = WorkspaceModel.Of(scratch, WorkspaceScope.PerCall);
+        }
+        else
+        {
+            // Whole-frame buffers exist once for the call, while the operator's declared scratch is private to
+            // every active worker. Keep those lifetimes separate instead of multiplying the result frame.
+            workspace = WorkspaceModel.OfMixed(scratch,
+                scratchIncludesResult
+                    ? null
+                    : (width, height, _, format) =>
+                        (long)width * height * format.BytesPerPixel());
+        }
+
         return Create(name, OpCategory.Global, footprint ?? WholeSourceFootprint.Instance,
             workspace,
             new KernelImplementations(PlanSteps.Global(op), op),
