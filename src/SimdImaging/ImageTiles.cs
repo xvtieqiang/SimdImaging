@@ -290,6 +290,7 @@ public sealed partial class Image
             }
             catch
             {
+                _filled = Array.Empty<int>();
                 _lease?.Dispose();
                 throw;
             }
