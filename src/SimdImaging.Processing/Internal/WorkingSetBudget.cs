@@ -43,7 +43,7 @@ internal static class WorkingSetBudget
 
         var workers = Math.Max(1, options.MaxDegreeOfParallelism > 0
             ? options.MaxDegreeOfParallelism
-            : Environment.ProcessorCount);
+            : RowParallel.Degree);
         return estimate + (perWorker * workers) + wholeImage;
     }
 
