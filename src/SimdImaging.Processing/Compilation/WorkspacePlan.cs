@@ -117,7 +117,7 @@ internal static class WorkspacePlanner
                 }
                 else
                 {
-                    var wholeImageInvocation = geometry.Descriptor.Requirements.RequiresWholeImageInvocation;
+                    var wholeImageInvocation = true; // Geometry.Reshape is one whole-frame call in the frame backend.
                     var scratchBytes = 0L;
                     if (declared.HasWholeImageEstimate ||
                         (wholeImageInvocation && declared.PerCallEstimate is not null))
@@ -127,8 +127,9 @@ internal static class WorkspacePlanner
                     if (declared.HasPerWorkerEstimate ||
                         (!wholeImageInvocation && declared.PerCallEstimate is not null))
                     {
-                        var workers = RowParallel.ResolveWorkers(nextWidth, nextHeight,
-                            options.Execute.MaxDegreeOfParallelism);
+                        var workers = geometry.Descriptor.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : Math.Min(RowParallel.ResolveDegree(options.Execute.MaxDegreeOfParallelism), nextHeight);
                         scratchBytes = checked(scratchBytes + checked(
                             declared.EstimatePerWorker(nextWidth, nextHeight, nextHeight, finalFormat) * workers));
                     }
@@ -154,8 +155,7 @@ internal static class WorkspacePlanner
                 }
                 else
                 {
-                    var wholeImageInvocation =
-                        formatStep.Operator.Contract.Requirements.RequiresWholeImageInvocation;
+                    var wholeImageInvocation = true; // The compiled format kernel is invoked once for the frame.
                     var scratchBytes = 0L;
                     if (workspace.HasWholeImageEstimate ||
                         (wholeImageInvocation && workspace.PerCallEstimate is not null))
@@ -165,8 +165,9 @@ internal static class WorkspacePlanner
                     if (workspace.HasPerWorkerEstimate ||
                         (!wholeImageInvocation && workspace.PerCallEstimate is not null))
                     {
-                        var workers = RowParallel.ResolveWorkers(width, height,
-                            options.Execute.MaxDegreeOfParallelism);
+                        var workers = formatStep.Operator.Contract.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : Math.Min(RowParallel.ResolveDegree(options.Execute.MaxDegreeOfParallelism), height);
                         scratchBytes = checked(scratchBytes + checked(
                             workspace.EstimatePerWorker(width, height, height, finalFormat) * workers));
                     }
