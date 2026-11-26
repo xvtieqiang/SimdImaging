@@ -569,8 +569,9 @@ public sealed class ProcessingPlan
             // One formula, shared with the public estimator: the previous private version counted only the buffers
             // the executor rents and never looked at PlanStep.Scratch, so a ceiling could pass a plan whose
             // operators were about to allocate several more full-size planes.
-            var estimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, execution,
-                bandRows, fused, options.MaxDegreeOfParallelism);
+            var stepwiseRows = StepwiseRowsFor(height, bandRows, options.MaxDegreeOfParallelism);
+            var estimate = MemoryEstimator.EstimateForExecution(source.Width, source.Height, source.Format,
+                execution, bandRows, stepwiseRows, fused, options.MaxDegreeOfParallelism);
 
             if (options.MaxWorkingBytes > 0)
             {
