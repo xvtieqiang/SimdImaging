@@ -18,8 +18,8 @@ internal static class WorkingSetBudget
     {
         var estimate = (long)windows * windowCols * windowRows * format.BytesPerPixel();
         undeclared = 0;
-        var perWorker = 0L;
-        var wholeImage = 0L;
+        var workers = RowParallel.ResolveWorkers(windowCols, windowRows, options.MaxDegreeOfParallelism);
+        var operatorScratchPeak = 0L;
         for (var i = 0; i < steps.Count; i++)
         {
             var workspace = steps[i].Definition.Contract.Workspace;
@@ -31,25 +31,21 @@ internal static class WorkingSetBudget
 
             var wholeImageInvocation =
                 steps[i].Definition.Contract.Requirements.RequiresWholeImageInvocation;
-            if (workspace.HasWholeImageEstimate ||
-                (wholeImageInvocation && workspace.PerCallEstimate is not null))
-            {
-                wholeImage = Math.Max(wholeImage,
-                    workspace.EstimateWholeImage(width, height, format));
-            }
-
-            if (workspace.HasPerWorkerEstimate ||
-                (!wholeImageInvocation && workspace.PerCallEstimate is not null))
-            {
-                var stepScratch = wholeImageInvocation
+            var wholeImage = workspace.HasWholeImageEstimate ||
+                             (wholeImageInvocation && workspace.PerCallEstimate is not null)
+                ? workspace.EstimateWholeImage(width, height, format)
+                : 0L;
+            var perWorker = workspace.HasPerWorkerEstimate ||
+                            (!wholeImageInvocation && workspace.PerCallEstimate is not null)
+                ? wholeImageInvocation
                     ? workspace.EstimatePerWorkerScratch(windowCols, height, windowRows, format)
-                    : workspace.EstimatePerWorker(windowCols, height, windowRows, format);
-                perWorker = Math.Max(perWorker, stepScratch);
-            }
+                    : workspace.EstimatePerWorker(windowCols, height, windowRows, format)
+                : 0L;
+            var stepScratchPeak = checked(wholeImage + checked(perWorker * workers));
+            operatorScratchPeak = Math.Max(operatorScratchPeak, stepScratchPeak);
         }
 
-        var workers = RowParallel.ResolveWorkers(windowCols, windowRows, options.MaxDegreeOfParallelism);
-        return estimate + (perWorker * workers) + wholeImage;
+        return checked(estimate + operatorScratchPeak);
     }
 
     /// <summary>Checks a measurement against <see cref="ExecuteOptions.MaxWorkingBytes"/>.</summary>
