@@ -233,6 +233,10 @@ public static class Resample
                 $"Resize needs an estimated {estimatedBytes} bytes, above ExecuteOptions.MaxWorkingBytes = " +
                 $"{options.MaxWorkingBytes}.");
 
+        // The reservation must precede the destination rent and remain held for the full resize. The estimate
+        // includes the live source/output pair and per-worker scratch, matching MaxWorkingBytes semantics.
+        using var workspaceLease = options.Workspace?.Reserve(estimatedBytes, "resize");
+
         // Nearest is point sampling. Sending it through the separable path expands the entire source to float,
         // runs two convolution passes and contracts again — measured 2.170 ms at 1080p -> 960x540 against
         // ImageSharp's 0.283 ms, for what is a byte copy.
@@ -394,7 +398,14 @@ public static class Resample
         var bandCount = (height + bandHeight - 1) / bandHeight;
         var workers = Math.Max(1, Math.Min(Math.Max(1, degree), bandCount));
         var ringRows = Math.Min(source.Height, tapsY + 2);
-        var perWorker = checked(((long)source.Width * 4 + stride + (long)stride * ringRows) * sizeof(float));
+        // VerticalRow uses two fixed stack buffers up to 256 taps, then rents the exact tap-sized
+        // int/float arrays from ArrayPool. They are live for one worker while it processes its rows.
+        const int StackTapLimit = 256;
+        var tapScratch = tapsY <= StackTapLimit
+            ? (long)StackTapLimit * (sizeof(int) + sizeof(float))
+            : (long)tapsY * (sizeof(int) + sizeof(float));
+        var perWorker = checked(((long)source.Width * 4 + stride + (long)stride * ringRows) * sizeof(float)
+            + tapScratch);
         return checked(input + output + workers * perWorker);
     }
 
