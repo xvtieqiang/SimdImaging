@@ -39,6 +39,9 @@ public sealed class WorkspaceManager
         if (bytes == 0)
             return new Lease(this, 0);
 
+        // Allocate the lease before publishing the reservation. An allocation failure must not leave bytes
+        // permanently outstanding in the account.
+        var lease = new Lease(this, bytes);
         long outstanding;
         while (true)
         {
@@ -66,7 +69,7 @@ public sealed class WorkspaceManager
             peak = seen;
         }
 
-        return new Lease(this, bytes);
+        return lease;
     }
 
     private sealed class Lease(WorkspaceManager owner, long bytes) : IDisposable
