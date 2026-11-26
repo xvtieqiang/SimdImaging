@@ -774,7 +774,7 @@ public static class PlanOps
         float whitePoint = 1f, bool autoExposure = false, float targetLuminance = 0.18f) =>
         Global(nameof(HdrOps.ToneMap),
             v => HdrOps.ToneMap(v, curve, exposure, whitePoint, autoExposure, targetLuminance),
-            (width, _, _, _) => (long)width * 16 * (autoExposure ? 2 : 1),
+            (width, _, _, _) => (long)width * 16,
             pass: autoExposure ? PassModel.GatherThenApply : PassModel.Single,
             state: autoExposure ? StateScope.PerImage : StateScope.None,
             scratchScope: WorkspaceScope.WholeImage);
@@ -968,9 +968,10 @@ public static class PlanOps
 
     /// <summary>Per-channel histogram stretch; whole-image statistics.</summary>
     public static ImageOp Normalize() =>
-        // One 256-bin histogram plus the destination row the executor already provides.
-        Global(nameof(PointOps.Normalize), v => PointOps.Normalize(v), (width, _, _, _) => 1024L + ((long)width * 16),
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+        Global(nameof(PointOps.Normalize), v => PointOps.Normalize(v),
+            (width, _, _, _) => (long)width * 16,
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage,
+            wholeImageScratch: (width, _, _, _) => (16L * width) + (6L * sizeof(float)));
 
     /// <summary>Adaptive threshold: a local mean, but its window is wider than any band worth carrying.</summary>
     public static ImageOp AdaptiveThreshold(int radius = 8, float offset = 0.05f) =>
@@ -978,7 +979,7 @@ public static class PlanOps
         Global(nameof(ThresholdOps.AdaptiveThreshold), v => ThresholdOps.AdaptiveThreshold(v, radius, offset),
             (width, _, _, _) =>
                 ((long)((radius * 2) + 1) * width * sizeof(float))
-                + (52L * width * sizeof(float)) + (2L * sizeof(double)),
+                + (52L * width) + (2L * sizeof(double)),
             pass: PassModel.GatherThenApply, state: StateScope.PerImage,
             scratchScope: WorkspaceScope.WholeImage);
 
@@ -1017,8 +1018,11 @@ public static class PlanOps
 
     /// <summary>Histogram equalisation needs the whole image to build its transfer curve.</summary>
     public static ImageOp Equalize() =>
-        // Three 256-bin histograms turned into three LUTs, plus the destination row.
         Global(nameof(HistogramOps.Equalize), v => HistogramOps.Equalize(v),
-            (width, _, _, _) => (3L * 256 * 4) + ((long)width * 16),
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+            // The Rgba8 histogram pass allocates one 3×256 int histogram per worker. The merged histograms,
+            // three LUTs and BuildLut CDF are shared; non-Rgba8 uses one serial float row while gathering.
+            (width, _, _, format) => format == WorkingFormat.Rgba8 ? 3L * 256 * sizeof(int) : 0L,
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage,
+            wholeImageScratch: (width, _, _, format) =>
+                8192L + (format == WorkingFormat.Rgba8 ? 0L : (16L * width)));
 }
