@@ -16,7 +16,7 @@ namespace SimdImaging.Processing.Geometry;
 /// <param name="StagingBytes">The staging chunk's bytes.</param>
 /// <param name="ReadyBytes">The output batch's bytes.</param>
 /// <param name="WorkerRowBytes">One float row per worker.</param>
-/// <param name="WorkerTapBytes">Vertical tap-index and weight scratch per worker.</param>
+/// <param name="WorkerTapBytes">Vertical tap-index and weight scratch allocated once per worker.</param>
 /// <param name="BudgetBytes">The budget this estimate was fitted to.</param>
 internal readonly record struct ResizeWorkspace(
     int ChunkRows,
