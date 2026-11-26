@@ -666,7 +666,7 @@ public sealed class ProcessingPlan
                             // thread count rather than for the fusion window: at 360 rows and 128-row bands the old
                             // split gave three workers on a sixteen-core machine and lost 40-80% to the stepwise
                             // chain it was supposed to match (`fusion` mode, "点算子 ×3" at 640×360).
-                            var stepwiseBands = StepwiseBandCount(height, bandRows);
+                            var stepwiseBands = StepwiseBandCount(height, bandRows, options.MaxDegreeOfParallelism);
                             var stepwiseRows = (height + stepwiseBands - 1) / stepwiseBands;
 
                             RowParallel.ForBands(stepwiseBands, (start, end) =>
@@ -745,16 +745,30 @@ public sealed class ProcessingPlan
     /// <summary>
     /// Bands for an unfused segment: enough to keep every worker busy, no finer than a few rows each.
     /// </summary>
-    private int StepwiseBandCount(int height, int bandRows)
+    internal int StepwiseRowsFor(int height, int bandRows, int degree)
+    {
+        // The explicit degree-one path emits the configured band height directly. Degree zero is different:
+        // it uses the current default degree and follows the normal worker-sized split.
+        if (degree == 1)
+            return bandRows;
+
+        var bands = StepwiseBandCountFor(height, bandRows, degree, BandRows == DefaultBandRows);
+        return (height + bands - 1) / bands;
+    }
+
+    internal static int StepwiseBandCountFor(int height, int bandRows, int degree, bool useDefaultPolicy)
     {
         // An explicit BandRows is a request about the band geometry and is honoured as given; only the default is
         // reinterpreted, because it was chosen as a fusion window and is too coarse to fill the threads.
-        if (BandRows != DefaultBandRows)
-            return BandCountFor(height, bandRows);
+        if (!useDefaultPolicy)
+            return (height + bandRows - 1) / bandRows;
 
         var byRows = Math.Max(1, height / 32);
-        return Math.Max(1, Math.Min(RowParallel.Degree, byRows));
+        return Math.Max(1, Math.Min(RowParallel.ResolveDegree(degree), byRows));
     }
+
+    private int StepwiseBandCount(int height, int bandRows, int degree) =>
+        StepwiseBandCountFor(height, bandRows, degree, BandRows == DefaultBandRows);
 
     /// <summary>Everything about one folding mode that does not change between executions.</summary>
     private sealed class ExecutionShape
