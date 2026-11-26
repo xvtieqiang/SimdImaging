@@ -250,7 +250,7 @@
 | 扩展性       | `PixelRowOperation` 行委托、`Filter` 组合、`IImageProcessor`                                                                                                      | `ImageOp` + `OperatorContract` + 非泛型行委托      | 我们多"算子声明 halo 与源矩形"，因此可分块                                                |
 | AOT       | 4.1 起为像素格式与 ICO/CUR/QOI 加 AOT 种子；**实测 PNG+Rgba32 完整编解码链路可 NativeAOT publish（0 警告、运行正常）**，其余格式/像素格式组合待逐项核实 | 构建门禁 + 双基线档位断言 | 从第一个提交起零 trim/AOT 警告；参照实现此链路同样可用，此项不宣称领先 |
 | 内存        | `MemoryAllocator` 整图分配（4.1 起可配置受限）                                                                                                                         | WorkingBuffer + 池 + 行带     | 目标稳态 0 分配；实测 7–39 KiB/op，8K 峰值内存 4 场景中 3 个达标（`gaussian-blur` 超 7.1%），见 `known-gaps.md` |
-| 许可        | Six Labors Split License 1.0（商用按条款购买）                                                                                                                      | MIT（M0 落 LICENSE）        | 选型事实，不是技术优势                                                              |
+| 许可        | Six Labors Split License 1.0（商用按条款购买）                                                                                                                      | Apache-2.0（LICENSE / NOTICE）| 选型事实，不是技术优势                                                              |
 
 **不覆盖项**（写进 `known-gaps.md`）：文字渲染与排版、IPTC 语义编辑、GPU 后端、EXIF 编辑器 UI。
 

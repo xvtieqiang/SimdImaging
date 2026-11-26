@@ -14,7 +14,7 @@
     <VersionPrefix>0.1.0</VersionPrefix>
     <VersionSuffix>alpha</VersionSuffix>
     <Authors>Wall</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryType>git</RepositoryType>
     <PackageTags>image processing simd aot raster resize filter</PackageTags>
     <DebugType>embedded</DebugType>

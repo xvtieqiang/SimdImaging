@@ -1,0 +1,10 @@
+SimdImaging
+Copyright 2026 Wall
+
+This product includes software developed as part of the SimdImaging project.
+Licensed under the Apache License, Version 2.0; see LICENSE for the full text.
+
+Third-party dependencies keep their own licence terms. In particular,
+Sdcb.SimdCodecs and Sdcb.SimdCodecs.Abstractions are distributed under the MIT
+License; this repository consumes them as NuGet packages and does not copy
+their source.

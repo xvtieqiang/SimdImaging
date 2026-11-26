@@ -1203,7 +1203,7 @@ B = `GC.GetTotalAllocatedBytes(precise:false)`（`Infrastructure.Timing` 的进�
 
 ### 替换后拿到什么（收益侧，也是「为什么值得迁」）
 
-MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、跨 SIMD 档位逐字节一致、
+Apache-2.0 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、跨 SIMD 档位逐字节一致、
 13 场景 11/13 领先（1.8224×）、Rgba16 7/7 领先（2.1003×）、格式面多 JPEG2000 / JBIG2 / PNM 全族。
 以及最根本的一条：**不需要那个许可**。
 

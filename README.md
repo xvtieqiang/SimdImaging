@@ -1,5 +1,7 @@
 # SimdImaging
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 托管 .NET 图片处理层。底层编解码全部由 [`Sdcb.SimdCodecs`](https://github.com/sdcb/SimdCodecs) 承担，本项目只做**解码之后、编码之前**的像素工作：几何、色彩、滤波、合成、绘制、量化、分析。
 
 依赖：`Sdcb.SimdCodecs`（解码 / 编码 / 容器 / 元数据 / 像素布局转换）。
@@ -191,7 +193,7 @@ photo.Mutate(p => p.Resize(800, 600).Saturation(1.2f));
 
 | 维度 | ImageSharp 4.1.3 | SimdImaging |
 |---|---|---|
-| 许可 | Six Labors Split License 1.0（商用按条款购买） | MIT |
+| 许可 | Six Labors Split License 1.0（商用按条款购买） | Apache-2.0 |
 | 目标框架 | net8.0 | net10.0 |
 | NativeAOT | 4.1 起为部分格式补 AOT 种子 | 全库构建门禁，零 trim/AOT 警告 |
 | 位深 | 由像素类型决定 | 全链路 `Rgba16`，16 位不被 8 位中间层吞掉 |
@@ -237,3 +239,13 @@ tests/
 ```
 
 编解码层是 **NuGet 依赖**：`Sdcb.SimdCodecs` **2.1.0**，版本锁在 `Directory.Packages.props`（与 `Sdcb.SimdCodecs.Abstractions` 同版本、同步升级）。仓库不包含、也不引用任何外部源码检出。
+
+## 许可
+
+本项目按 **Apache License 2.0** 发布：完整文本见 [`LICENSE`](LICENSE)，版权署名与第三方说明见 [`NOTICE`](NOTICE)；
+NuGet 包的 `PackageLicenseExpression` 同为 `Apache-2.0`。
+
+第三方依赖保留各自许可：`Sdcb.SimdCodecs` 与 `Sdcb.SimdCodecs.Abstractions` 仍按其 **MIT** 许可分发，
+本仓库只引用其 NuGet 包，不复制其源码或许可声明；测试夹具的 CC0 / Public Domain 来源与校验值见
+[`tests/Fixtures`](tests/Fixtures)。对比表里的 ImageSharp 4.1.3 仍为 Six Labors Split License 1.0，
+与本项目的许可无关。

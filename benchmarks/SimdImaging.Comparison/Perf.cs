@@ -121,7 +121,7 @@ internal static class Perf
             ["程序集文件", theirAsm.Location, ourAsm.Location],
             ["程序集大小", new FileInfo(theirAsm.Location).Length.ToString("N0") + " B",
                 new FileInfo(ourAsm.Location).Length.ToString("N0") + " B"],
-            ["许可", "Six Labors Split License 1.0（构建期校验密钥）", "MIT"],
+            ["许可", "Six Labors Split License 1.0（构建期校验密钥）", "Apache-2.0"],
             ["NativeAOT", "4.1 为 ICO/CUR/QOI 补 AOT seeds", "全库 `IsAotCompatible` 构建门禁"],
         ]);
 
