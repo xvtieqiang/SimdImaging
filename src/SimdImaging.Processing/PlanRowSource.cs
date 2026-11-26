@@ -70,13 +70,14 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
 
         var maxWindowRows = Math.Min(_height, _bandRows + (2 * _haloTotal));
         var windows = steps.Count > 1 ? 4 : 2;
-        WorkingSetBudget.Ensure(steps, options, _width, _height, _width, maxWindowRows, source.Format, windows,
-            extraBytes: 0, pathName: "Streaming");
+        var estimate = WorkingSetBudget.Measure(steps, options, _width, _height, _width, maxWindowRows,
+            source.Format, windows, extraBytes: 0, out var undeclared);
+        WorkingSetBudget.Ensure(estimate, undeclared, steps.Count, options, "Streaming");
 
         // Reserve before the allocations: a reservation refused after them would leave the buffers nobody can
-        // release, because a throwing constructor has no Dispose.
-        var windowBytes = (long)windows * _width * maxWindowRows * source.Format.BytesPerPixel();
-        _workspaceLease = options.Workspace?.Reserve(windowBytes, "stream windows");
+        // release, because a throwing constructor has no Dispose. The estimate includes the declared scratch
+        // for every worker, not only the window buffers.
+        _workspaceLease = options.Workspace?.Reserve(estimate, "stream windows");
         try
         {
             _cache = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);

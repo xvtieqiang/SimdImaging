@@ -1,3 +1,4 @@
+using SimdImaging.Abstractions;
 namespace SimdImaging.Processing.Compilation;
 
 /// <summary>Which executor the compiler chose.</summary>
@@ -36,6 +37,16 @@ internal enum CompiledSectionKind : byte
 internal readonly record struct CompiledSection(CompiledSectionKind Kind, int FirstStep, int StepCount, int RecipeIndex)
 {
     /// <summary>Whether the operator run should execute fused. Always false for a geometry section.</summary>
+    internal bool Fused { get; init; }
+}
+
+
+/// <summary>One section's geometry at the moment it runs: what it reads and what it produces.</summary>
+internal readonly record struct SectionState(CompiledSectionKind Kind, int FirstStep, int StepCount, int RecipeIndex,
+    int InputWidth, int InputHeight, int OutputWidth, int OutputHeight, WorkingFormat InputFormat,
+    WorkingFormat OutputFormat)
+{
+    /// <summary>Whether the operator run was fused, which changes its window count.</summary>
     internal bool Fused { get; init; }
 }
 

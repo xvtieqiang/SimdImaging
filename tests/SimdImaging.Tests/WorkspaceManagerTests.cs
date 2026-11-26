@@ -87,6 +87,33 @@ public sealed class WorkspaceManagerTests
     }
 
     [Fact]
+    public void AGeometryHeavyRun_StaysWithinItsPrediction()
+    {
+        var source = Path.Combine(Path.GetTempPath(), $"simd-ws-{Guid.NewGuid():N}.png");
+        var destination = Path.Combine(Path.GetTempPath(), $"simd-ws-{Guid.NewGuid():N}.png");
+        try
+        {
+            using (var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+
+            var report = ImageTranscode.From(source)
+                .Resize(128, 96)
+                .GaussianBlur(1f)
+                .Run(destination);
+
+            report.PredictedWorkingBytes.ShouldBeGreaterThan(0);
+            report.PeakWorkingBytes.ShouldBeGreaterThan(0);
+            report.PeakWorkingBytes.ShouldBeLessThanOrEqualTo(report.PredictedWorkingBytes,
+                $"{report.PeakWorkingBytes} > {report.PredictedWorkingBytes}");
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
+    [Fact]
     public void APlanReservation_IsVisibleToTheManager()
     {
         using var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);

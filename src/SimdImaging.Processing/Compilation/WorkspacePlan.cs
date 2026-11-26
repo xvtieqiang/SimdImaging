@@ -18,6 +18,7 @@ internal enum WorkspaceTermKind : byte
     ResizeWorkerRows = 8,
     FormatStep = 9,
     GeometryScratch = 10,
+    SectionTransition = 11,
 }
 
 internal readonly record struct WorkspaceTerm(WorkspaceTermKind Kind, long Bytes, string Note);
@@ -58,7 +59,7 @@ internal sealed class WorkspacePlan
 internal static class WorkspacePlanner
 {
     internal static WorkspacePlan Estimate(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
-        IReadOnlyList<CompiledSection> sections, ExecutionBackend backend, CompileOptions options, int outputWidth,
+        IReadOnlyList<SectionState> states, ExecutionBackend backend, CompileOptions options, int outputWidth,
         int outputHeight)
     {
         var terms = new List<WorkspaceTerm>();
@@ -77,22 +78,19 @@ internal static class WorkspacePlanner
         }
 
         return backend == ExecutionBackend.Stream
-            ? EstimateStream(recipe, steps, options, terms, unmanaged)
-            : EstimateFrame(recipe, steps, sections, options, outputWidth, outputHeight, terms, unmanaged);
+            ? EstimateStream(recipe, steps, states, options, terms, unmanaged)
+            : EstimateFrame(recipe, steps, states, options, outputWidth, outputHeight, terms, unmanaged);
     }
 
     private static WorkspacePlan EstimateFrame(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
-        IReadOnlyList<CompiledSection> sections, CompileOptions options, int outputWidth, int outputHeight,
+        IReadOnlyList<SectionState> states, CompileOptions options, int outputWidth, int outputHeight,
         List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
     {
         var bandRows = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
-        var fused = sections.Any(section => section.Fused);
 
         // A format section's output is one frame of the new format, and the sections after it run in that format.
-        // Estimate the plan scratch with the widest format in the chain; over-reporting is the safe direction.
         var width = options.SourceWidth;
         var height = options.SourceHeight;
-        var widest = options.SourceFormat;
         var finalFormat = options.SourceFormat;
         var formatTerms = new List<WorkspaceTerm>();
         var geometryUndeclared = 0;
@@ -105,10 +103,18 @@ internal static class WorkspacePlanner
                     (width, height) = geometry.Geometry.Map(width, height);
 
                 var declared = geometry.Descriptor.WorkspaceModel;
-                if (!declared.IsDeclared)
+                if (!declared.IsDeclared || !geometry.Geometry.SizeKnown)
+                {
+                    // An undeclared workspace is a lower bound; so is a geometry step whose output size is only
+                    // known after reading the pixels (Trim, EntropyCrop, SeamCarve). Both make the prediction a
+                    // floor, and a strict ceiling must refuse rather than pretend.
                     geometryUndeclared++;
-                else if (geometry.Geometry.SizeKnown && declared.Estimate is { } estimateGeometry)
+                }
+                else if (declared.Estimate is { } estimateGeometry)
+                {
                     geometryScratch += estimateGeometry(width, height, height, options.SourceFormat);
+                }
+
                 continue;
             }
 
@@ -116,14 +122,47 @@ internal static class WorkspacePlanner
             {
                 formatTerms.Add(new WorkspaceTerm(WorkspaceTermKind.FormatStep,
                     (long)width * height * outputFormat.BytesPerPixel(), $"{width}x{height} {outputFormat}"));
-                if (outputFormat.BytesPerPixel() > widest.BytesPerPixel())
-                    widest = outputFormat;
                 finalFormat = outputFormat;
             }
         }
 
-        var estimate = MemoryEstimator.Estimate(options.SourceWidth, options.SourceHeight, widest,
-            steps, bandRows, allowFusion: fused, options.Execute.MaxDegreeOfParallelism);
+        // Each operator run is estimated at the size and format it actually sees. Taking the maximum of the
+        // sections is the right peak: sections run one after another, so their windows are never alive together.
+        long maxPlan = 0;
+        long maxPerWorker = 0;
+        var maxWorkers = 1;
+        long maxWholeImage = 0;
+        var undeclared = 0;
+        foreach (var state in states)
+        {
+            if (state.Kind != CompiledSectionKind.OperatorRun || state.StepCount == 0)
+                continue;
+
+            var slice = new PlanStep[state.StepCount];
+            for (var i = 0; i < slice.Length; i++)
+                slice[i] = steps[state.FirstStep + i];
+
+            var estimate = MemoryEstimator.Estimate(state.InputWidth, state.InputHeight, state.InputFormat, slice,
+                bandRows, allowFusion: state.Fused, options.Execute.MaxDegreeOfParallelism);
+            maxPlan = Math.Max(maxPlan, estimate.PlanScratchBytes);
+            maxPerWorker = Math.Max(maxPerWorker, estimate.PerWorkerBytes);
+            maxWorkers = Math.Max(maxWorkers, estimate.Workers);
+            maxWholeImage = Math.Max(maxWholeImage, estimate.WholeImageScratchBytes);
+            undeclared += estimate.UndeclaredSteps;
+        }
+
+        // A geometry or format section holds the previous frame while it produces the next one. That pair is the
+        // real peak, not either frame alone, and it is engine memory, so it belongs in the bound.
+        long transition = 0;
+        foreach (var state in states)
+        {
+            if (state.Kind is not (CompiledSectionKind.Geometry or CompiledSectionKind.Format))
+                continue;
+
+            var inBytes = (long)state.InputWidth * state.InputHeight * state.InputFormat.BytesPerPixel();
+            var outBytes = (long)state.OutputWidth * state.OutputHeight * state.OutputFormat.BytesPerPixel();
+            transition = Math.Max(transition, inBytes + outBytes);
+        }
 
         terms.Add(new WorkspaceTerm(WorkspaceTermKind.Source,
             (long)options.SourceWidth * options.SourceHeight * options.SourceFormat.BytesPerPixel(),
@@ -131,65 +170,96 @@ internal static class WorkspacePlanner
         terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination,
             (long)outputWidth * outputHeight * finalFormat.BytesPerPixel(), "result image"));
         terms.AddRange(formatTerms);
-        if (estimate.PlanScratchBytes > 0)
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, estimate.PlanScratchBytes, "plan buffers"));
-        if (estimate.PerWorkerBytes > 0)
+        if (maxPlan > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, maxPlan, "largest operator-run window set"));
+        if (maxPerWorker > 0)
         {
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, estimate.PerWorkerBytes * estimate.Workers,
-                $"{estimate.PerWorkerBytes} x {estimate.Workers} workers"));
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, maxPerWorker * maxWorkers,
+                $"{maxPerWorker} x {maxWorkers} workers"));
         }
 
-        if (estimate.WholeImageScratchBytes > 0)
+        if (maxWholeImage > 0)
         {
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.WholeImageScratch, estimate.WholeImageScratchBytes,
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.WholeImageScratch, maxWholeImage,
                 "whole-image operator scratch"));
+        }
+
+        if (transition > 0)
+        {
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.SectionTransition, transition,
+                "largest geometry/format input+output frame pair"));
         }
 
         if (geometryScratch > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.GeometryScratch, geometryScratch, "geometry scratch"));
 
-        if (sections.Any(section => section.Kind == CompiledSectionKind.Geometry))
-        {
-            unmanaged.Add(new UnmanagedTerm("geometry intermediates",
-                "a geometry step's reshape buffer is released before the next section and is not in MemoryEstimator"));
-        }
-
-        return new WorkspacePlan(terms, unmanaged, estimate.UndeclaredSteps + geometryUndeclared);
+        return new WorkspacePlan(terms, unmanaged, undeclared + geometryUndeclared);
     }
 
     private static WorkspacePlan EstimateStream(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
-        CompileOptions options, List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
+        IReadOnlyList<SectionState> states, CompileOptions options, List<WorkspaceTerm> terms,
+        List<UnmanagedTerm> unmanaged)
     {
-        var bandRowsOption = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
-        var plan = ProcessingPlan.FromCompiled(steps, bandRowsOption);
-        var bandRows = SequentialBands.For(plan, options.SourceWidth, options.SourceHeight, options.SourceFormat,
-            options.Execute.MaxDegreeOfParallelism);
-
-        var halo = 0;
-        foreach (var step in steps)
-            halo += step.HaloY;
-
-        var windowRows = Math.Min(options.SourceHeight, bandRows + (2 * halo));
-        var windows = steps.Count > 1 ? 4 : 2;
-        var windowBytes = (long)windows * options.SourceWidth * windowRows * options.SourceFormat.BytesPerPixel();
-        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
-            $"{windows} windows of {options.SourceWidth}x{windowRows}"));
-
         var workers = Math.Max(1, options.Execute.MaxDegreeOfParallelism > 0
             ? options.Execute.MaxDegreeOfParallelism
             : Environment.ProcessorCount);
+        var bandRowsOption = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
+
+        // Every operator run has its own width, height and format; a plan after a resize must be estimated at the
+        // resized geometry, not at the source. Sections run one at a time, so the peak is the largest window set
+        // and the largest per-worker scratch among them.
+        long windowBytes = 0;
         long perWorker = 0;
         var undeclared = 0;
-        foreach (var step in steps)
+        foreach (var state in states)
         {
-            if (step.Scratch is not { } scratch)
-            {
-                undeclared++;
+            if (state.Kind != CompiledSectionKind.OperatorRun || state.StepCount == 0)
                 continue;
+
+            var slice = new PlanStep[state.StepCount];
+            var halo = 0;
+            for (var i = 0; i < slice.Length; i++)
+            {
+                slice[i] = steps[state.FirstStep + i];
+                halo += slice[i].HaloY;
             }
 
-            perWorker = Math.Max(perWorker, scratch(options.SourceWidth, options.SourceHeight, windowRows,
-                options.SourceFormat));
+            var plan = ProcessingPlan.FromCompiled(slice, bandRowsOption);
+            var bandRows = SequentialBands.For(plan, state.InputWidth, state.InputHeight, state.InputFormat,
+                options.Execute.MaxDegreeOfParallelism);
+            var windowRows = Math.Min(state.InputHeight, bandRows + (2 * halo));
+            var windows = slice.Length > 1 ? 4 : 2;
+            var sectionWindowBytes = (long)windows * state.InputWidth * windowRows *
+                                     state.InputFormat.BytesPerPixel();
+            if (sectionWindowBytes > windowBytes)
+            {
+                windowBytes = sectionWindowBytes;
+                terms.RemoveAll(term => term.Kind == WorkspaceTermKind.Window);
+                terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
+                    $"{windows} windows of {state.InputWidth}x{windowRows}"));
+            }
+
+            foreach (var step in slice)
+            {
+                if (step.Scratch is not { } scratch)
+                {
+                    undeclared++;
+                    continue;
+                }
+
+                perWorker = Math.Max(perWorker, scratch(state.InputWidth, state.InputHeight, windowRows,
+                    state.InputFormat));
+            }
+        }
+
+        if (windowBytes == 0)
+        {
+            // A plan with no operator section still copies rows through one window pair.
+            var bandRows = bandRowsOption;
+            var windowRows = Math.Min(options.SourceHeight, bandRows);
+            windowBytes = 2L * options.SourceWidth * windowRows * options.SourceFormat.BytesPerPixel();
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
+                $"2 windows of {options.SourceWidth}x{windowRows}"));
         }
 
         if (perWorker > 0)
@@ -200,7 +270,8 @@ internal static class WorkspacePlanner
 
         foreach (var step in recipe.Steps)
         {
-            if (step is GeometryStep { Descriptor.WorkspaceModel.IsDeclared: false })
+            if (step is GeometryStep geometry &&
+                (!geometry.Descriptor.WorkspaceModel.IsDeclared || !geometry.Geometry.SizeKnown))
                 undeclared++;
         }
 
@@ -215,13 +286,19 @@ internal static class WorkspacePlanner
     {
         var width = options.SourceWidth;
         var height = options.SourceHeight;
+        long ring = 0, staging = 0, batch = 0, worker = 0;
+        var ringNote = string.Empty;
+        var stagingNote = string.Empty;
+        var batchNote = string.Empty;
+        var workerNote = string.Empty;
+
         foreach (var step in recipe.Steps)
         {
             if (step is not GeometryStep geometry)
                 continue;
 
             if (!geometry.Geometry.SizeKnown)
-                return;
+                break;
 
             var (destWidth, destHeight) = geometry.Geometry.Map(width, height);
             if (geometry.Kind == GeometryKind.Resize && geometry.Resampler is { } resampler)
@@ -234,23 +311,43 @@ internal static class WorkspacePlanner
                 var workspace = ResizeWorkspace.Estimate(width, height, destWidth, destHeight, weightsY.Taps,
                     nearest, options.SourceFormat, options.Execute);
 
-                terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeRing, workspace.RingBytes,
-                    $"{workspace.RingRows} rows of {destWidth}"));
-                terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeStaging, workspace.StagingBytes,
-                    $"{workspace.ChunkRows} source rows"));
-                terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeBatch, workspace.ReadyBytes,
-                    $"{workspace.ReadyRows} destination rows"));
-                if (workspace.WorkerRowBytes > 0)
+                if (workspace.RingBytes > ring)
                 {
-                    terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeWorkerRows, workspace.WorkerRowBytes,
-                        $"{workspace.Workers} workers"));
+                    ring = workspace.RingBytes;
+                    ringNote = $"{workspace.RingRows} rows of {destWidth}";
                 }
 
-                return;
+                if (workspace.StagingBytes > staging)
+                {
+                    staging = workspace.StagingBytes;
+                    stagingNote = $"{workspace.ChunkRows} source rows";
+                }
+
+                if (workspace.ReadyBytes > batch)
+                {
+                    batch = workspace.ReadyBytes;
+                    batchNote = $"{workspace.ReadyRows} destination rows";
+                }
+
+                if (workspace.WorkerRowBytes > worker)
+                {
+                    worker = workspace.WorkerRowBytes;
+                    workerNote = $"{workspace.Workers} workers";
+                }
             }
 
             width = destWidth;
             height = destHeight;
         }
+
+        // Resizes run one at a time, so the peak is the largest ring/staging/batch among them, not their sum.
+        if (ring > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeRing, ring, ringNote));
+        if (staging > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeStaging, staging, stagingNote));
+        if (batch > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeBatch, batch, batchNote));
+        if (worker > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeWorkerRows, worker, workerNote));
     }
 }

@@ -39,6 +39,13 @@ Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueR
 - **NativeAOT 已验证**：两次发布（AVX2 基线 / 默认 SSE2 基线）与 JIT 逐字节一致，覆盖编解码**和**几何
   算子（crop / bicubic·Lanczos3 resize / 16 位 resize / rotate / flip / pad / composite）。
 
+### API 兼容
+
+本仓库尚未发布 NuGet 包或 tag，版本是未发布的 `0.1.0-alpha`，`docs/public-api.txt` 是真实契约。2026-11-26 移除了
+`IImageOp`（全仓无消费者，实际契约是内部 `OperatorContract`，`ImageOp` 是唯一定义）；这属于 **0.x 的预发布 API
+收敛**，不是已发布版本的破坏。如果将来有包已发布，同类变更按 minor 处理，并在发布说明里给出迁移路径；不会只更新
+快照就当兼容性已经解决。
+
 ## 构建
 
 ```bash

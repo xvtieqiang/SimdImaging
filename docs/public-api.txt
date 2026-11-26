@@ -590,6 +590,7 @@
   SimdImaging.PlanWorkspaceKind.ResizeRing = 5
   SimdImaging.PlanWorkspaceKind.ResizeStaging = 6
   SimdImaging.PlanWorkspaceKind.ResizeWorkerRows = 8
+  SimdImaging.PlanWorkspaceKind.SectionTransition = 11
   SimdImaging.PlanWorkspaceKind.Source = 0
   SimdImaging.PlanWorkspaceKind.WholeImageScratch = 4
   SimdImaging.PlanWorkspaceKind.Window = 2

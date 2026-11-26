@@ -11,7 +11,9 @@ internal enum WorkspaceScope : byte
     /// <summary>One copy for the whole image, on the calling thread.</summary>
     WholeImage = 1,
 
-    /// <summary>One copy per operator call, regardless of workers.</summary>
+    /// <summary>One copy per operator call. A banded executor calls once per band (so it behaves like
+    /// <see cref="PerWorker"/>); a whole-image executor calls once. No current operator declares it, but the
+    /// meaning is defined rather than left to the estimator to guess.</summary>
     PerCall = 2,
 }
 

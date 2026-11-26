@@ -97,7 +97,8 @@ internal static class GeometrySteps
         new("trim", new ContentDerivedRule(), (view, pool) => Canvas.Trim(view, tolerance, pool), Semantics: PixelSemantics.EncodedInteger);
 
     internal static GeometryDescriptor RoundCorners(float radius) =>
-        new("round-corners", GeometryRule.SameSize, (view, pool) => Canvas.RoundCorners(view, radius, pool));
+        new("round-corners", GeometryRule.SameSize, (view, pool) => Canvas.RoundCorners(view, radius, pool),
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     internal static GeometryDescriptor Transpose(bool anti) =>
         new("transpose", new SwappedSizeRule(), (view, pool) => Orientation.Transpose(view, anti, pool),

@@ -101,6 +101,9 @@ public enum PlanWorkspaceKind : byte
 
     /// <summary>Scratch a geometry step declares (seam solving, for example).</summary>
     GeometryScratch = 10,
+
+    /// <summary>The largest input+output frame pair a geometry or format section holds at once.</summary>
+    SectionTransition = 11,
 }
 
 /// <summary>One input port's source rectangle in a <see cref="PlanStepExplanation"/>.</summary>
@@ -196,6 +199,7 @@ public sealed record PlanExplanation(PlanBackend Backend, PlanRefusals Refusals,
                     WorkspaceTermKind.ResizeBatch => PlanWorkspaceKind.ResizeBatch,
                     WorkspaceTermKind.ResizeWorkerRows => PlanWorkspaceKind.ResizeWorkerRows,
                     WorkspaceTermKind.GeometryScratch => PlanWorkspaceKind.GeometryScratch,
+                    WorkspaceTermKind.SectionTransition => PlanWorkspaceKind.SectionTransition,
                     _ => PlanWorkspaceKind.FormatStep,
                 }, term.Bytes, term.Note))
                 .ToArray(),

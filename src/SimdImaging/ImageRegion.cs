@@ -149,14 +149,18 @@ public sealed partial class Image
     /// plan cannot run over a rectangle (the message names the step).</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     internal static Image ProcessRegion(string path, ProcessingPlan plan, PixelRect region,
-        TranscodeOptions? options = null, CancellationToken cancellationToken = default)
+        TranscodeOptions? options = null, CancellationToken cancellationToken = default) =>
+        ProcessRegion(path, plan, region, options, cancellationToken, out _);
+
+    internal static Image ProcessRegion(string path, ProcessingPlan plan, PixelRect region,
+        TranscodeOptions? options, CancellationToken cancellationToken, out long predictedBytes)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(plan);
         options ??= TranscodeOptions.Default;
 
         using var source = TiffRegionSource.Open(path, options.Region?.PageIndex ?? 0, options.Region?.Format, options.Region?.MaxSegmentBytes ?? (64L << 20));
-        return ProcessCore(source, plan, region, options, cancellationToken);
+        return ProcessCore(source, plan, region, options, cancellationToken, out predictedBytes);
     }
 
     /// <summary>
@@ -164,7 +168,11 @@ public sealed partial class Image
     /// The stream is read from position 0 (TIFF offsets are absolute) and left open.
     /// </summary>
     internal static Image ProcessRegion(Stream seekableTiff, ProcessingPlan plan, PixelRect region,
-        TranscodeOptions? options = null, CancellationToken cancellationToken = default)
+        TranscodeOptions? options = null, CancellationToken cancellationToken = default) =>
+        ProcessRegion(seekableTiff, plan, region, options, cancellationToken, out _);
+
+    internal static Image ProcessRegion(Stream seekableTiff, ProcessingPlan plan, PixelRect region,
+        TranscodeOptions? options, CancellationToken cancellationToken, out long predictedBytes)
     {
         ArgumentNullException.ThrowIfNull(seekableTiff);
         ArgumentNullException.ThrowIfNull(plan);
@@ -172,7 +180,7 @@ public sealed partial class Image
 
         using var source = TiffRegionSource.Open(seekableTiff, options.Region?.PageIndex ?? 0, options.Region?.Format,
             options.Region?.MaxSegmentBytes ?? (64L << 20));
-        return ProcessCore(source, plan, region, options, cancellationToken);
+        return ProcessCore(source, plan, region, options, cancellationToken, out predictedBytes);
     }
 
     /// <summary>
@@ -352,9 +360,10 @@ public sealed partial class Image
     }
 
     private static Image ProcessCore(TiffRegionSource source, ProcessingPlan plan, PixelRect region,
-        TranscodeOptions options, CancellationToken cancellationToken)
+        TranscodeOptions options, CancellationToken cancellationToken, out long predictedBytes)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        predictedBytes = 0;
 
         if (!region.FitsIn(source.Width, source.Height) || region.Width <= 0 || region.Height <= 0)
             throw new ArgumentException($"The region {region} does not lie inside {source.Width}x{source.Height}.",
@@ -381,6 +390,7 @@ public sealed partial class Image
             Execute = options.Execute ?? new ExecuteOptions(),
         });
 
+        predictedBytes = compiled.Workspace.BoundedBytes;
         if (compiled.Backend != ExecutionBackend.Region)
             throw new NotSupportedException(
                 $"This plan cannot run over a region: {compiled.RegionRefusal}. Run it over a whole image with " +

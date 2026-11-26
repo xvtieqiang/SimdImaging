@@ -1,0 +1,48 @@
+using SimdImaging.Abstractions;
+using SimdImaging.Processing;
+using SimdImaging.Processing.Contracts;
+
+namespace SimdImaging.Tests;
+
+/// <summary>
+/// <see cref="WorkspaceScope"/> is part of the contract, not a comment: the same declared number must be multiplied
+/// by the worker count only when the operator says it is per-worker.
+/// </summary>
+public sealed class WorkspaceScopeTests
+{
+    [Fact]
+    public void WholeImageScope_IsCountedOnce_AndPerWorkerScope_IsCountedPerWorker()
+    {
+        var perWorker = MemoryEstimator.Estimate(64, 256, WorkingFormat.Rgba8,
+            [new PlanStep(ScopedOp(WorkspaceScope.PerWorker))], 64, allowFusion: false, degree: 4);
+        var wholeImage = MemoryEstimator.Estimate(64, 256, WorkingFormat.Rgba8,
+            [new PlanStep(ScopedOp(WorkspaceScope.WholeImage))], 64, allowFusion: false, degree: 4);
+
+        perWorker.PerWorkerBytes.ShouldBe(1024);
+        perWorker.WholeImageScratchBytes.ShouldBe(0);
+        perWorker.OperatorScratchBytes.ShouldBe(4096);
+
+        wholeImage.PerWorkerBytes.ShouldBe(0);
+        wholeImage.WholeImageScratchBytes.ShouldBe(1024);
+        wholeImage.OperatorScratchBytes.ShouldBe(1024);
+
+        // PerCall has no current user. A banded step calls once per band, so the contract's honest reading is the
+        // per-worker term; the point of the test is that it is counted, not silently dropped.
+        var perCall = MemoryEstimator.Estimate(64, 256, WorkingFormat.Rgba8,
+            [new PlanStep(ScopedOp(WorkspaceScope.PerCall))], 64, allowFusion: false, degree: 4);
+        perCall.PerWorkerBytes.ShouldBe(1024);
+        perCall.OperatorScratchBytes.ShouldBe(4096);
+    }
+
+    private static ImageOp ScopedOp(WorkspaceScope scope)
+    {
+        var contract = OperatorContract.Create("scope-probe", OpCategory.Point, WorkingFormatMask.All,
+            IdentityFootprint.Instance, WorkspaceModel.Of((_, _, _, _) => 1024, scope), haloX: 0, haloY: 0);
+
+        return new ImageOp(contract, new KernelImplementations((source, destination, rect, sourceRect) =>
+        {
+            for (var y = 0; y < rect.Height; y++)
+                source.Row(y).Slice(rect.X * 4, rect.Width * 4).CopyTo(destination.Row(rect.Y + y).Slice(rect.X * 4));
+        }));
+    }
+}

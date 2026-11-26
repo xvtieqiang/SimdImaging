@@ -140,10 +140,11 @@ internal static class RegionExecutor
         var maxWindowRows = Math.Min(height, bandRows + (2 * haloY));
         var bytesPerPixel = source.Format.BytesPerPixel();
 
-        WorkingSetBudget.Ensure(steps, options, maxWindowCols, height, maxWindowCols, maxWindowRows, source.Format,
-            windows: steps.Count > 1 ? 4 : 2,
-            extraBytes: (long)region.Width * region.Height * bytesPerPixel,
-            pathName: "The region");
+        var estimate = WorkingSetBudget.Measure(steps, options, maxWindowCols, height, maxWindowCols, maxWindowRows,
+            source.Format, windows: steps.Count > 1 ? 4 : 2,
+            extraBytes: (long)region.Width * region.Height * bytesPerPixel, out var undeclared);
+        WorkingSetBudget.Ensure(estimate, undeclared, steps.Count, options, "The region");
+        using var regionLease = options.Workspace?.Reserve(estimate, "region windows");
 
         var cancellation = options.CancellationToken;
         cancellation.ThrowIfCancellationRequested();

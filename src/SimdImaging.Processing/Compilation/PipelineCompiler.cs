@@ -74,7 +74,7 @@ internal static class PipelineCompiler
                     Fused = fused,
                 });
                 states.Add(new SectionState(CompiledSectionKind.OperatorRun, first, count, recipeFirst, runWidth,
-                    runHeight, runWidth, runHeight, runFormat, currentFormat));
+                    runHeight, runWidth, runHeight, runFormat, currentFormat) { Fused = fused });
                 continue;
             }
 
@@ -161,7 +161,16 @@ internal static class PipelineCompiler
 
         explanation.Add(sizeKnown ? $"output: {width}x{height}" : "output: size depends on content");
 
-        var workspace = WorkspacePlanner.Estimate(recipe, steps, sections, backend, options, width, height);
+        var workspace = WorkspacePlanner.Estimate(recipe, steps, states, backend, options, width, height);
+        if (options.Execute.MaxWorkingBytes > 0 && workspace.IsLowerBound && !options.Execute.AllowUnestimatedScratch)
+        {
+            throw new InvalidOperationException(
+                $"The plan sets a {options.Execute.MaxWorkingBytes}-byte ceiling but {workspace.UndeclaredSteps} of " +
+                "its steps declare no workspace, so the estimate is a lower bound and cannot enforce that ceiling. " +
+                "Declare the step's workspace, raise the ceiling, drop it, or set " +
+                "ExecuteOptions.AllowUnestimatedScratch to accept the lower bound.");
+        }
+
         if (options.Execute.MaxWorkingBytes > 0 && workspace.BoundedBytes > options.Execute.MaxWorkingBytes)
         {
             throw new InvalidOperationException(
@@ -174,10 +183,6 @@ internal static class PipelineCompiler
         return new CompiledExecutionPlan(recipe, steps, sections, backend, streamRefusal, regionRefusal,
             tileRefusal, width, height, sizeKnown, bandRows, workspace, stepInfo, regionCost, explanation);
     }
-
-    private readonly record struct SectionState(CompiledSectionKind Kind, int FirstStep, int StepCount,
-        int RecipeIndex, int InputWidth, int InputHeight, int OutputWidth, int OutputHeight,
-        WorkingFormat InputFormat, WorkingFormat OutputFormat);
 
     /// <summary>
     /// Walks the sections backwards from the requested output rectangle. An operator step maps its output region

@@ -788,11 +788,14 @@ orientation 复位（§6.3.10）。
 格式段的输出帧、几何步的 reshape 目标、tile 执行器的一块 tile。现在它们都在分配前比较字节数，超出就抛出带步骤名和
 上限的 `InvalidOperationException`。
 
-编译期还有一道总门：`PipelineCompiler.Compile` 用 `WorkspacePlan.BoundedBytes`（顺序项之和，上界）与
-`MaxWorkingBytes` 比较，超出即拒绝；执行期的逐项检查仍然保留，因为调用方可以在执行时才给出不同的预算。
+编译期总门有两条：`WorkspacePlan.IsLowerBound` 为真且调用方没有 `AllowUnestimatedScratch` 时直接拒绝
+（未声明 workspace 不能靠下界通过），然后才比较 `BoundedBytes` 与 `MaxWorkingBytes`。`WorkspacePlan` 现在按
+`CompiledSection` 的输入尺寸/格式逐段估算，并把几何/格式段的「旧帧 + 新帧」记为 `SectionTransition`；流式的多个
+Resize 取各自最大 ring，不再只算第一个。执行期把几何/格式过渡帧、Region 窗口与 Scratch 也 `Reserve` 到同一个
+`WorkspaceManager`，所以 `PeakWorkingBytes` 覆盖这些此前漏掉的缓冲。
 
-这仍然是**逐阶段 + 编译期上界**，不是单一执行期跟踪器：各段串行，前一段释放后下一段才开始；真正的全局账户
-（spool/物化缓存、实际峰值与预测的对账）留给 P4 后续。
+这仍然是**逐段预留 + 峰值账户**，不是单一分配器，也没有 spool：各段串行，前一段释放后下一段才开始；调用方仍能
+在运行前替换 `WorkspaceManager`。
 
 ### 6.3.9 区域推导（P1 缺口补齐）
 
@@ -827,12 +830,14 @@ orientation 复位（§6.3.10）。
 - `AutoOrient` 不再是 `Geometry` barrier：它按当前方向追加一个 GeometryStep，pipeline 在包装结果时把 orientation
   置为 Normal。至此所有 view 算子都在计划/几何/格式步里。
 - `WorkspaceManager`（公开）是执行期预留账户：`Reserve(bytes, name)` 返回租约，记录并发峰值并在超过 limit 时拒绝。
-  `ExecuteOptions.Workspace` 传入；计划、流窗口、resize ring、tile 各自预留；`ImageTranscode` 使用调用方给的账户，
-  没有就为本次运行自建一个，`ProcessReport` 带 `PeakWorkingBytes` 与 `PredictedWorkingBytes`（编译期上界）。
+  `ExecuteOptions.Workspace` 传入；计划、流窗口+Scratch、resize ring、tile、Region 窗口、几何/格式过渡帧各自预留；
+  `ImageTranscode` 使用调用方给的账户，没有就为本次运行自建一个，`ProcessReport` 带 `PeakWorkingBytes` 与
+  `PredictedWorkingBytes`（编译期上界）。`WorkspaceScope.WholeImage` 会改变乘法，不再只由 Category 推断。
 
 区域入口现在也统一了：`Image.ProcessRegion` 先把计划编译一次（`Region` 后端 + 区域成本），再走
 `CompiledPlanExecutor.ExecuteRegion`，所以拒绝原因、每步源区域和解释与其它入口同源。仍未统一：`Image.ProcessTo` /
-`ResizeRegion` 仍走 `ProcessingPlan`/行泵；WorkspaceManager 没有 spool/物化缓存项，也没有把 M2–M4 的出口条件补验。
+`ResizeRegion` 仍走 `ProcessingPlan`/行泵（区域 + 尾部 resize 的组合）；WorkspaceManager 不做 spool，FloatScratch
+空闲保留与编解码器缓冲仍作为 `Unmanaged` 声明。M2–M4 的出口条件已按 2026-11-26 口径关闭。
 
 ### 6.3.11 区域执行也走编译入口
 

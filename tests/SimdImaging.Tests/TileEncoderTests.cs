@@ -53,6 +53,8 @@ public sealed class TileEncoderTests
         report.Height.ShouldBe(23);
         report.PeakWorkingBytes.ShouldBeGreaterThan(0);
         report.PredictedWorkingBytes.ShouldBeGreaterThan(0);
+        report.PeakWorkingBytes.ShouldBeLessThanOrEqualTo(report.PredictedWorkingBytes,
+            "the tile run's region windows and the encoder band are part of the compiled bound");
 
         encoded.Position = 0;
         using var decoded = Image.Load(encoded);

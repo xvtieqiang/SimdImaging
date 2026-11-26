@@ -43,23 +43,37 @@ internal static class CompiledPlanExecutor
                     // contract guarantees it exists for a step that declares an output format.
                     var formatStep = (OperatorStep)plan.Recipe.Steps[section.RecipeIndex];
                     var output = formatStep.Operator.Contract.Output.Format!.Value;
-                    CheckBudget(options, (long)current.Width * current.Height * output.BytesPerPixel(),
-                        $"the format step '{formatStep.Name}'");
-                    next = formatStep.Second is { } second && formatStep.Operator.Kernels.WholeImageSecond is { } two
-                        ? two(current, second)
-                        : formatStep.Operator.Kernels.WholeImage!(current);
+                    var formatOld = (long)current.Width * current.Height * current.Format.BytesPerPixel();
+                    var formatNew = (long)current.Width * current.Height * output.BytesPerPixel();
+                    CheckBudget(options, formatOld + formatNew, $"the format step '{formatStep.Name}'");
+                    using (options.Workspace?.Reserve(formatOld + formatNew, "format transition"))
+                    {
+                        next = formatStep.Second is { } second &&
+                               formatStep.Operator.Kernels.WholeImageSecond is { } two
+                            ? two(current, second)
+                            : formatStep.Operator.Kernels.WholeImage!(current);
+                    }
                 }
                 else
                 {
                     var geometry = (GeometryStep)plan.Recipe.Steps[section.RecipeIndex];
+                    var oldBytes = (long)current.Width * current.Height * current.Format.BytesPerPixel();
                     if (geometry.Geometry.SizeKnown)
                     {
                         var (width, height) = geometry.Geometry.Map(current.Width, current.Height);
-                        CheckBudget(options, (long)width * height * current.Format.BytesPerPixel(),
+                        var newBytes = (long)width * height * current.Format.BytesPerPixel();
+                        CheckBudget(options, oldBytes + newBytes, $"the geometry step '{geometry.Name}'");
+                        using (options.Workspace?.Reserve(oldBytes + newBytes, "geometry transition"))
+                        {
+                            next = geometry.Reshape(current, pool);
+                        }
+                    }
+                    else
+                    {
+                        next = geometry.Reshape(current, pool);
+                        CheckBudget(options, oldBytes + (long)next.Width * next.Height * next.Format.BytesPerPixel(),
                             $"the geometry step '{geometry.Name}'");
                     }
-
-                    next = geometry.Reshape(current, pool);
                 }
 
                 owned?.Dispose();

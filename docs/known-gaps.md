@@ -1276,10 +1276,20 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   端口区域；视图未知时保守记整图。所有内置第二输入（Composite/Blend/DrawImage/Watermark/GuidedFilter/ApplyGainMap）都已注入；仍未做：
   Stream / Region / Tile 继续拒绝 `CompositeStep` / `FormatChange`；视图生命周期仍由调用方保证，库不做所有权
   转移或自动存活校验。
-- **统一预算（P4 已收口）**：编译期上界总门 + `WorkspaceManager` 预留账户（计划/流窗口/resize ring/tile/编码带/物化
-  结果），`ProcessReport` 带预测与实测峰值，并有「预测 ≥ 实测」的对账测试（流式与物化各一）。**不做 spool**：当前策略
-  是物化或明确拒绝，两者都计入预算；引入临时文件需要存储与清理契约，超出本库边界。FloatScratch 空闲保留与编解码器内部
-  缓冲作为 `PlanWorkspaceReport.Unmanaged` 显式登记，不当成零。M2–M4 的出口条件按 2026-11-26 的口径关闭（见 §「M2–M4 出口条件核验」）。
+- **统一预算（P4 核心已收口，2026-11-26）**：编译期上界总门 + `WorkspaceManager` 预留账户（计划/流窗口/resize
+  ring/tile/编码带/物化结果）；2026-11-26 补上了四个此前真实存在的洞：
+  1. 编译门现在读 `IsLowerBound`，未声明 workspace 的步骤在 `MaxWorkingBytes` 下不能靠下界通过，除非显式设
+     `AllowUnestimatedScratch`（与旧 `ProcessingPlan` 同规则）；
+  2. 几何/格式段按「旧帧 + 新帧」预留，`WorkspacePlan` 增加 `SectionTransition` 项；
+  3. `EstimateFrame` 按 `CompiledSection` 的输入尺寸/格式逐段估算（Resize 之后的算子不再按源尺寸算），
+     `EstimateStream` 同样按段取最大的窗口/Scratch，多个 Resize 取各自最大 ring 而不是只算第一个；
+  4. Region/Stream 的窗口与 Scratch 也 `Reserve` 进同一个 `WorkspaceManager`，`PeakWorkingBytes` 不再漏掉
+     `RegionExecutor` 的工作集；区域路径也设 `PredictedWorkingBytes`。`WorkspaceScope.WholeImage` 现在真正改变
+     乘法（不再只靠 Category）。
+  对账测试覆盖流式、物化、几何链与区域四种运行（`WorkspaceManagerTests` / `RegionWorkspaceTests`）。**不做 spool**：
+  当前策略是物化或明确拒绝，两者都计入预算；临时文件需要存储与清理契约，超出本库边界。FloatScratch 空闲保留与编解码器
+  内部缓冲作为 `PlanWorkspaceReport.Unmanaged` 显式登记，不当成零。M2–M4 的出口条件按 2026-11-26 的口径关闭
+  （见 §「M2–M4 出口条件核验」）。
 - **区域推导（P1 部分完成）**：已有 `SourceRegionSet`、反向逐段推导、Resize/Crop/Pad/FlipVertical/FlipHorizontal/
   Rotate90/Rotate180/Transpose/RotateFlip（8 种组合）/Affine/任意角 Rotate 反向映射、每个输入端口的 footprint、
   区域成本与 `RegionCost` 拒绝、公开的 `Image.Explain`（`PlanExplanation`：后端与拒绝原因、编译段与融合、工作空间
@@ -1300,6 +1310,14 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   `ImageOp` 是唯一算子定义。注入式第二输入的端口区域也改为精确矩形，不再保守整图。**仍未逐一核验**：纯置换/画布类
   几何（Tile、ResizeCanvas、RoundCorners、Trim、EntropyCrop）的声明已按实现给出（多为 `EncodedInteger`），但尚无
   像素级语义测试；几何的 `Border` 只对 Warp/Affine/Perspective/Rotate 标了 `Constant`，其余用默认 `Clamp`。
+- **PassModel 的当前定位（2026-11-26 明确）**：`PassModel` 仍是描述性字段，不生成独立 Pass 调度。现有
+  `GatherThenApply` / `MultiPass` 算子都在一个内核里完成整图或整带计算，拆开只会增加一次中间物化而没有算法收益；
+  因此不在本轮“为了用上字段”而拆算法。将来出现必须跨 Pass 复用统计/中间结果的算子时，再引入 Pass 计划，并让它
+  真正驱动 `CompiledSection`。这是决定，不是遗漏。
+- **旧入口的兼容决定（2026-11-26）**：`ProcessTo` 与 `ResizeRegion` 保留为内部/兼容行泵路径；主要公开入口
+  （`Image.Pipe` / `Apply` / `ProcessRegion` / `ImageTranscode` / `ProcessTiles`）已走 Compiler。区域 + 尾部 resize
+  仍是行泵组合，因为编译器的 Region 后端只建模同尺寸矩形；强行并入会引入第二套几何语义。若未来要统一，先扩展
+  Region 计划到「算子 + 尾部 Resize」再迁移。
 - **Tile 后端（P5 部分完成）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。公开入口：
   `Image.ProcessTiles` 的缓冲与 Sink 两个重载、`Image.ProcessTilesTo(IRegionSource, Stream, …)`（编码器端 sink：

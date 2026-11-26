@@ -134,7 +134,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             throw new InvalidOperationException(
                 "A plan that ends with a resize cannot be a stage; call Resize on the transcode instead.");
         foreach (var step in plan.Steps)
-            _recipe.Append(step.Definition);
+            _recipe.Append(step.Definition, step.Lut);
         return this;
     }
 
@@ -564,9 +564,16 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 : Image.ResizeRegion(_stream!, plan, region, width, height, resampler, _options, cancellationToken);
         }
 
-        return _path is not null
-            ? Image.ProcessRegion(_path, plan, region, _options, cancellationToken)
-            : Image.ProcessRegion(_stream!, plan, region, _options, cancellationToken);
+        if (_path is not null)
+        {
+            var image = Image.ProcessRegion(_path, plan, region, _options, cancellationToken, out var predicted);
+            _predictedBytes = predicted;
+            return image;
+        }
+
+        var streamed = Image.ProcessRegion(_stream!, plan, region, _options, cancellationToken, out var predictedBytes);
+        _predictedBytes = predictedBytes;
+        return streamed;
     }
 
     /// <summary>One options bag for the pipeline; the region-specific execution knobs are unified here so a caller

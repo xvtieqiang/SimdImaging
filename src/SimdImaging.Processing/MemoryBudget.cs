@@ -1,4 +1,5 @@
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Fusion;
 using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
@@ -174,7 +175,10 @@ public static class MemoryEstimator
                 continue;
             }
 
-            var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite;
+            // The declared scope is part of the contract, not a hint: a step that says its scratch is held once
+            // for the whole image must not be multiplied by the worker count even if its category is Point.
+            var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
+                || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
             if (isWholeImage)
             {
                 wholeImage = Math.Max(wholeImage, scratch(width, height, height, format));
