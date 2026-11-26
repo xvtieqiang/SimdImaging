@@ -32,16 +32,21 @@ public sealed partial class Image
         // rejects a plan; doing it after this rent made that refusal too late.
         var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
         var targetBytes = TargetBuffer.Bytes(source.Width, source.Height, source.Format);
-        if (execute.MaxWorkingBytes > 0 && targetBytes > execute.MaxWorkingBytes)
+        var tileWorkingBytes = compiled.Workspace.BoundedBytes;
+        if (execute.MaxWorkingBytes > 0 && checked(targetBytes + tileWorkingBytes) > execute.MaxWorkingBytes)
             throw new InvalidOperationException(
-                $"The tiled destination needs {targetBytes} bytes, above ExecuteOptions.MaxWorkingBytes = {execute.MaxWorkingBytes}.");
+                $"The tiled result plus tile working set needs {targetBytes + tileWorkingBytes} bytes, above " +
+                $"ExecuteOptions.MaxWorkingBytes = {execute.MaxWorkingBytes}.");
+        var tileOptions = execute.MaxWorkingBytes > 0
+            ? execute with { MaxWorkingBytes = execute.MaxWorkingBytes - targetBytes }
+            : execute;
         using var targetLease = TargetBuffer.Reserve(execute, source.Width, source.Height, source.Format,
             "tiled destination");
         var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         try
         {
             CompiledPlanExecutor.ExecuteTiles(compiled, source, new BufferRegionSink(destination), tileWidth,
-                tileHeight, execute, pool);
+                tileHeight, tileOptions, pool);
             return destination;
         }
         catch
@@ -64,7 +69,7 @@ public sealed partial class Image
 
         var execute = options ?? new ExecuteOptions();
         var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
-        CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, execute, pool);
+        CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, tileOptions, pool);
     }
 
     /// <summary>
@@ -93,6 +98,19 @@ public sealed partial class Image
         var workspace = saved.Workspace ?? new WorkspaceManager(saved.MaxWorkingBytes);
         var execute = saved with { Workspace = workspace };
         var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
+        tileWidth = Math.Min(tileWidth, source.Width);
+        tileHeight = Math.Min(tileHeight, source.Height);
+        var encoderBandRows = Math.Min(tileHeight, source.Height);
+        var encoderBandBytes = checked((long)source.Width * encoderBandRows * source.Format.BytesPerPixel()
+            + (long)encoderBandRows * sizeof(int));
+        if (execute.MaxWorkingBytes > 0 &&
+            checked(encoderBandBytes + compiled.Workspace.BoundedBytes) > execute.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"The encoder band plus tile working set needs {encoderBandBytes + compiled.Workspace.BoundedBytes} " +
+                $"bytes, above ExecuteOptions.MaxWorkingBytes = {execute.MaxWorkingBytes}.");
+        var tileOptions = execute.MaxWorkingBytes > 0
+            ? execute with { MaxWorkingBytes = execute.MaxWorkingBytes - encoderBandBytes }
+            : execute;
 
         var encodeOptions = BuildEncodeOptions(format, save);
         using var session = ImageCodecs.CreateEncoder(format, destination, encodeOptions, leaveOpen: true);
@@ -114,7 +132,7 @@ public sealed partial class Image
             MetadataCarried: save.Metadata is not null)
         {
             PeakWorkingBytes = workspace.PeakBytes,
-            PredictedWorkingBytes = compiled.Workspace.BoundedBytes,
+            PredictedWorkingBytes = compiled.Workspace.BoundedBytes + encoderBandBytes,
         };
     }
 
