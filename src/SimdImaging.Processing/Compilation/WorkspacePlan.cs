@@ -24,6 +24,7 @@ internal enum WorkspaceTermKind : byte
     SectionTransition = 12,
     ResizeWorkerTapScratch = 13,
     FormatScratch = 14,
+    OperatorScratchPeak = 15,
 }
 
 internal readonly record struct WorkspaceTerm(WorkspaceTermKind Kind, long Bytes, string Note);
@@ -182,8 +183,7 @@ internal static class WorkspacePlanner
         // Each operator run is estimated at the size and format it actually sees. Taking the maximum of the
         // sections is the right peak: sections run one after another, so their windows are never alive together.
         long maxPlan = 0;
-        long maxPerWorkerPeak = 0;
-        long maxWholeImage = 0;
+        long maxOperatorScratchPeak = 0;
         var undeclared = 0;
         foreach (var state in states)
         {
@@ -197,8 +197,7 @@ internal static class WorkspacePlanner
             var estimate = MemoryEstimator.Estimate(state.InputWidth, state.InputHeight, state.InputFormat, slice,
                 bandRows, allowFusion: state.Fused, options.Execute.MaxDegreeOfParallelism);
             maxPlan = Math.Max(maxPlan, estimate.PlanScratchBytes);
-            maxPerWorkerPeak = Math.Max(maxPerWorkerPeak, estimate.PerWorkerPeakBytes);
-            maxWholeImage = Math.Max(maxWholeImage, estimate.WholeImageScratchBytes);
+            maxOperatorScratchPeak = Math.Max(maxOperatorScratchPeak, estimate.OperatorScratchPeakBytes);
             undeclared += estimate.UndeclaredSteps;
         }
 
@@ -223,15 +222,9 @@ internal static class WorkspacePlanner
         terms.AddRange(formatTerms);
         if (maxPlan > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, maxPlan, "largest operator-run window set"));
-        if (maxPerWorkerPeak > 0)
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, maxPerWorkerPeak,
-                "maximum simultaneous per-worker scratch peak across operator sections"));
-
-        if (maxWholeImage > 0)
-        {
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.WholeImageScratch, maxWholeImage,
-                "whole-image operator scratch"));
-        }
+        if (maxOperatorScratchPeak > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.OperatorScratchPeak, maxOperatorScratchPeak,
+                "maximum combined scratch peak of one operator invocation across sequential sections"));
 
         if (transition > 0)
         {
