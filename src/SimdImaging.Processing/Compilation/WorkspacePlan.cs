@@ -255,8 +255,8 @@ internal static class WorkspacePlanner
                 continue;
             }
 
-            var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
-                || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
+            var isWholeImage = step.Definition.Contract.Workspace.IsSingleCopy(
+                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage);
             if (isWholeImage)
                 wholeImage = Math.Max(wholeImage,
                     scratch(options.SourceWidth, options.SourceHeight, options.SourceHeight, options.SourceFormat));
@@ -338,8 +338,8 @@ internal static class WorkspacePlanner
                 continue;
             }
 
-            var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
-                || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
+            var isWholeImage = step.Definition.Contract.Workspace.IsSingleCopy(
+                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage);
             if (isWholeImage)
                 wholeImage = Math.Max(wholeImage,
                     scratch(options.SourceWidth, options.SourceHeight, options.SourceHeight, options.SourceFormat));
