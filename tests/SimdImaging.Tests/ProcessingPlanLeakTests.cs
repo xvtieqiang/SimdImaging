@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Internal;
@@ -344,6 +345,44 @@ public class ProcessingPlanLeakTests
             new ExecuteOptions { MaxDegreeOfParallelism = 2 });
         RowParallel.LastWorkerCount.ShouldBe(2);
         parallel.View.Span.ToArray().ShouldBe(serial.View.Span.ToArray());
+    }
+    [Fact]
+    public void StepwiseBandsAndWorkspaceEstimateFollowExecuteOptionsDegree()
+    {
+        const int width = 64;
+        const int height = 1080;
+        var previousDegree = RowParallel.DegreeOverride;
+        var observedRows = new ConcurrentBag<int>();
+        try
+        {
+            RowParallel.DegreeOverride = 8;
+            var contract = OperatorContract.Create("stepwise-band-probe", OpCategory.Point,
+                WorkingFormatMask.All, IdentityFootprint.Instance,
+                WorkspaceModel.Of((w, _, rows, format) => (long)w * rows * format.BytesPerPixel()),
+                requirements: ExecutionRequirements.RowBands);
+            var op = new ImageOp(contract, new KernelImplementations((source, destination, rect, _) =>
+            {
+                observedRows.Add(rect.Height);
+                for (var y = 0; y < rect.Height; y++)
+                    source.Row(rect.Y + y).Slice(rect.X * 4, rect.Width * 4)
+                        .CopyTo(destination.Row(rect.Y + y).Slice(rect.X * 4));
+            }));
+            var plan = new ProcessingPlan().Add(op);
+            using var source = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba8);
+
+            var estimate = MemoryEstimator.Estimate(source.View, plan, degree: 2);
+            using var result = plan.ExecuteWithOptions(source.View,
+                new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 2 });
+
+            observedRows.Order().ToArray().ShouldBe(new[] { height / 2, height / 2 });
+            estimate.Workers.ShouldBe(2);
+            estimate.PerWorkerBytes.ShouldBe((long)width * (height / 2) * WorkingFormat.Rgba8.BytesPerPixel());
+            estimate.PerWorkerPeakBytes.ShouldBe(2L * estimate.PerWorkerBytes);
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previousDegree;
+        }
     }
     private sealed class CountingPool : IPixelPool
     {
