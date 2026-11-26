@@ -149,6 +149,7 @@ public sealed class WorkspacePlanTests
         manager.PeakBytes.ShouldBe(expectedWorkingBytes);
         manager.OutstandingBytes.ShouldBe(0);
     }
+
     [Fact]
     public void ResizeTerms_MatchTheRowSourceThatWillRun()
     {
@@ -189,8 +190,6 @@ public sealed class WorkspacePlanTests
         plan.Workspace.Unmanaged.ShouldContain(term => term.Name.Contains("codec"));
         plan.Workspace.Unmanaged.ShouldContain(term => term.Name.Contains("weight"));
     }
-
-
 
     [Fact]
     public void EmptyFramePlan_ReservesCopyDestinationAndHonorsTheLimit()
