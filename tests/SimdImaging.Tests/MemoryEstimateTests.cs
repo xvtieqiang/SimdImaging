@@ -212,6 +212,106 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
+    public void PointAdapterWorkspace_IncludesItsMaterialisedBandResult()
+    {
+        const int width = 80;
+        const int rows = 24;
+        const long resultBytes = (long)width * rows * WorkingFormat.Rgba32F.BytesPerPixel();
+        var declared = PlanOps.Grayscale().Scratch!(width, rows, rows, WorkingFormat.Rgba32F);
+
+        declared.ShouldBeGreaterThanOrEqualTo(resultBytes + (width * 4L * sizeof(float)));
+    }
+
+    [Fact]
+    public void PointChainWorkspace_IncludesItsMaterialisedBandResult()
+    {
+        const int width = 80;
+        const int rows = 24;
+        var declared = PlanOps.PointChain(PointOps.InvertRow(), PointOps.BrightnessRow(0.1f))
+            .Scratch!(width, rows, rows, WorkingFormat.Rgba8);
+
+        declared.ShouldBe((long)width * rows * WorkingFormat.Rgba8.BytesPerPixel());
+    }
+
+    [Fact]
+    public void GlobalWorkspace_IncludesTheResultBufferReturnedToItsAdapter()
+    {
+        const int width = 80;
+        const int height = 40;
+        var declared = PlanOps.Vignette().Scratch!(width, height, height, WorkingFormat.Rgba16);
+
+        declared.ShouldBe((long)width * height * WorkingFormat.Rgba16.BytesPerPixel());
+    }
+
+    [Fact]
+    public void MedianWorkspace_CoversTheSmallFloatRingAndReturnedImage()
+    {
+        const int width = 24;
+        const int height = 12;
+        const int radius = 8;
+        using var source = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba32F);
+        var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
+        var op = PlanOps.Median(radius);
+        var declared = op.Scratch!(width, height, height, WorkingFormat.Rgba32F);
+        var previousDegree = RowParallel.DegreeOverride;
+
+        try
+        {
+            RowParallel.DegreeOverride = 1;
+            MemoryBudget.Trim();
+            FloatScratch.ResetForTests();
+
+            using var result = FilterOps.Median(source.View, radius, pool);
+
+            var loadMarkers = (2L * radius + 1) * sizeof(int);
+            declared.ShouldBeGreaterThanOrEqualTo(pool.PeakBytes + FloatScratch.PeakLiveBytes + loadMarkers,
+                $"declared {declared}, pooled output {pool.PeakBytes}, FloatScratch {FloatScratch.PeakLiveBytes}, markers {loadMarkers}");
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previousDegree;
+            MemoryBudget.ResetForTests();
+        }
+    }
+
+    [Fact]
+    public void OilPaintWorkspace_CoversItsSmallWindowScratchAndResult()
+    {
+        const int width = 40;
+        const int height = 16;
+        const int radius = 5;
+        const int levels = 32;
+        using var source = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba8);
+        var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
+        var op = PlanOps.OilPaint(radius, levels);
+        var declared = op.Scratch!(width, height, height, WorkingFormat.Rgba8);
+        var previousDegree = RowParallel.DegreeOverride;
+
+        try
+        {
+            RowParallel.DegreeOverride = 1;
+            MemoryBudget.Trim();
+            FloatScratch.ResetForTests();
+
+            using var result = OilPaintOps.OilPaint(source.View, radius, levels, pool);
+
+            var windowPixels = (long)(2 * radius + 1) * width;
+            var arrays = (windowPixels * (4 * sizeof(float) + sizeof(float) + sizeof(byte)))
+                + ((long)width * 4 * sizeof(float))
+                + (4L * levels * sizeof(int))
+                + ((long)(2 * radius + 1) * sizeof(int));
+            declared.ShouldBeGreaterThanOrEqualTo(pool.PeakBytes + FloatScratch.PeakLiveBytes
+                + (windowPixels * sizeof(byte)) + (4L * levels * sizeof(int))
+                + ((long)(2 * radius + 1) * sizeof(int)));
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previousDegree;
+            MemoryBudget.ResetForTests();
+        }
+    }
+
+    [Fact]
     public void Estimate_CountsDeclaredOperatorScratch()
     {
         var plan = new ProcessingPlan()
