@@ -168,7 +168,7 @@ public static class PlanOps
         // Large Rgba8 table-backed steps write directly into the executor destination. Other formats and
         // small images fall back to the ordinary operator, which materialises one band result.
         if (format == WorkingFormat.Rgba8 && (long)width * height >= TablePixelFloor)
-            return 2L * 4 * 256; // one cached table plus the 256-pixel probe result
+            return 4L * 4 * 256; // cached LUT, lazy table, probe input and probe output
 
         var resultBytes = checked((long)width * rows * format.BytesPerPixel());
         var workerBytes = format == WorkingFormat.Rgba16 &&
@@ -361,7 +361,9 @@ public static class PlanOps
         return Create("convolve", OpCategory.Neighborhood, WholeSourceFootprint.Instance,
             // One float RGBA copy of the window, which is a band plus the halo on both sides.
             WorkspaceModel.Of((width, height, rows, format) =>
-                ((long)rows * width * 16) + ((long)width * rows * format.BytesPerPixel())),
+                ((long)rows * width * 16)
+                    + ((long)width * rows * format.BytesPerPixel())
+                    + (3L * width * 4 * sizeof(float))),
             new KernelImplementations(PlanSteps.Neighborhood(
                 (window, context, full) =>
                     FilterOps.ConvolveBanded(window, context, full, weights, radius, border, bias, constantValue),
