@@ -15,10 +15,10 @@ public sealed class WorkspaceScopeTests
     [Fact]
     public void WholeImageScope_IsCountedOnce_AndPerWorkerScope_IsCountedPerWorker()
     {
-        var perWorker = MemoryEstimator.Estimate(64, 256, WorkingFormat.Rgba8,
-            [new PlanStep(ScopedOp(WorkspaceScope.PerWorker))], 64, allowFusion: false, degree: 4);
-        var wholeImage = MemoryEstimator.Estimate(64, 256, WorkingFormat.Rgba8,
-            [new PlanStep(ScopedOp(WorkspaceScope.WholeImage))], 64, allowFusion: false, degree: 4);
+        var perWorker = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
+            [new PlanStep(ScopedOp(WorkspaceScope.PerWorker))], 128, allowFusion: false, degree: 4);
+        var wholeImage = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
+            [new PlanStep(ScopedOp(WorkspaceScope.WholeImage))], 128, allowFusion: false, degree: 4);
 
         perWorker.PerWorkerBytes.ShouldBe(1024);
         perWorker.WholeImageScratchBytes.ShouldBe(0);
@@ -30,8 +30,8 @@ public sealed class WorkspaceScopeTests
 
         // PerCall has no current user. A banded step calls once per band, so the contract's honest reading is the
         // per-worker term; the point of the test is that it is counted, not silently dropped.
-        var perCall = MemoryEstimator.Estimate(64, 256, WorkingFormat.Rgba8,
-            [new PlanStep(ScopedOp(WorkspaceScope.PerCall))], 64, allowFusion: false, degree: 4);
+        var perCall = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
+            [new PlanStep(ScopedOp(WorkspaceScope.PerCall))], 128, allowFusion: false, degree: 4);
         perCall.PerWorkerBytes.ShouldBe(1024);
         perCall.OperatorScratchBytes.ShouldBe(4096);
     }
@@ -64,9 +64,9 @@ public sealed class WorkspaceScopeTests
             .ShouldBe(1024);
 
         // The stream and region executors measure through WorkingSetBudget, which must apply the same rule.
-        var perWorkerBudget = WorkingSetBudget.Measure([new PlanStep(perWorker)], options, 64, 256, 64, 64,
+        var perWorkerBudget = WorkingSetBudget.Measure([new PlanStep(perWorker)], options, 1024, 256, 1024, 128,
             WorkingFormat.Rgba8, windows: 2, out _);
-        var wholeImageBudget = WorkingSetBudget.Measure([new PlanStep(wholeImage)], options, 64, 256, 64, 64,
+        var wholeImageBudget = WorkingSetBudget.Measure([new PlanStep(wholeImage)], options, 1024, 256, 1024, 128,
             WorkingFormat.Rgba8, windows: 2, out _);
 
         (perWorkerBudget - wholeImageBudget).ShouldBe((1024 * 4) - 1024,
