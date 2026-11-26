@@ -294,19 +294,30 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
         // 64 K-pixel gate and would run the vertical pass on one core.
         RowParallel.ForBands(count, (from, to) =>
         {
-            var outputRow = FloatScratch.Rent(_destStride);
+            float[]? outputRow = null;
+            int[]? tapRows = null;
+            float[]? tapWeights = null;
             try
             {
+                outputRow = FloatScratch.Rent(_destStride);
+                if (_weightsY.Taps > Resample.VerticalStackTapLimit)
+                {
+                    tapRows = new int[_weightsY.Taps];
+                    tapWeights = new float[_weightsY.Taps];
+                }
+
                 for (var k = from; k < to; k++)
                 {
                     var dy = start + k;
-                    Resample.VerticalRow(ring, _ringRows, _sourceHeight, _destWidth, dy, _weightsY, outputRow);
+                    Resample.VerticalRow(ring, _ringRows, _sourceHeight, _destWidth, dy, _weightsY, outputRow!,
+                        tapRows, tapWeights);
                     Pixels.WriteRowUnpremultiplied(outputRow, _destWidth, _format, bandView.Row(outBase + k));
                 }
             }
             finally
             {
-                FloatScratch.Return(outputRow);
+                if (outputRow is not null)
+                    FloatScratch.Return(outputRow);
             }
         }, _degree, _cancellation);
 
