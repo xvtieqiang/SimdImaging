@@ -115,9 +115,25 @@ internal static class WorkspacePlanner
                 {
                     geometryUndeclared++;
                 }
-                else if (declared.Estimate is { } estimateGeometry)
+                else
                 {
-                    geometryScratch += estimateGeometry(nextWidth, nextHeight, nextHeight, finalFormat);
+                    var wholeImageInvocation = geometry.Descriptor.Requirements.Partition == Partitioning.WholeImage;
+                    var scratchBytes = 0L;
+                    if (declared.HasWholeImageEstimate ||
+                        (wholeImageInvocation && declared.PerCallEstimate is not null))
+                        scratchBytes = checked(scratchBytes
+                            + declared.EstimateWholeImage(nextWidth, nextHeight, finalFormat));
+
+                    if (declared.HasPerWorkerEstimate ||
+                        (!wholeImageInvocation && declared.PerCallEstimate is not null))
+                    {
+                        var workers = RowParallel.ResolveWorkers(nextWidth, nextHeight,
+                            options.Execute.MaxDegreeOfParallelism);
+                        scratchBytes = checked(scratchBytes + checked(
+                            declared.EstimatePerWorker(nextWidth, nextHeight, nextHeight, finalFormat) * workers));
+                    }
+
+                    geometryScratch = Math.Max(geometryScratch, scratchBytes);
                 }
 
                 width = nextWidth;
@@ -136,10 +152,26 @@ internal static class WorkspacePlanner
                 {
                     formatUndeclared++;
                 }
-                else if (workspace.Estimate is { } estimateFormat)
+                else
                 {
-                    formatScratch = Math.Max(formatScratch,
-                        estimateFormat(width, height, height, finalFormat));
+                    var wholeImageInvocation =
+                        formatStep.Operator.Contract.Requirements.Partition == Partitioning.WholeImage;
+                    var scratchBytes = 0L;
+                    if (workspace.HasWholeImageEstimate ||
+                        (wholeImageInvocation && workspace.PerCallEstimate is not null))
+                        scratchBytes = checked(scratchBytes
+                            + workspace.EstimateWholeImage(width, height, finalFormat));
+
+                    if (workspace.HasPerWorkerEstimate ||
+                        (!wholeImageInvocation && workspace.PerCallEstimate is not null))
+                    {
+                        var workers = RowParallel.ResolveWorkers(width, height,
+                            options.Execute.MaxDegreeOfParallelism);
+                        scratchBytes = checked(scratchBytes + checked(
+                            workspace.EstimatePerWorker(width, height, height, finalFormat) * workers));
+                    }
+
+                    formatScratch = Math.Max(formatScratch, scratchBytes);
                 }
 
                 finalFormat = outputFormat;
