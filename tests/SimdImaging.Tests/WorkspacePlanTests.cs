@@ -55,6 +55,9 @@ public sealed class WorkspacePlanTests
         plan.Backend.ShouldBe(ExecutionBackend.Frame);
         plan.Workspace.Terms.ShouldContain(term => term.Kind == WorkspaceTermKind.Source);
         plan.Workspace.Terms.ShouldContain(term => term.Kind == WorkspaceTermKind.Destination);
+        var predictedPeak = MemoryEstimator.Estimate(128, 96, WorkingFormat.Rgba8, plan.Steps,
+            ProcessingPlan.DefaultBandRows, allowFusion: plan.Sections[0].Fused).PeakBytes;
+        plan.Workspace.BoundedBytes.ShouldBe(predictedPeak);
 
         using var source = TestImages.Gradient(128, 96, WorkingFormat.Rgba8);
         var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
@@ -134,6 +137,7 @@ public sealed class WorkspacePlanTests
         var expectedWorkingBytes = oldBytes + newBytes + scratchBytes;
         plan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.FormatScratch)
             .Bytes.ShouldBe(scratchBytes);
+        plan.Workspace.BoundedBytes.ShouldBe(expectedWorkingBytes);
 
         using var source = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
         var manager = new WorkspaceManager(expectedWorkingBytes);
@@ -183,6 +187,50 @@ public sealed class WorkspacePlanTests
 
         plan.Workspace.Unmanaged.ShouldContain(term => term.Name.Contains("codec"));
         plan.Workspace.Unmanaged.ShouldContain(term => term.Name.Contains("weight"));
+    }
+
+
+    [Fact]
+    public void RegionAndTileScratch_UseTheLargestSequentialOperatorPeak()
+    {
+        var perWorker = WorkspaceModel.Of((_, _, _, _) => 768);
+        var wholeImage = WorkspaceModel.Of((_, _, _, _) => 2048, WorkspaceScope.WholeImage);
+        var first = new ImageOp(
+            OperatorContract.Create("per-worker-scratch", OpCategory.Point, WorkingFormatMask.All,
+                IdentityFootprint.Instance, perWorker),
+            new KernelImplementations((_, _, _, _) => { }));
+        var second = new ImageOp(
+            OperatorContract.Create("whole-image-scratch", OpCategory.Point, WorkingFormatMask.All,
+                IdentityFootprint.Instance, wholeImage),
+            new KernelImplementations((_, _, _, _) => { }));
+        var recipe = Recipe(first, second);
+
+        var regionOptions = new CompileOptions
+        {
+            SourceWidth = 64,
+            SourceHeight = 40,
+            SourceFormat = WorkingFormat.Rgba8,
+            Source = Sdcb.SimdCodecs.Abstractions.SourceCapabilities.Seekable |
+                     Sdcb.SimdCodecs.Abstractions.SourceCapabilities.RandomRegion,
+            Region = new PixelRect(8, 6, 32, 20),
+            Execute = new ExecuteOptions { MaxDegreeOfParallelism = 1 },
+        };
+        var regionPlan = PipelineCompiler.Compile(recipe, regionOptions);
+        regionPlan.Backend.ShouldBe(ExecutionBackend.Region);
+        regionPlan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.OperatorScratchPeak)
+            .Bytes.ShouldBe(2048);
+
+        var tilePlan = PipelineCompiler.Compile(recipe, regionOptions with
+        {
+            Region = null,
+            TileRequested = true,
+            TileWidth = 32,
+            TileHeight = 20,
+            Sink = Sdcb.SimdCodecs.Abstractions.SinkCapabilities.RandomRegionWrite,
+        });
+        tilePlan.Backend.ShouldBe(ExecutionBackend.Tile);
+        tilePlan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.OperatorScratchPeak)
+            .Bytes.ShouldBe(2048);
     }
 
     private sealed class EmptySource(int width, int height) : IRowSource
