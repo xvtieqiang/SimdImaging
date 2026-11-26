@@ -22,6 +22,7 @@ internal enum WorkspaceTermKind : byte
     FormatStep = 10,
     GeometryScratch = 11,
     SectionTransition = 12,
+    ResizeWorkerTapScratch = 13,
 }
 
 internal readonly record struct WorkspaceTerm(WorkspaceTermKind Kind, long Bytes, string Note);
@@ -467,7 +468,7 @@ internal static class WorkspacePlanner
     {
         var width = options.SourceWidth;
         var height = options.SourceHeight;
-        long ring = 0, staging = 0, batch = 0, worker = 0, sourceRow = 0;
+        long ring = 0, staging = 0, batch = 0, worker = 0, sourceRow = 0, workerTap = 0;
         var ringNote = string.Empty;
         var stagingNote = string.Empty;
         var batchNote = string.Empty;
@@ -501,6 +502,7 @@ internal static class WorkspacePlanner
                 batch = checked(batch + workspace.ReadyBytes);
                 worker = checked(worker + workspace.WorkerRowBytes);
                 sourceRow = checked(sourceRow + workspace.SourceRowBytes);
+                workerTap = checked(workerTap + workspace.WorkerTapBytes);
                 ringNote = $"{ring / 1024} KiB across resize stages";
                 stagingNote = $"{staging / 1024} KiB across resize stages";
                 batchNote = $"{batch / 1024} KiB across resize stages";
@@ -523,5 +525,8 @@ internal static class WorkspacePlanner
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeWorkerRows, worker, workerNote));
         if (sourceRow > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeSourceRow, sourceRow, sourceRowNote));
+        if (workerTap > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeWorkerTapScratch, workerTap,
+                $"{workerTap / 1024} KiB across resize stages"));
     }
 }
