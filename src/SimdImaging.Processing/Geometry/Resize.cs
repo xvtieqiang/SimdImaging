@@ -239,6 +239,8 @@ public static class Resample
             && TryNearestTap(weightsX, out var tapX) && TryNearestTap(weightsY, out var tapY))
         {
             var nearest = WorkingBuffer.Rent(width, height, source.Format, pool);
+            try
+            {
             var nearestView = nearest.View;
             var startsX = weightsX.Starts;
             var startsY = weightsY.Starts;
@@ -275,12 +277,20 @@ public static class Resample
                 }
             }, degree, options.CancellationToken);
 
-            return nearest;
+                return nearest;
+            }
+            catch
+            {
+                nearest.Dispose();
+                throw;
+            }
         }
 
         // The tap offset that carries the whole weight, or false when the table is not a single unit tap.
         var stride = width * 4;
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
+        try
+        {
         var view = destination.View;
 
         var budgetBytes = ScratchBudgetBytes;
@@ -346,7 +356,13 @@ public static class Resample
             }
         }, degree, options.CancellationToken);
 
-        return destination;
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
     }
 
 
