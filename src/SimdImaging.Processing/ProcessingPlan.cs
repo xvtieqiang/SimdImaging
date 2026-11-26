@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Fusion;
+using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
 
