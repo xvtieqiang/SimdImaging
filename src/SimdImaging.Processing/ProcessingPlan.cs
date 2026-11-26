@@ -637,6 +637,12 @@ public sealed class ProcessingPlan
                         requirements.Threading != ThreadSafety.Concurrent ||
                         requirements.Determinism != Determinism.CoordinateDeterministic)
                     {
+                        // Whole-image steps run once on the caller, but their kernels may use RowParallel internally.
+                        // Match the configured degree used by the workspace estimator.
+                        var degree = requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : options.MaxDegreeOfParallelism;
+                        using var topLevel = RowParallel.EnterTopLevel(degree);
                         step.Invoke(current, destination.View, whole, whole);
                     }
                     else
