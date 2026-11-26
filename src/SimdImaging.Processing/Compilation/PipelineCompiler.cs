@@ -174,7 +174,7 @@ internal static class PipelineCompiler
         if (options.Execute.MaxWorkingBytes > 0 && workspace.BoundedBytes > options.Execute.MaxWorkingBytes)
         {
             throw new InvalidOperationException(
-                $"The plan's working set is at most {workspace.BoundedBytes} bytes, above " +
+                $"The plan's estimated peak is {workspace.BoundedBytes} bytes, above " +
                 $"ExecuteOptions.MaxWorkingBytes = {options.Execute.MaxWorkingBytes}. Lower the band height, split " +
                 "the chain, or raise the limit.");
         }
