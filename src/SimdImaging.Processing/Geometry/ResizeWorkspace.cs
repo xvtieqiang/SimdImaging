@@ -86,9 +86,8 @@ internal readonly record struct ResizeWorkspace(
         }
 
         var workerRowBytes = checked((long)workers * Math.Max(sourceWidth * 4, destStride) * sizeof(float));
-        const int StackTapLimit = 256;
-        var tapBytesPerWorker = tapsY <= StackTapLimit
-            ? (long)StackTapLimit * (sizeof(int) + sizeof(float))
+        var tapBytesPerWorker = tapsY <= Resample.VerticalStackTapLimit
+            ? (long)Resample.VerticalStackTapLimit * (sizeof(int) + sizeof(float))
             : (long)tapsY * (sizeof(int) + sizeof(float));
         var workerTapBytes = checked((long)workers * tapBytesPerWorker);
         var fixedBytes = checked(readyBytes + sourceRowBytes + workerRowBytes + workerTapBytes);
