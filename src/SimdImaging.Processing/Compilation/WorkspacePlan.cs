@@ -290,7 +290,7 @@ internal static class WorkspacePlanner
 
             var workspace = step.Definition.Contract.Workspace;
             var wholeImageInvocation =
-                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+                step.Definition.Contract.Requirements.RequiresWholeImageInvocation;
             if (workspace.HasWholeImageEstimate ||
                 (wholeImageInvocation && workspace.PerCallEstimate is not null))
                 wholeImage = Math.Max(wholeImage,
@@ -377,7 +377,7 @@ internal static class WorkspacePlanner
 
             var workspace = step.Definition.Contract.Workspace;
             var wholeImageInvocation =
-                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+                step.Definition.Contract.Requirements.RequiresWholeImageInvocation;
             if (workspace.HasWholeImageEstimate ||
                 (wholeImageInvocation && workspace.PerCallEstimate is not null))
                 wholeImage = Math.Max(wholeImage,
@@ -465,7 +465,7 @@ internal static class WorkspacePlanner
                 // the other two executors about what a declaration means.
                 var workspace = step.Definition.Contract.Workspace;
                 var wholeImageInvocation =
-                    step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+                    step.Definition.Contract.Requirements.RequiresWholeImageInvocation;
                 if (workspace.HasWholeImageEstimate ||
                     (wholeImageInvocation && workspace.PerCallEstimate is not null))
                     sectionWholeImage = Math.Max(sectionWholeImage,
