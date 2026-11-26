@@ -622,7 +622,7 @@ public sealed class ProcessingPlan
                     var whole = new PixelRect(0, 0, width, height);
 
                     if (step.Category is OpCategory.Global or OpCategory.Composite ||
-                        step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage)
+                        step.Definition.Contract.Requirements.Partition != Partitioning.RowBands)
                     {
                         step.Invoke(current, destination.View, whole, whole);
                     }
@@ -637,8 +637,10 @@ public sealed class ProcessingPlan
                         if (options.MaxDegreeOfParallelism == 1 ||
                             step.Definition.Contract.Requirements.Threading == ThreadSafety.SingleThread)
                         {
-                            using var singleThread = step.Definition.Contract.Requirements.Threading ==
-                                ThreadSafety.SingleThread ? RowParallel.EnterTopLevel(1) : default;
+                            using var singleThread = RowParallel.EnterTopLevel(
+                                step.Definition.Contract.Requirements.Threading == ThreadSafety.SingleThread
+                                    ? 1
+                                    : options.MaxDegreeOfParallelism);
                             // One worker is a plain loop: RowParallel would wrap it in a delegate, and that
                             // closure is a per-call allocation for a path that is meant to be allocation-free.
                             var bands = BandCountFor(height, bandRows);
