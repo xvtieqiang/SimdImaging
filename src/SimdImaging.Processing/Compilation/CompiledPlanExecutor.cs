@@ -26,6 +26,7 @@ internal static class CompiledPlanExecutor
         var sourceBytes = checked((long)source.Width * source.Height * source.Format.BytesPerPixel());
         WorkingBuffer? owned = null;
         IDisposable? retainedSourceLease = null;
+        var retainedSourceReserved = false;
         var hasCompletedSection = false;
         try
         {
@@ -33,9 +34,10 @@ internal static class CompiledPlanExecutor
             {
                 // The caller's original source remains live after the first section has produced an owned frame.
                 // Keep that baseline in the shared account while later sections operate on their own intermediates.
-                if (hasCompletedSection && retainedSourceLease is null)
+                if (hasCompletedSection && !retainedSourceReserved)
                 {
                     retainedSourceLease = options.Workspace?.Reserve(sourceBytes, "compiled frame retained source");
+                    retainedSourceReserved = true;
                     if (options.MaxWorkingBytes > 0 && sourceBytes >= options.MaxWorkingBytes)
                         throw new InvalidOperationException(
                             $"The retained source needs {sourceBytes} bytes, leaving no budget for the next frame section.");
