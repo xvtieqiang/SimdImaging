@@ -23,11 +23,24 @@ internal static class CompiledPlanExecutor
         options ??= new ExecuteOptions();
 
         var current = source;
+        var sourceBytes = checked((long)source.Width * source.Height * source.Format.BytesPerPixel());
         WorkingBuffer? owned = null;
+        IDisposable? retainedSourceLease = null;
+        var hasCompletedSection = false;
         try
         {
             foreach (var section in plan.Sections)
             {
+                // The caller's original source remains live after the first section has produced an owned frame.
+                // Keep that baseline in the shared account while later sections operate on their own intermediates.
+                if (hasCompletedSection && retainedSourceLease is null)
+                {
+                    retainedSourceLease = options.Workspace?.Reserve(sourceBytes, "compiled frame retained source");
+                    if (options.MaxWorkingBytes > 0 && sourceBytes >= options.MaxWorkingBytes)
+                        throw new InvalidOperationException(
+                            $"The retained source needs {sourceBytes} bytes, leaving no budget for the next frame section.");
+                }
+
                 WorkingBuffer next;
                 if (section.Kind == CompiledSectionKind.OperatorRun)
                 {
@@ -35,8 +48,14 @@ internal static class CompiledPlanExecutor
                     var sectionObserver = observe is null
                         ? null
                         : new PlanObserver((index, name, view) => observe(section.FirstStep + index, name, view));
+                    var sectionOptions = options;
+                    if (hasCompletedSection && options.MaxWorkingBytes > 0)
+                        sectionOptions = options with
+                        {
+                            MaxWorkingBytes = options.MaxWorkingBytes - sourceBytes,
+                        };
                     next = ProcessingPlan.FromCompiled(steps, plan.BandRows)
-                        .ExecuteWithOptions(current, options, pool, sectionObserver);
+                        .ExecuteWithOptions(current, sectionOptions, pool, sectionObserver);
                 }
                 else if (section.Kind == CompiledSectionKind.Format)
                 {
@@ -61,7 +80,9 @@ internal static class CompiledPlanExecutor
                             current.Width, current.Height, current.Height, current.Format) * workers));
                     }
                     var formatWorkingSet = checked(formatOld + formatNew + formatScratch);
-                    CheckBudget(options, formatWorkingSet, $"the format step '{formatStep.Name}'");
+                    var totalFormatWorkingSet = checked(formatWorkingSet
+                        + (hasCompletedSection ? sourceBytes : 0L));
+                    CheckBudget(options, totalFormatWorkingSet, $"the format step '{formatStep.Name}'");
                     using (options.Workspace?.Reserve(formatWorkingSet, "format transition"))
                     {
                         var degree = formatStep.Operator.Contract.Requirements.Threading == ThreadSafety.SingleThread
@@ -98,8 +119,10 @@ internal static class CompiledPlanExecutor
                         scratch = checked(scratch + checked(geometryWorkspace.EstimatePerWorkerScratch(
                             width, height, height, current.Format) * workers));
                     }
-                    var bytes = oldBytes + ((long)width * height * current.Format.BytesPerPixel()) + scratch;
-                    CheckBudget(options, bytes, $"the geometry step '{geometry.Name}'");
+                    var bytes = checked(oldBytes
+                        + ((long)width * height * current.Format.BytesPerPixel()) + scratch);
+                    var totalBytes = checked(bytes + (hasCompletedSection ? sourceBytes : 0L));
+                    CheckBudget(options, totalBytes, $"the geometry step '{geometry.Name}'");
                     using (options.Workspace?.Reserve(bytes, "geometry transition"))
                     {
                         var degree = geometry.Descriptor.Requirements.Threading == ThreadSafety.SingleThread
@@ -113,13 +136,23 @@ internal static class CompiledPlanExecutor
                 owned?.Dispose();
                 owned = next;
                 current = next.View;
+                hasCompletedSection = true;
             }
         }
         catch
         {
-            owned?.Dispose();
+            try
+            {
+                owned?.Dispose();
+            }
+            finally
+            {
+                retainedSourceLease?.Dispose();
+            }
             throw;
         }
+
+        retainedSourceLease?.Dispose();
 
         // An empty plan is still a request for a picture of the caller's own. Reserve the copy destination
         // before renting it, just as the non-empty paths reserve their output before execution.
