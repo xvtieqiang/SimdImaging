@@ -247,42 +247,42 @@ public static class Resample
         {
             var nearest = WorkingBuffer.Rent(width, height, source.Format, pool);
             try
-            {
-            var nearestView = nearest.View;
-            var startsX = weightsX.Starts;
-            var startsY = weightsY.Starts;
-
-            // ForBands, not For: `For` refuses to parallelise below 64 K pixels, and a 640x360 source
-            // resized to 320x180 is 57.6 K — so the fast path silently ran on one core and reported
-            // LastWorkerCount = 1. Bands have no such gate; the split is explicit and rows are disjoint.
-            var bandRows = Math.Max(16, (height + Math.Max(1, degree) - 1) / Math.Max(1, degree));
-            var bands = Math.Max(1, (height + bandRows - 1) / bandRows);
-
-            RowParallel.ForBands(bands, (firstBand, lastBand) =>
-            {
-                for (var band = firstBand; band < lastBand; band++)
                 {
-                    var firstRow = band * bandRows;
-                    var lastRow = Math.Min(firstRow + bandRows, height);
-                    for (var y = firstRow; y < lastRow; y++)
+                var nearestView = nearest.View;
+                var startsX = weightsX.Starts;
+                var startsY = weightsY.Starts;
+
+                // ForBands, not For: `For` refuses to parallelise below 64 K pixels, and a 640x360 source
+                // resized to 320x180 is 57.6 K — so the fast path silently ran on one core and reported
+                // LastWorkerCount = 1. Bands have no such gate; the split is explicit and rows are disjoint.
+                var bandRows = Math.Max(16, (height + Math.Max(1, degree) - 1) / Math.Max(1, degree));
+                var bands = Math.Max(1, (height + bandRows - 1) / bandRows);
+
+                RowParallel.ForBands(bands, (firstBand, lastBand) =>
+                {
+                    for (var band = firstBand; band < lastBand; band++)
                     {
-                        var sourceRow = source.Row(startsY[y] + tapY);
-                        var destinationRow = nearestView.Row(y);
-                        for (var x = 0; x < width; x++)
+                        var firstRow = band * bandRows;
+                        var lastRow = Math.Min(firstRow + bandRows, height);
+                        for (var y = firstRow; y < lastRow; y++)
                         {
-                            var from = (startsX[x] + tapX) * 4;
-                            var to = x * 4;
-                            // Rgba8 pixel = 4 bytes. One unaligned 32-bit copy replaces four byte
-                            // load/stores; it is a pure bit copy, so the byte sequence is identical on
-                            // every endianness and every SIMD tier (no integer reinterpretation).
-                            // Measured 1.90-1.99x on the inner loop vs the four-byte version
-                            // (`nearest-ablate`), byte-identical across all three shapes.
-                            Unsafe.WriteUnaligned(ref destinationRow[to],
-                                Unsafe.ReadUnaligned<uint>(ref sourceRow[from]));
+                            var sourceRow = source.Row(startsY[y] + tapY);
+                            var destinationRow = nearestView.Row(y);
+                            for (var x = 0; x < width; x++)
+                            {
+                                var from = (startsX[x] + tapX) * 4;
+                                var to = x * 4;
+                                // Rgba8 pixel = 4 bytes. One unaligned 32-bit copy replaces four byte
+                                // load/stores; it is a pure bit copy, so the byte sequence is identical on
+                                // every endianness and every SIMD tier (no integer reinterpretation).
+                                // Measured 1.90-1.99x on the inner loop vs the four-byte version
+                                // (`nearest-ablate`), byte-identical across all three shapes.
+                                Unsafe.WriteUnaligned(ref destinationRow[to],
+                                    Unsafe.ReadUnaligned<uint>(ref sourceRow[from]));
+                            }
                         }
                     }
-                }
-            }, degree, options.CancellationToken);
+                }, degree, options.CancellationToken);
 
                 return nearest;
             }
@@ -297,71 +297,71 @@ public static class Resample
         var stride = width * 4;
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         try
-        {
-        var view = destination.View;
-
-        var budgetBytes = ScratchBudgetBytes;
-        var budgetRows = Math.Max(weightsY.Taps + 2, (int)(budgetBytes / Math.Max(1L, (long)stride * 4)));
-        var scaleY = (double)height / source.Height;
-        var bandHeight = Math.Max(1, (int)((budgetRows - weightsY.Taps) * Math.Max(scaleY, 1e-9)));
-        bandHeight = Math.Min(bandHeight, 512);
-        // Also split by core count so a 1080p resize uses all cores, not just the 5 bands that
-        // the scratch budget alone would produce. Floor at 32 rows so tap overlap stays cheap.
-        var coreBands = Math.Max(32, (height + degree - 1) / degree);
-        bandHeight = Math.Min(bandHeight, coreBands);
-        var bandCount = (height + bandHeight - 1) / bandHeight;
-
-        // Each worker owns its own row/scratch buffers (FloatScratch is thread-local), so bands can
-        // run concurrently without aliasing. Output rows are disjoint; source rows are read-only.
-        RowParallel.ForBands(bandCount, (start, end) =>
-        {
-            var row = FloatScratch.Rent(source.Width * 4);
-            var outputRow = FloatScratch.Rent(stride);
-
-            // A ring of horizontally resized rows instead of a whole source band. Bands used to redo the
-            // 2-taps rows of overlap at every boundary, which is why a small scratch cost time and a big
-            // one cost memory: the eight-megabyte band held 94 MiB at 7680 wide for a 960-wide answer.
-            var ringRows = Math.Min(source.Height, weightsY.Taps + 2);
-            var scratch = FloatScratch.Rent(stride * ringRows);
-            var filledThrough = -1;
-            try
             {
-                for (var b = start; b < end; b++)
+            var view = destination.View;
+
+            var budgetBytes = ScratchBudgetBytes;
+            var budgetRows = Math.Max(weightsY.Taps + 2, (int)(budgetBytes / Math.Max(1L, (long)stride * 4)));
+            var scaleY = (double)height / source.Height;
+            var bandHeight = Math.Max(1, (int)((budgetRows - weightsY.Taps) * Math.Max(scaleY, 1e-9)));
+            bandHeight = Math.Min(bandHeight, 512);
+            // Also split by core count so a 1080p resize uses all cores, not just the 5 bands that
+            // the scratch budget alone would produce. Floor at 32 rows so tap overlap stays cheap.
+            var coreBands = Math.Max(32, (height + degree - 1) / degree);
+            bandHeight = Math.Min(bandHeight, coreBands);
+            var bandCount = (height + bandHeight - 1) / bandHeight;
+
+            // Each worker owns its own row/scratch buffers (FloatScratch is thread-local), so bands can
+            // run concurrently without aliasing. Output rows are disjoint; source rows are read-only.
+            RowParallel.ForBands(bandCount, (start, end) =>
+            {
+                var row = FloatScratch.Rent(source.Width * 4);
+                var outputRow = FloatScratch.Rent(stride);
+
+                // A ring of horizontally resized rows instead of a whole source band. Bands used to redo the
+                // 2-taps rows of overlap at every boundary, which is why a small scratch cost time and a big
+                // one cost memory: the eight-megabyte band held 94 MiB at 7680 wide for a 960-wide answer.
+                var ringRows = Math.Min(source.Height, weightsY.Taps + 2);
+                var scratch = FloatScratch.Rent(stride * ringRows);
+                var filledThrough = -1;
+                try
                 {
-                    var bandStart = b * bandHeight;
-                    var bandEnd = Math.Min(bandStart + bandHeight, height);
-
-                    var required = (long)stride * ringRows * sizeof(float);
-                    if (required > MaxScratchBytes)
-                        throw new InvalidOperationException(
-                            $"The vertical pass needs {required / (1024 * 1024)} MiB of scratch " +
-                            $"({ringRows} rows x {stride} floats), above the {MaxScratchBytes / (1024 * 1024)} MiB " +
-                            "working-set limit. Reduce the downsample ratio or resize in two steps.");
-
-                    for (var dy = bandStart; dy < bandEnd; dy++)
+                    for (var b = start; b < end; b++)
                     {
-                        // Tap windows advance monotonically, so each source row is resized once per worker.
-                        var first = Math.Clamp(weightsY.Starts[dy], 0, source.Height - 1);
-                        var last = Math.Clamp(weightsY.Starts[dy] + weightsY.Taps - 1, 0, source.Height - 1);
-                        for (var sy = Math.Max(filledThrough + 1, first); sy <= last; sy++)
-                        {
-                            Pixels.ReadRowPremultiplied(source.Row(sy), source.Width, source.Format, row);
-                            HorizontalRow(row, source.Width, scratch.AsSpan(sy % ringRows * stride, stride), width, weightsX);
-                            filledThrough = sy;
-                        }
+                        var bandStart = b * bandHeight;
+                        var bandEnd = Math.Min(bandStart + bandHeight, height);
 
-                        VerticalRow(scratch, ringRows, source.Height, width, dy, weightsY, outputRow);
-                        Pixels.WriteRowUnpremultiplied(outputRow, width, source.Format, view.Row(dy));
+                        var required = (long)stride * ringRows * sizeof(float);
+                        if (required > MaxScratchBytes)
+                            throw new InvalidOperationException(
+                                $"The vertical pass needs {required / (1024 * 1024)} MiB of scratch " +
+                                $"({ringRows} rows x {stride} floats), above the {MaxScratchBytes / (1024 * 1024)} MiB " +
+                                "working-set limit. Reduce the downsample ratio or resize in two steps.");
+
+                        for (var dy = bandStart; dy < bandEnd; dy++)
+                        {
+                            // Tap windows advance monotonically, so each source row is resized once per worker.
+                            var first = Math.Clamp(weightsY.Starts[dy], 0, source.Height - 1);
+                            var last = Math.Clamp(weightsY.Starts[dy] + weightsY.Taps - 1, 0, source.Height - 1);
+                            for (var sy = Math.Max(filledThrough + 1, first); sy <= last; sy++)
+                            {
+                                Pixels.ReadRowPremultiplied(source.Row(sy), source.Width, source.Format, row);
+                                HorizontalRow(row, source.Width, scratch.AsSpan(sy % ringRows * stride, stride), width, weightsX);
+                                filledThrough = sy;
+                            }
+
+                            VerticalRow(scratch, ringRows, source.Height, width, dy, weightsY, outputRow);
+                            Pixels.WriteRowUnpremultiplied(outputRow, width, source.Format, view.Row(dy));
+                        }
                     }
                 }
-            }
-            finally
-            {
-                FloatScratch.Return(row);
-                FloatScratch.Return(outputRow);
-                FloatScratch.Return(scratch);
-            }
-        }, degree, options.CancellationToken);
+                finally
+                {
+                    FloatScratch.Return(row);
+                    FloatScratch.Return(outputRow);
+                    FloatScratch.Return(scratch);
+                }
+            }, degree, options.CancellationToken);
 
             return destination;
         }
