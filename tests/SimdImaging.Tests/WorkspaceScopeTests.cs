@@ -74,6 +74,46 @@ public sealed class WorkspaceScopeTests
             "the scope must change the multiplier on every path, not only in MemoryEstimator");
     }
 
+    [Fact]
+    public void WholeImageInvocation_CanDeclareBothWorkerPrivateAndSharedScratch()
+    {
+        var op = MixedGlobalOp();
+        var model = op.Contract.Workspace;
+
+        model.HasPerWorkerEstimate.ShouldBeTrue();
+        model.HasWholeImageEstimate.ShouldBeTrue();
+        model.Estimate!(1024, 256, 256, WorkingFormat.Rgba8).ShouldBe(3072);
+
+        var estimate = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
+            [new PlanStep(op)], bandRows: 64, allowFusion: false, degree: 4);
+
+        estimate.PerWorkerBytes.ShouldBe(1024);
+        estimate.Workers.ShouldBe(4);
+        estimate.WholeImageScratchBytes.ShouldBe(2048);
+        estimate.OperatorScratchBytes.ShouldBe((1024 * 4) + 2048);
+
+        var execute = new ExecuteOptions { MaxDegreeOfParallelism = 4 };
+        var workingSet = WorkingSetBudget.Measure([new PlanStep(op)], execute, 1024, 256,
+            1024, 256, WorkingFormat.Rgba8, windows: 2, out var undeclared);
+        undeclared.ShouldBe(0);
+        (workingSet - (2L * 1024 * 256 * 4)).ShouldBe((1024 * 4) + 2048);
+    }
+
+    private static ImageOp MixedGlobalOp()
+    {
+        var workspace = WorkspaceModel.OfMixed(
+            (_, _, _, _) => 1024L,
+            (_, _, _, _) => 2048L);
+        var contract = OperatorContract.Create("mixed-global", OpCategory.Global, WorkingFormatMask.All,
+            WholeSourceFootprint.Instance, workspace, requirements: ExecutionRequirements.WholeImage);
+
+        return new ImageOp(contract, new KernelImplementations((source, destination, rect, _) =>
+        {
+            for (var y = rect.Y; y < rect.Y + rect.Height; y++)
+                source.Row(y).CopyTo(destination.Row(y));
+        }));
+    }
+
     private static ImageOp ScopedOp(WorkspaceScope scope)
     {
         var contract = OperatorContract.Create("scope-probe", OpCategory.Point, WorkingFormatMask.All,
