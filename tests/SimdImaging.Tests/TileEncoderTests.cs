@@ -61,6 +61,24 @@ public sealed class TileEncoderTests
         decoded.WritablePixels.ToArray().ShouldBe(expected.View.Span.ToArray());
     }
 
+
+    [Fact]
+    public void ProcessTilesTo_WorkspaceRefusal_DoesNotWriteToTheDestination()
+    {
+        using var image = TestImages.Gradient(37, 23, WorkingFormat.Rgba8);
+        var plan = new ProcessingPlan().Add(PlanOps.Invert());
+        var manager = new WorkspaceManager(limitBytes: 1);
+        using var encoded = new MemoryStream();
+
+        Should.Throw<InvalidOperationException>(() => Image.ProcessTilesTo(
+            new ViewRegionSource(image[0].Pixels.View), encoded, ImageFormat.Png,
+            plan, 16, 12, new ExecuteOptions { Workspace = manager }));
+
+        encoded.Length.ShouldBe(0,
+            "tile execution and encoder-band reservations must succeed before the encoder writes its header");
+        manager.OutstandingBytes.ShouldBe(0);
+    }
+
     [Fact]
     public void ProcessTilesTo_FromATiff_MatchesLoadApply()
     {
