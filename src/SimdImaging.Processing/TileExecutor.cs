@@ -48,11 +48,24 @@ internal static class TileExecutor
                 $"A {tileWidth}x{tileHeight} tile needs {tileBytes} bytes, above " +
                 $"ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
 
-        using var targetLease = TargetBuffer.Reserve(options, tileWidth, tileHeight, source.Format, "tile destination");
         var refusal = RegionExecutor.Classify(plan.Steps, plan.HasResize, out var refusingStep);
         if (refusal != RegionRefusal.None)
             throw new InvalidOperationException(
                 $"A tile plan cannot run '{refusingStep}': {refusal}. Refuse it at compile time instead.");
+
+        // MaxWorkingBytes is a per-call ceiling, not a separate allowance for each nested executor.
+        // The tile remains alive while RegionExecutor rents its windows, so pass only the remainder down.
+        var regionOptions = options;
+        if (options.MaxWorkingBytes > 0 && plan.Steps.Count > 0)
+        {
+            var remaining = options.MaxWorkingBytes - tileBytes;
+            if (remaining <= 0)
+                throw new InvalidOperationException(
+                    $"A {tileWidth}x{tileHeight} tile leaves no working-set budget for region windows.");
+            regionOptions = options with { MaxWorkingBytes = remaining };
+        }
+
+        using var targetLease = TargetBuffer.Reserve(options, tileWidth, tileHeight, source.Format, "tile destination");
 
         for (var y = 0; y < sink.Height; y += tileHeight)
         {
@@ -61,7 +74,7 @@ internal static class TileExecutor
                 var region = new PixelRect(x, y, Math.Min(tileWidth, sink.Width - x),
                     Math.Min(tileHeight, sink.Height - y));
                 using var tile = WorkingBuffer.Rent(region.Width, region.Height, source.Format, pool);
-                var result = RegionExecutor.Execute(plan, source, region, tile.View, options, pool);
+                var result = RegionExecutor.Execute(plan, source, region, tile.View, regionOptions, pool);
                 if (result.Refusal != RegionRefusal.None)
                     throw new InvalidOperationException(
                         $"The tile at ({region.X},{region.Y}) was refused: {result.Refusal} at '{result.RefusingStep}'.");
