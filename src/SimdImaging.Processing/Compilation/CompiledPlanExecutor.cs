@@ -1,6 +1,7 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Geometry;
+using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Processing.Compilation;
 
@@ -45,8 +46,20 @@ internal static class CompiledPlanExecutor
                     var output = formatStep.Operator.Contract.Output.Format!.Value;
                     var formatOld = (long)current.Width * current.Height * current.Format.BytesPerPixel();
                     var formatNew = (long)current.Width * current.Height * output.BytesPerPixel();
-                    var formatScratch = formatStep.Operator.Contract.Workspace.Estimate?.Invoke(
-                        current.Width, current.Height, current.Height, current.Format) ?? 0L;
+                    var formatWorkspace = formatStep.Operator.Contract.Workspace;
+                    var formatScratch = 0L;
+                    if (formatWorkspace.HasWholeImageEstimate ||
+                        formatStep.Operator.Contract.Requirements.Partition == Partitioning.WholeImage &&
+                        formatWorkspace.PerCallEstimate is not null)
+                        formatScratch = checked(formatScratch
+                            + formatWorkspace.EstimateWholeImage(current.Width, current.Height, current.Format));
+                    if (formatWorkspace.HasPerWorkerEstimate)
+                    {
+                        var workers = RowParallel.ResolveWorkers(current.Width, current.Height,
+                            options.MaxDegreeOfParallelism);
+                        formatScratch = checked(formatScratch + checked(formatWorkspace.EstimatePerWorker(
+                            current.Width, current.Height, current.Height, current.Format) * workers));
+                    }
                     var formatWorkingSet = checked(formatOld + formatNew + formatScratch);
                     CheckBudget(options, formatWorkingSet, $"the format step '{formatStep.Name}'");
                     using (options.Workspace?.Reserve(formatWorkingSet, "format transition"))
@@ -67,8 +80,19 @@ internal static class CompiledPlanExecutor
                     // scratch, so the ceiling is checked against everything the reshape can allocate — before the
                     // allocation, not after it.
                     var (width, height) = geometry.Geometry.Map(current.Width, current.Height);
-                    var scratch = geometry.Descriptor.WorkspaceModel.Estimate?.Invoke(width, height, height,
-                        current.Format) ?? 0;
+                    var geometryWorkspace = geometry.Descriptor.WorkspaceModel;
+                    var scratch = 0L;
+                    if (geometryWorkspace.HasWholeImageEstimate ||
+                        geometry.Descriptor.Requirements.Partition == Partitioning.WholeImage &&
+                        geometryWorkspace.PerCallEstimate is not null)
+                        scratch = checked(scratch
+                            + geometryWorkspace.EstimateWholeImage(width, height, current.Format));
+                    if (geometryWorkspace.HasPerWorkerEstimate)
+                    {
+                        var workers = RowParallel.ResolveWorkers(width, height, options.MaxDegreeOfParallelism);
+                        scratch = checked(scratch + checked(geometryWorkspace.EstimatePerWorker(
+                            width, height, height, current.Format) * workers));
+                    }
                     var bytes = oldBytes + ((long)width * height * current.Format.BytesPerPixel()) + scratch;
                     CheckBudget(options, bytes, $"the geometry step '{geometry.Name}'");
                     using (options.Workspace?.Reserve(bytes, "geometry transition"))
