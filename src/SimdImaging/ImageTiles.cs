@@ -258,7 +258,7 @@ public sealed partial class Image
     {
         private StreamFrameEncoder? _frame;
         private readonly WorkingBuffer _band;
-        private readonly int[] _filled;
+        private int[] _filled;
         private readonly CancellationToken _cancellation;
         private readonly IDisposable? _lease;
         private readonly int _bandCapacity;
@@ -373,6 +373,7 @@ public sealed partial class Image
             }
             finally
             {
+                _filled = Array.Empty<int>();
                 _lease?.Dispose();
             }
         }
