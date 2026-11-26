@@ -103,7 +103,8 @@ internal readonly record struct ResizeWorkspace(
                 $"Streaming this resize needs a {(ringBase + fixedBytes) / (1024 * 1024)} MiB working set "
                 + $"({ringBase / (1024 * 1024)} MiB ring of {destWidth}-pixel rows, "
                 + $"{readyBytes / (1024 * 1024)} MiB output batch, one source row, "
-                + $"{workers} worker rows), above the {budget / (1024 * 1024)} MiB this path allows. "
+                + $"{workers} worker rows and {workerTapBytes / (1024 * 1024)} MiB vertical tap scratch), "
+                    + $"above the {budget / (1024 * 1024)} MiB this path allows. "
                 + "Reduce the downsample ratio, resize in two steps, lower the degree, or raise "
                 + "ExecuteOptions.MaxWorkingBytes.");
         }
@@ -119,7 +120,8 @@ internal readonly record struct ResizeWorkspace(
                 $"Streaming this resize needs a {(ringBytes + stagingBytes + fixedBytes) / (1024 * 1024)} MiB "
                 + $"working set ({ringBytes / (1024 * 1024)} MiB ring, "
                 + $"{stagingBytes / (1024 * 1024)} MiB staging, {readyBytes / (1024 * 1024)} MiB output batch, "
-                + $"one source row, {workers} worker rows), above the {budget / (1024 * 1024)} MiB this path allows. "
+                + $"one source row, {workers} worker rows, {workerTapBytes / (1024 * 1024)} MiB vertical tap scratch), "
+                + $"above the {budget / (1024 * 1024)} MiB this path allows. "
                 + "Reduce the downsample ratio, resize in two steps, lower the degree, or raise "
                 + "ExecuteOptions.MaxWorkingBytes.");
         }
