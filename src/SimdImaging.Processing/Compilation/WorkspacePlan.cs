@@ -255,14 +255,18 @@ internal static class WorkspacePlanner
                 continue;
             }
 
-            var isWholeImage = step.Definition.Contract.Workspace.IsSingleCopy(
-                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage);
-            if (isWholeImage)
+            var workspace = step.Definition.Contract.Workspace;
+            var wholeImageInvocation =
+                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+            if (workspace.HasWholeImageEstimate ||
+                (wholeImageInvocation && workspace.PerCallEstimate is not null))
                 wholeImage = Math.Max(wholeImage,
-                    scratch(options.SourceWidth, options.SourceHeight, options.SourceHeight, options.SourceFormat));
-            else
+                    workspace.EstimateWholeImage(options.SourceWidth, options.SourceHeight, options.SourceFormat));
+
+            if (workspace.HasPerWorkerEstimate ||
+                (!wholeImageInvocation && workspace.PerCallEstimate is not null))
                 perWorker = Math.Max(perWorker,
-                    scratch(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat));
+                    workspace.EstimatePerWorker(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat));
         }
 
         var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
@@ -338,14 +342,18 @@ internal static class WorkspacePlanner
                 continue;
             }
 
-            var isWholeImage = step.Definition.Contract.Workspace.IsSingleCopy(
-                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage);
-            if (isWholeImage)
+            var workspace = step.Definition.Contract.Workspace;
+            var wholeImageInvocation =
+                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+            if (workspace.HasWholeImageEstimate ||
+                (wholeImageInvocation && workspace.PerCallEstimate is not null))
                 wholeImage = Math.Max(wholeImage,
-                    scratch(options.SourceWidth, options.SourceHeight, options.SourceHeight, options.SourceFormat));
-            else
+                    workspace.EstimateWholeImage(options.SourceWidth, options.SourceHeight, options.SourceFormat));
+
+            if (workspace.HasPerWorkerEstimate ||
+                (!wholeImageInvocation && workspace.PerCallEstimate is not null))
                 perWorker = Math.Max(perWorker,
-                    scratch(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat));
+                    workspace.EstimatePerWorker(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat));
         }
         var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
         var tileBytes = TargetBuffer.Bytes(width, height, options.SourceFormat);
@@ -422,17 +430,18 @@ internal static class WorkspacePlanner
                 // The same scope rule as MemoryEstimator and WorkingSetBudget: WholeImage is one copy, not one per
                 // worker. A streaming stage has no whole-image step today, but the accounting must not disagree with
                 // the other two executors about what a declaration means.
-                var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
-                    || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
-                if (isWholeImage)
-                {
+                var workspace = step.Definition.Contract.Workspace;
+                var wholeImageInvocation =
+                    step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+                if (workspace.HasWholeImageEstimate ||
+                    (wholeImageInvocation && workspace.PerCallEstimate is not null))
                     sectionWholeImage = Math.Max(sectionWholeImage,
-                        scratch(state.InputWidth, state.InputHeight, state.InputHeight, state.InputFormat));
-                    continue;
-                }
+                        workspace.EstimateWholeImage(state.InputWidth, state.InputHeight, state.InputFormat));
 
-                sectionPerWorker = Math.Max(sectionPerWorker,
-                    scratch(state.InputWidth, state.InputHeight, windowRows, state.InputFormat));
+                if (workspace.HasPerWorkerEstimate ||
+                    (!wholeImageInvocation && workspace.PerCallEstimate is not null))
+                    sectionPerWorker = Math.Max(sectionPerWorker,
+                        workspace.EstimatePerWorker(state.InputWidth, state.InputHeight, windowRows, state.InputFormat));
             }
 
             // Each row-source stage has its own dimensions and its own persistent reservation. Its
