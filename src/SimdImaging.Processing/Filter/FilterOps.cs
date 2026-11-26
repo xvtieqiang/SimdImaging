@@ -2845,6 +2845,8 @@ public static class FilterOps
         //     row-major order, so every sum is bit-identical.
         //   * the whole thing ran on one thread. Block rows are independent, so bands cannot change a byte.
         var blockRows = (height + blockSize - 1) / blockSize;
+        try
+        {
         RowParallel.ForBands(blockRows, (firstBand, lastBand) =>
         {
             // Rented, not allocated: one set per worker per call, and at 1920 px that was ~1 MiB of float
@@ -2918,9 +2920,14 @@ public static class FilterOps
                 if (row is not null) ArrayPool<float>.Shared.Return(row);
                 if (sums is not null) ArrayPool<float>.Shared.Return(sums);
             }
-        });
-
-        return destination;
+            });
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -2943,6 +2950,8 @@ public static class FilterOps
         var destination = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba8, pool);
         var view = destination.View;
 
+        try
+        {
         RowParallel.ForBands(blockRows, (firstBand, lastBand) =>
         {
             var sums = ArrayPool<long>.Shared.Rent(columns * 4);
@@ -3018,9 +3027,14 @@ public static class FilterOps
             {
                 ArrayPool<long>.Shared.Return(sums);
             }
-        });
-
-        return destination;
+            });
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
