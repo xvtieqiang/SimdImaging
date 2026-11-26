@@ -16,7 +16,7 @@ public sealed class WorkspaceScopeTests
     public void WholeImageScope_IsCountedOnce_AndPerWorkerScope_IsCountedPerWorker()
     {
         var perWorker = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
-            [new PlanStep(ScopedOp(WorkspaceScope.PerWorker))], 128, allowFusion: false, degree: 4);
+            [new PlanStep(ScopedOp(WorkspaceScope.PerWorker))], 64, allowFusion: false, degree: 4);
         var wholeImage = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
             [new PlanStep(ScopedOp(WorkspaceScope.WholeImage))], 128, allowFusion: false, degree: 4);
 
