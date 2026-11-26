@@ -117,7 +117,7 @@ internal static class WorkspacePlanner
                 }
                 else
                 {
-                    var wholeImageInvocation = geometry.Descriptor.Requirements.Partition == Partitioning.WholeImage;
+                    var wholeImageInvocation = geometry.Descriptor.Requirements.RequiresWholeImageInvocation;
                     var scratchBytes = 0L;
                     if (declared.HasWholeImageEstimate ||
                         (wholeImageInvocation && declared.PerCallEstimate is not null))
@@ -155,7 +155,7 @@ internal static class WorkspacePlanner
                 else
                 {
                     var wholeImageInvocation =
-                        formatStep.Operator.Contract.Requirements.Partition == Partitioning.WholeImage;
+                        formatStep.Operator.Contract.Requirements.RequiresWholeImageInvocation;
                     var scratchBytes = 0L;
                     if (workspace.HasWholeImageEstimate ||
                         (wholeImageInvocation && workspace.PerCallEstimate is not null))
