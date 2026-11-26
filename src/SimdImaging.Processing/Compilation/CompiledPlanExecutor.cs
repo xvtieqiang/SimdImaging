@@ -121,8 +121,15 @@ internal static class CompiledPlanExecutor
             throw;
         }
 
-        // An empty plan is still a request for a picture of the caller's own.
-        return owned ?? Transforms.Copy(source, pool);
+        // An empty plan is still a request for a picture of the caller's own. Reserve the copy destination
+        // before renting it, just as the non-empty paths reserve their output before execution.
+        if (owned is not null)
+            return owned;
+
+        var copyBytes = checked((long)source.Width * source.Height * source.Format.BytesPerPixel());
+        CheckBudget(options, copyBytes, "the empty frame plan copy");
+        using (options.Workspace?.Reserve(copyBytes, "empty frame plan destination"))
+            return Transforms.Copy(source, pool);
     }
 
     /// <summary>
