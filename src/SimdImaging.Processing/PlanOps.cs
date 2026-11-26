@@ -74,14 +74,15 @@ public static class PlanOps
         WorkingFormatMask formats = WorkingFormatMask.All, PixelSemantics? semantics = null) =>
         ForceAdapterPoint
             ? Point(name, op, formats, semantics)
-            : Create(name, OpCategory.Point, IdentityFootprint.Instance, WorkspaceModel.Of(PointScratch),
+            : Create(name, OpCategory.Point, IdentityFootprint.Instance, WorkspaceModel.Of(PointTableScratch),
                 new KernelImplementations(
                     PlanSteps.PointTable(
                         new Lazy<byte[]>(() => BuildByteTable(op), LazyThreadSafetyMode.ExecutionAndPublication),
                         op,
                         TablePixelFloor),
                     op),
-                formats, semantics: semantics);
+                formats, semantics: semantics,
+                ); // point-table workspace is supplied by the factory below
 
     /// <summary>
     /// Pixels below which the table is not worth building. Measured at 27 us per table against a 4K step's 5 ms and a
@@ -143,10 +144,47 @@ public static class PlanOps
     /// <see cref="PointOps.Lut16PixelFloor"/> builds a 4 × 65536-entry table (512 KiB) because building it beats the
     /// float path. Declaring zero there made the estimator promise memory the step would then take.
     /// </summary>
-    private static long PointScratch(int width, int height, int rows, WorkingFormat format) =>
-        format == WorkingFormat.Rgba16 && (long)width * height >= PointOps.Lut16PixelFloor
-            ? 4L * 65536 * sizeof(ushort)
-            : 0L;
+    private static long PointScratch(int width, int height, int rows, WorkingFormat format)
+    {
+        // PlanSteps.Point materialises the operator's result for the current band, then copies it into the
+        // executor-owned destination. PointOps may also keep a worker-local LUT/row buffer while doing so.
+        var resultBytes = checked((long)width * rows * format.BytesPerPixel());
+        var workerBytes = checked((long)width * 4 * sizeof(float));
+        var lookupBytes = format switch
+        {
+            WorkingFormat.Rgba16 when (long)width * height >= PointOps.Lut16PixelFloor =>
+                4L * 65536 * sizeof(ushort),
+            WorkingFormat.Rgba8 => (4L * 256) + (3L * 256 * 4 * sizeof(float)),
+            _ => 0L,
+        };
+
+        if (format == WorkingFormat.Rgba16 && (long)width * height >= PointOps.Lut16PixelFloor)
+            workerBytes = 0; // the 16-bit LUT path does not rent a float row
+
+        return checked(resultBytes + workerBytes + lookupBytes);
+    }
+
+    private static long PointTableScratch(int width, int height, int rows, WorkingFormat format)
+    {
+        // Large Rgba8 table-backed steps write directly into the executor destination. Other formats and
+        // small images fall back to the ordinary operator, which materialises one band result.
+        if (format == WorkingFormat.Rgba8 && (long)width * height >= TablePixelFloor)
+            return 0L;
+
+        var resultBytes = checked((long)width * rows * format.BytesPerPixel());
+        var workerBytes = format == WorkingFormat.Rgba16 &&
+            (long)width * height >= PointOps.Lut16PixelFloor
+                ? 0L
+                : checked((long)width * 4 * sizeof(float));
+        var lookupBytes = format switch
+        {
+            WorkingFormat.Rgba8 => 4L * 256,
+            WorkingFormat.Rgba16 when (long)width * height >= PointOps.Lut16PixelFloor =>
+                4L * 65536 * sizeof(ushort),
+            _ => 0L,
+        };
+        return checked(resultBytes + workerBytes + lookupBytes);
+    }
 
     private static WorkingFormatMask FormatMask(WorkingFormat format) => format switch
     {
@@ -163,12 +201,19 @@ public static class PlanOps
     /// </summary>
     private static ImageOp Neighborhood(string name, int halo, Func<PixelView, WorkingBuffer> op,
         Func<int, int, int, WorkingFormat, long>? scratch = null, IntoKernel? into = null,
-        PassModel pass = PassModel.Single, PixelSemantics? semantics = null)
+        PassModel pass = PassModel.Single, PixelSemantics? semantics = null, bool scratchIncludesResult = false)
     {
         var footprint = halo == 0
             ? (IInputFootprint)IdentityFootprint.Instance
             : new HaloFootprint(halo, halo);
-        var workspace = WorkspaceModel.Of(scratch ?? ((width, _, rows, _) => (long)rows * width * 16));
+        var estimate = scratch ?? ((width, _, rows, _) => (long)rows * width * 16);
+        var workspace = WorkspaceModel.Of((width, height, rows, format) =>
+        {
+            var bytes = estimate(width, height, rows, format);
+            return into is not null || scratchIncludesResult
+                ? bytes
+                : checked(bytes + ((long)width * rows * format.BytesPerPixel()));
+        });
         return Create(name, OpCategory.Neighborhood, footprint, workspace,
             new KernelImplementations(PlanSteps.Neighborhood(op, halo, halo, into), op, into),
             requirements: ExecutionRequirements.RowBands, pass: pass, semantics: semantics);
@@ -182,7 +227,7 @@ public static class PlanOps
         Func<int, int, int, WorkingFormat, long>? scratch = null, IInputFootprint? footprint = null,
         PassModel pass = PassModel.Single, StateScope state = StateScope.None,
         ExecutionOrder order = ExecutionOrder.Any, Determinism determinism = Determinism.CoordinateDeterministic,
-        PixelSemantics? semantics = null, WorkingFormat? outputFormat = null)
+        PixelSemantics? semantics = null, WorkingFormat? outputFormat = null, bool scratchIncludesResult = false)
     {
         var requirements = ExecutionRequirements.WholeImage with
         {
@@ -191,8 +236,17 @@ public static class PlanOps
             Determinism = determinism,
         };
 
+        var workspace = scratch is null
+            ? WorkspaceModel.Undeclared
+            : WorkspaceModel.Of((width, height, rows, format) =>
+            {
+                var bytes = scratch(width, height, rows, format);
+                return scratchIncludesResult
+                    ? bytes
+                    : checked(bytes + ((long)width * height * format.BytesPerPixel()));
+            });
         return Create(name, OpCategory.Global, footprint ?? WholeSourceFootprint.Instance,
-            scratch is null ? WorkspaceModel.Undeclared : WorkspaceModel.Of(scratch),
+            workspace,
             new KernelImplementations(PlanSteps.Global(op), op),
             requirements: requirements, pass: pass, semantics: semantics, outputFormat: outputFormat);
     }
@@ -308,7 +362,8 @@ public static class PlanOps
         var weights = kernel.ToArray();
         return Create("convolve", OpCategory.Neighborhood, WholeSourceFootprint.Instance,
             // One float RGBA copy of the window, which is a band plus the halo on both sides.
-            WorkspaceModel.Of((width, _, rows, _) => (long)rows * width * 16),
+            WorkspaceModel.Of((width, height, rows, format) =>
+                ((long)rows * width * 16) + ((long)width * rows * format.BytesPerPixel())),
             new KernelImplementations(PlanSteps.Neighborhood(
                 (window, context, full) =>
                     FilterOps.ConvolveBanded(window, context, full, weights, radius, border, bias, constantValue),
@@ -341,7 +396,9 @@ public static class PlanOps
             throw new ArgumentException("A chain needs at least one transform.", nameof(transforms));
 
         var chain = transforms.ToArray();
-        return Create("point-chain", OpCategory.Point, IdentityFootprint.Instance, WorkspaceModel.None,
+        return Create("point-chain", OpCategory.Point, IdentityFootprint.Instance,
+            WorkspaceModel.Of((width, _, rows, format) =>
+                (long)width * rows * format.BytesPerPixel()),
             new KernelImplementations(PlanSteps.Point(v => FilterOps.PointChain(v, chain))),
             WorkingFormatMask.Rgba8, semantics: PixelSemantics.EncodedInteger);
     }
