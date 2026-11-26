@@ -215,6 +215,12 @@ internal static class WorkspacePlanner
         {
             haloX = checked(haloX + step.HaloX);
             haloY = checked(haloY + step.HaloY);
+        }
+
+        var windowWidth = (int)Math.Min(options.SourceWidth, (long)width + 2L * haloX);
+        var windowHeight = (int)Math.Min(options.SourceHeight, (long)height + 2L * haloY);
+        foreach (var step in steps)
+        {
             if (step.Scratch is not { } scratch)
             {
                 undeclared++;
@@ -228,12 +234,8 @@ internal static class WorkspacePlanner
                     scratch(options.SourceWidth, options.SourceHeight, options.SourceHeight, options.SourceFormat));
             else
                 perWorker = Math.Max(perWorker,
-                    scratch(Math.Min(options.SourceWidth, width + 2 * haloX), options.SourceHeight,
-                        Math.Min(options.SourceHeight, height + 2 * haloY), options.SourceFormat));
+                    scratch(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat));
         }
-
-        var windowWidth = Math.Min(options.SourceWidth, checked(width + 2 * haloX));
-        var windowHeight = Math.Min(options.SourceHeight, checked(height + 2 * haloY));
         var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
         var tileBytes = TargetBuffer.Bytes(width, height, options.SourceFormat);
         var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
