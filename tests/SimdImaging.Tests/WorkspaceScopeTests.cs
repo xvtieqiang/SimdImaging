@@ -37,6 +37,25 @@ public sealed class WorkspaceScopeTests
     }
 
     [Fact]
+    public void OperatorScratchBytes_UsesTheActualPerWorkerPeakAcrossDifferentContracts()
+    {
+        var singleContract = OperatorContract.Create("single-worker", OpCategory.Neighborhood,
+            WorkingFormatMask.All, IdentityFootprint.Instance, WorkspaceModel.Of((_, _, _, _) => 2000),
+            requirements: ExecutionRequirements.RowBands with { Threading = ThreadSafety.SingleThread });
+        var concurrent = ScopedOp(WorkspaceScope.PerWorker);
+        var plan = new ProcessingPlan { BandRows = 64 }
+            .Add(new ImageOp(singleContract, new KernelImplementations((_, _, _, _) => { })))
+            .Add(concurrent);
+
+        var estimate = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8, plan.Steps,
+            bandRows: 64, allowFusion: false, degree: 4);
+
+        estimate.PerWorkerBytes.ShouldBe(2000);
+        estimate.Workers.ShouldBe(4);
+        estimate.PerWorkerPeakBytes.ShouldBe(4096);
+        estimate.OperatorScratchBytes.ShouldBe(4096);
+    }
+    [Fact]
     public void TheCompilerAndTheStreamingBudget_ReadTheSameScope()
     {
         var options = new ExecuteOptions { MaxDegreeOfParallelism = 4 };
