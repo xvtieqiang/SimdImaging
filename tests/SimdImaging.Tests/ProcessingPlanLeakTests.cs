@@ -1,6 +1,7 @@
 using System.Buffers;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Tests;
 
@@ -84,6 +85,29 @@ public class ProcessingPlanLeakTests
             new ExecuteOptions { AllowFusion = false });
 
         fused.View.Span.ToArray().ShouldBe(stepByStep.View.Span.ToArray());
+    }
+
+    [Fact]
+    public void RowParallel_DefaultDegreeAndWorkspaceResolutionShareTheTestOverride()
+    {
+        var previousDegree = RowParallel.DegreeOverride;
+        var previousRows = RowParallel.RowsPerWorkerOverride;
+        try
+        {
+            RowParallel.DegreeOverride = 2;
+            RowParallel.RowsPerWorkerOverride = 1;
+
+            RowParallel.ResolveDegree(0).ShouldBe(2);
+            RowParallel.ResolveWorkers(20_000, 4, 0).ShouldBe(2);
+            RowParallel.ResolveWorkers(20_000, 4, 3).ShouldBe(3);
+            RowParallel.ResolveWorkers(100, 4, 3).ShouldBe(1,
+                "small work stays single-threaded even when the requested degree is larger");
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previousDegree;
+            RowParallel.RowsPerWorkerOverride = previousRows;
+        }
     }
 
     [Fact]
