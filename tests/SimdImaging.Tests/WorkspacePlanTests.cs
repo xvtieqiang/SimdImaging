@@ -1,3 +1,5 @@
+using Sdcb.SimdCodecs.Abstractions;
+using SimdImaging;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Compilation;
@@ -272,6 +274,94 @@ public sealed class WorkspacePlanTests
             .Bytes.ShouldBe(2048);
         var runtimeTileWindows = (long)4 * 32 * 20 * WorkingFormat.Rgba8.BytesPerPixel();
         tilePlan.Workspace.BoundedBytes.ShouldBe(targetBytes + runtimeTileWindows + 2048);
+    }
+
+
+    [Fact]
+    public void EmptyStreamPlan_CountsOnlyTheActualPipelineTransferBuffer()
+    {
+        const int width = 64;
+        const int height = 40;
+        var plan = PipelineCompiler.Compile(PipelineRecipe.Empty, StreamOptions(width, height));
+
+        plan.Backend.ShouldBe(ExecutionBackend.Stream);
+        var transferBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
+        plan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.CopyBuffer)
+            .Bytes.ShouldBe(transferBytes);
+        plan.Workspace.Terms.ShouldNotContain(term => term.Kind == WorkspaceTermKind.Window);
+        plan.Workspace.BoundedBytes.ShouldBe(transferBytes);
+    }
+
+    [Fact]
+    public void StreamGeometryWrappers_AndPipelineCopyReserveTheirResidentBuffers()
+    {
+        const int sourceWidth = 64;
+        const int sourceHeight = 48;
+        var recipe = Recipe(
+            PlanOps.Invert(),
+            GeometrySteps.Crop(new PixelRect(2, 3, 40, 20)),
+            GeometrySteps.Pad(1, 2, 3, 4, new RgbaColor(8, 9, 10, 255)),
+            GeometrySteps.FlipHorizontal());
+        var options = StreamOptions(sourceWidth, sourceHeight) with
+        {
+            Execute = new ExecuteOptions { MaxDegreeOfParallelism = 1 },
+        };
+        var plan = PipelineCompiler.Compile(recipe, options);
+        plan.Backend.ShouldBe(ExecutionBackend.Stream);
+
+        var bytesPerPixel = WorkingFormat.Rgba8.BytesPerPixel();
+        var cropBandBytes = (long)sourceWidth * 21 * bytesPerPixel;
+        var padRowBytes = (long)40 * bytesPerPixel;
+        var flipRowBytes = (long)44 * bytesPerPixel;
+        var transferBytes = (long)44 * 26 * bytesPerPixel;
+        plan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.GeometryRowScratch)
+            .Bytes.ShouldBe(cropBandBytes + padRowBytes + flipRowBytes);
+        plan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.CopyBuffer)
+            .Bytes.ShouldBe(transferBytes);
+        plan.Workspace.IsLowerBound.ShouldBeFalse();
+
+        using var image = TestImages.Gradient(sourceWidth, sourceHeight, WorkingFormat.Rgba8);
+        var manager = new WorkspaceManager(plan.Workspace.BoundedBytes);
+        var execute = new ExecuteOptions { MaxDegreeOfParallelism = 1, Workspace = manager };
+        var chain = CompiledPlanExecutor.CreateStreamChain(plan,
+            new ViewSource(image[0].Pixels.View), execute);
+        try
+        {
+            Pipeline.Copy(chain, new DiscardSink(), default, execute).ShouldBe(26);
+        }
+        finally
+        {
+            (chain as IDisposable)?.Dispose();
+        }
+
+        manager.PeakBytes.ShouldBe(plan.Workspace.BoundedBytes);
+        manager.OutstandingBytes.ShouldBe(0);
+    }
+
+
+    private sealed class ViewSource(PixelView view) : IRowSource
+    {
+        private int _row;
+
+        public int Width => view.Width;
+        public int Height => view.Height;
+        public WorkingFormat Format => view.Format;
+
+        public int ReadRows(Span<byte> destination, int stride, int maxRows)
+        {
+            if (stride == 0)
+                stride = Width * Format.BytesPerPixel();
+            var count = Math.Min(maxRows, Height - _row);
+            for (var y = 0; y < count; y++)
+                view.Row(_row + y).CopyTo(destination.Slice(y * stride, stride));
+            _row += count;
+            return count;
+        }
+    }
+
+    private sealed class DiscardSink : IRowSink
+    {
+        public void WriteRows(ReadOnlySpan<byte> rows, int stride, int rowCount) { }
     }
 
     private sealed class EmptySource(int width, int height) : IRowSource
