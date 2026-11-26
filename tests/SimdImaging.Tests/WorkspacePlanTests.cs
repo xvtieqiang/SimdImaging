@@ -83,6 +83,26 @@ public sealed class WorkspacePlanTests
     }
 
     [Fact]
+    public void FormatTransition_ReservesItsDeclaredScratchBeforeExecuting()
+    {
+        const int width = 80;
+        const int height = 48;
+        var plan = PipelineCompiler.Compile(Recipe(PlanOps.DistanceTransform()), FrameOptions(width, height));
+        var formatScratch = plan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.FormatScratch).Bytes;
+        var oldBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
+        var newBytes = (long)width * height * WorkingFormat.Rgba32F.BytesPerPixel();
+        var manager = new WorkspaceManager(oldBytes + newBytes + formatScratch - 1);
+        using var source = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba8);
+
+        Should.Throw<InvalidOperationException>(() =>
+            CompiledPlanExecutor.ExecuteFrame(plan, source.View,
+                options: new ExecuteOptions { Workspace = manager }));
+
+        manager.OutstandingBytes.ShouldBe(0);
+        manager.PeakBytes.ShouldBe(0);
+    }
+
+    [Fact]
     public void ResizeTerms_MatchTheRowSourceThatWillRun()
     {
         var recipe = Recipe(PlanOps.Invert(), GeometrySteps.Resize(64, 40, Resampler.Bicubic));
