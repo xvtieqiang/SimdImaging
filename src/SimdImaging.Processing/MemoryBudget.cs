@@ -149,23 +149,23 @@ public static class MemoryEstimator
         var workers = 1;
 
         // The previous segment's full-frame result remains alive while the next segment writes its output.
-        // A fused segment estimate already includes its output and two windows per worker; a single-step
-        // segment owns one full-frame destination. Add the preceding segment result for every segment after
-        // the first, and take the largest simultaneous set rather than summing sequential stages.
+        // Keep the segmentation for both structural buffers and per-step adapter scratch: in a fused run, step k
+        // receives the band widened by its own halo and every later step's halo (Point adapters consume the
+        // destination rows, so they only include later halos).
+        var fusedSegments = allowFusion && steps.Count > 1 ? FusionPlanner.Segment(steps) : null;
         var rented = full;
         if (steps.Count > 1)
         {
-            if (!allowFusion)
+            if (fusedSegments is null)
             {
                 // Stepwise execution keeps the prior full-frame result alive while the next destination is filled.
                 rented = checked(2L * full);
             }
             else
             {
-                var segments = FusionPlanner.Segment(steps);
-                for (var index = 0; index < segments.Count; index++)
+                for (var index = 0; index < fusedSegments.Count; index++)
                 {
-                    var (first, count) = segments[index];
+                    var (first, count) = fusedSegments[index];
                     var segment = count > 1
                         ? FusedExecutor.EstimateSegmentBytes(width, height, format, steps, first, count,
                             bandRows, degree)
@@ -188,8 +188,9 @@ public static class MemoryEstimator
         long perWorkerPeak = 0;
         long wholeImage = 0;
         var undeclared = 0;
-        foreach (var step in steps)
+        for (var stepIndex = 0; stepIndex < steps.Count; stepIndex++)
         {
+            var step = steps[stepIndex];
             var requirements = step.Definition.Contract.Requirements;
             var wholeImageInvocation =
                 step.Category is OpCategory.Global or OpCategory.Composite ||
@@ -209,9 +210,7 @@ public static class MemoryEstimator
             }
             var rows = wholeImageInvocation
                 ? height
-                : steps.Count > 1 && !(allowFusion && FusionPlanner.IsBandable(step))
-                    ? height
-                    : Math.Min(height, bandRows + (2 * step.HaloY));
+                : FusedInvocationRows(steps, stepIndex, fusedSegments, height, bandRows, step);
 
             // The partition contract says how often the kernel is called; WorkspaceModel says which of its
             // allocations are per worker, whole-image, or per call. A Global kernel can still allocate per worker
@@ -243,6 +242,35 @@ public static class MemoryEstimator
             WholeImageScratchBytes = wholeImage,
             UndeclaredSteps = undeclared,
         };
+    }
+
+    /// <summary>
+    /// Rows in the view actually passed to one operator adapter. A fused neighbourhood step receives its current
+    /// halo plus all downstream halos; a point adapter runs only over the output rectangle, which excludes its own
+    /// halo. Outside a multi-step fused segment, the existing band/window geometry applies.
+    /// </summary>
+    private static int FusedInvocationRows(IReadOnlyList<PlanStep> steps, int stepIndex,
+        IReadOnlyList<(int First, int Count)>? segments, int height, int bandRows, PlanStep step)
+    {
+        if (segments is not null)
+        {
+            foreach (var (first, count) in segments)
+            {
+                if (count <= 1 || stepIndex < first || stepIndex >= first + count)
+                    continue;
+
+                var downstreamHalo = 0;
+                for (var i = stepIndex + 1; i < first + count; i++)
+                    downstreamHalo = checked(downstreamHalo + steps[i].HaloY);
+
+                var context = step.Category == OpCategory.Point
+                    ? downstreamHalo
+                    : checked(step.HaloY + downstreamHalo);
+                return (int)Math.Min(height, (long)bandRows + (2L * context));
+            }
+        }
+
+        return (int)Math.Min(height, (long)bandRows + (2L * step.HaloY));
     }
 
     /// <summary>Mirrors <see cref="RowParallel"/>'s rule: one worker per band, capped by the degree.</summary>
