@@ -115,6 +115,7 @@ internal static class WorkspacePlanner
                 // SectionTransition term. A declared content-derived step is therefore bounded, not a lower bound.
                 var (nextWidth, nextHeight) = geometry.Geometry.Map(width, height);
                 var declared = geometry.Descriptor.WorkspaceModel;
+                var scratchBytes = 0L;
                 if (!declared.IsDeclared)
                 {
                     geometryUndeclared++;
@@ -122,7 +123,6 @@ internal static class WorkspacePlanner
                 else
                 {
                     var wholeImageInvocation = true; // Geometry.Reshape is one whole-frame call in the frame backend.
-                    var scratchBytes = 0L;
                     if (declared.HasWholeImageEstimate ||
                         (wholeImageInvocation && declared.PerCallEstimate is not null))
                         scratchBytes = checked(scratchBytes
@@ -139,11 +139,12 @@ internal static class WorkspacePlanner
                     }
 
                     geometryScratch = Math.Max(geometryScratch, scratchBytes);
-                    var transitionBytes = checked(
-                        checked((long)width * height * finalFormat.BytesPerPixel())
-                        + checked((long)nextWidth * nextHeight * finalFormat.BytesPerPixel()));
-                    framePeak = Math.Max(framePeak, checked(transitionBytes + scratchBytes));
                 }
+
+                var transitionBytes = checked(
+                    checked((long)width * height * finalFormat.BytesPerPixel())
+                    + checked((long)nextWidth * nextHeight * finalFormat.BytesPerPixel()));
+                framePeak = Math.Max(framePeak, checked(transitionBytes + scratchBytes));
 
                 width = nextWidth;
                 height = nextHeight;
@@ -157,6 +158,7 @@ internal static class WorkspacePlanner
                     (long)width * height * outputFormat.BytesPerPixel(), $"{width}x{height} {outputFormat}"));
 
                 var workspace = formatStep.Operator.Contract.Workspace;
+                var scratchBytes = 0L;
                 if (!workspace.IsDeclared)
                 {
                     formatUndeclared++;
@@ -164,7 +166,6 @@ internal static class WorkspacePlanner
                 else
                 {
                     var wholeImageInvocation = true; // The compiled format kernel is invoked once for the frame.
-                    var scratchBytes = 0L;
                     if (workspace.HasWholeImageEstimate ||
                         (wholeImageInvocation && workspace.PerCallEstimate is not null))
                         scratchBytes = checked(scratchBytes
@@ -181,10 +182,11 @@ internal static class WorkspacePlanner
                     }
 
                     formatScratch = Math.Max(formatScratch, scratchBytes);
-                    var oldBytes = checked((long)width * height * finalFormat.BytesPerPixel());
-                    var newBytes = checked((long)width * height * outputFormat.BytesPerPixel());
-                    framePeak = Math.Max(framePeak, checked(oldBytes + newBytes + scratchBytes));
                 }
+
+                var oldBytes = checked((long)width * height * finalFormat.BytesPerPixel());
+                var newBytes = checked((long)width * height * outputFormat.BytesPerPixel());
+                framePeak = Math.Max(framePeak, checked(oldBytes + newBytes + scratchBytes));
 
                 finalFormat = outputFormat;
             }
