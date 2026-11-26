@@ -143,7 +143,7 @@ public sealed class GeometryContractTests
     }
 
     [Fact]
-    public void TwoStreamedResizes_ReportTheLargestRingOnce()
+    public void TwoStreamedResizes_ReportAllSimultaneouslyResidentResizeBuffers()
     {
         var recipe = new PipelineRecipeBuilder()
             .Append(GeometrySteps.Resize(48, 36, Resampler.Bilinear))
@@ -155,19 +155,23 @@ public sealed class GeometryContractTests
 
         plan.Backend.ShouldBe(ExecutionBackend.Stream);
         var terms = string.Join(", ", plan.Workspace.Terms.Select(term => $"{term.Kind}={term.Bytes}"));
-        var ring = plan.Workspace.Terms.FirstOrDefault(term => term.Kind == WorkspaceTermKind.ResizeRing);
-        ring.Bytes.ShouldBeGreaterThan(0, $"terms: {terms}");
-        var first = Ring(24, 18, 48, 36);
-        var second = Ring(48, 36, 96, 72);
-        ring.Bytes.ShouldBe(Math.Max(first, second));
-        ring.Bytes.ShouldBeGreaterThan(first, "the second resize's ring is larger and must win, not the first");
+        var first = Resize(24, 18, 48, 36);
+        var second = Resize(48, 36, 96, 72);
+
+        Term(WorkspaceTermKind.ResizeRing).ShouldBe(first.RingBytes + second.RingBytes, $"terms: {terms}");
+        Term(WorkspaceTermKind.ResizeStaging).ShouldBe(first.StagingBytes + second.StagingBytes, $"terms: {terms}");
+        Term(WorkspaceTermKind.ResizeBatch).ShouldBe(first.ReadyBytes + second.ReadyBytes, $"terms: {terms}");
+        Term(WorkspaceTermKind.ResizeWorkerRows).ShouldBe(first.WorkerRowBytes + second.WorkerRowBytes, $"terms: {terms}");
+        Term(WorkspaceTermKind.ResizeSourceRow).ShouldBe(first.SourceRowBytes + second.SourceRowBytes, $"terms: {terms}");
+
+        long Term(WorkspaceTermKind kind) => plan.Workspace.Terms.Single(term => term.Kind == kind).Bytes;
     }
 
-    private static long Ring(int sourceWidth, int sourceHeight, int width, int height)
+    private static ResizeWorkspace Resize(int sourceWidth, int sourceHeight, int width, int height)
     {
         var weightsY = WeightTable.Build(sourceHeight, height, Resampler.Bilinear);
         return ResizeWorkspace.Estimate(sourceWidth, sourceHeight, width, height, weightsY.Taps, nearest: false,
-            WorkingFormat.Rgba8, new ExecuteOptions()).RingBytes;
+            WorkingFormat.Rgba8, new ExecuteOptions());
     }
 
     private static void Identity(float destinationX, float destinationY, out float sourceX, out float sourceY)
