@@ -516,7 +516,7 @@ public sealed class ProcessingPlan
         {
             // The steps ran at the source size; the resize is the last stage, so it sees their output whole. That is
             // the same thing a streamed run does band by band, byte for byte.
-            return Resample.Resize(buffer.View, _resizeWidth, _resizeHeight, _resizeResampler, pool);
+            return Resample.Resize(buffer.View, _resizeWidth, _resizeHeight, _resizeResampler, pool, options);
         }
         finally
         {
