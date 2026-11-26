@@ -247,7 +247,7 @@ internal static class WorkspacePlanner
         var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
         var targetBytes = TargetBuffer.Bytes(region.Width, region.Height, options.SourceFormat);
         var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
-        var workers = Math.Max(1, degree > 0 ? degree : Environment.ProcessorCount);
+        var workers = Math.Max(1, degree > 0 ? degree : RowParallel.Degree);
         terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, targetBytes, "requested result rectangle"));
         if (windowBytes > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
@@ -308,7 +308,7 @@ internal static class WorkspacePlanner
         var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
         var workers = Math.Max(1, options.Execute.MaxDegreeOfParallelism > 0
             ? options.Execute.MaxDegreeOfParallelism
-            : Environment.ProcessorCount);
+            : RowParallel.Degree);
         terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, tileBytes, "one resident destination tile"));
         if (windowBytes > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
@@ -333,7 +333,7 @@ internal static class WorkspacePlanner
     {
         var workers = Math.Max(1, options.Execute.MaxDegreeOfParallelism > 0
             ? options.Execute.MaxDegreeOfParallelism
-            : Environment.ProcessorCount);
+            : RowParallel.Degree);
         var bandRowsOption = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
 
         // Every operator run has its own width, height and format; a plan after a resize must be estimated at the
