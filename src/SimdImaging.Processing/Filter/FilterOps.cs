@@ -1992,10 +1992,18 @@ public static class FilterOps
         else
         {
             var window = checked((radius * 2) + 1);
-            var paddedWidth = checked(width + (radius * 2));
-            var blocks = checked(((paddedWidth + window - 1) / window) * window);
-            // SlideRows: row + output (4W each), and padded/prefix/suffix (4*blocks each).
-            primitiveScratch = checked(((8L * width) + (12L * blocks)) * sizeof(float));
+            static long SlideScratchFloats(int rowWidth, int window, int radius)
+            {
+                var paddedWidth = checked(rowWidth + (radius * 2));
+                var blocks = checked(((paddedWidth + window - 1) / window) * window);
+                // SlideRows: row + output (4W each), and padded/prefix/suffix (4*blocks each).
+                return checked((8L * rowWidth) + (12L * blocks));
+            }
+
+            // Morph transposes between passes: the second SlideRows sees the original band height as its row width.
+            var floats = Math.Max(SlideScratchFloats(width, window, radius),
+                SlideScratchFloats(rows, window, radius));
+            primitiveScratch = checked(floats * sizeof(float));
         }
 
         var primitivePeak = radius == 1
