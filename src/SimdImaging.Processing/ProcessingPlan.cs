@@ -544,7 +544,11 @@ public sealed class ProcessingPlan
         var width = source.Width;
         var height = source.Height;
         var bandRows = BandRowsFor(width, height);
-        var fusionAllowed = options.AllowFusion && observe is null;
+        // Fusion runs row bands concurrently. Do not fuse a contract that requires a whole-image invocation
+        // or forbids concurrent calls; the stepwise path below honours those requirements explicitly.
+        var fusionAllowed = options.AllowFusion && observe is null &&
+            _steps.All(step => step.Definition.Contract.Requirements.Partition == Partitioning.RowBands &&
+                step.Definition.Contract.Requirements.Threading == ThreadSafety.Concurrent);
 
         // Decided before the shape is built, not per segment: the segments are cut for one execution mode, and a
         // segment of several steps has no step-by-step form — the else branch runs its first step only.
@@ -617,7 +621,8 @@ public sealed class ProcessingPlan
                     pending = destination;
                     var whole = new PixelRect(0, 0, width, height);
 
-                    if (step.Category is OpCategory.Global or OpCategory.Composite)
+                    if (step.Category is OpCategory.Global or OpCategory.Composite ||
+                        step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage)
                     {
                         step.Invoke(current, destination.View, whole, whole);
                     }
@@ -629,8 +634,11 @@ public sealed class ProcessingPlan
                         // (a 256-entry LUT, for one) 24 times per 1080p step. Measured: three point steps cost
                         // 14.5 ms that way against 5.1 ms for the same three operators called directly.
                         // Bands write disjoint rows, so the worker count cannot change a byte.
-                        if (options.MaxDegreeOfParallelism == 1)
+                        if (options.MaxDegreeOfParallelism == 1 ||
+                            step.Definition.Contract.Requirements.Threading == ThreadSafety.SingleThread)
                         {
+                            using var singleThread = step.Definition.Contract.Requirements.Threading ==
+                                ThreadSafety.SingleThread ? RowParallel.EnterTopLevel(1) : default;
                             // One worker is a plain loop: RowParallel would wrap it in a delegate, and that
                             // closure is a per-call allocation for a path that is meant to be allocation-free.
                             var bands = BandCountFor(height, bandRows);
