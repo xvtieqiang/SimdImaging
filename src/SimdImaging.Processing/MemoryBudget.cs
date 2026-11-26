@@ -140,7 +140,9 @@ public static class MemoryEstimator
 
         var bytesPerPixel = format.BytesPerPixel();
         var full = checked((long)width * height * bytesPerPixel);
-        var workers = Workers(height, bandRows, degree);
+        var bandWorkers = Workers(height, bandRows, degree);
+        var resolvedDegree = RowParallel.ResolveDegree(degree);
+        var workers = bandWorkers;
 
         // What the executor rents: one destination buffer per step, or — when fused — the destination plus
         // two band windows per worker. EstimateSegmentBytes already counts the destination in its answer.
@@ -165,6 +167,7 @@ public static class MemoryEstimator
         // A single non-Global step is banded too - the executor does not care how long the plan is, it only
         // looks at the category - so this no longer keys off steps.Count.
         long perWorker = 0;
+        long perWorkerPeak = 0;
         long wholeImage = 0;
         var undeclared = 0;
         foreach (var step in steps)
@@ -197,15 +200,24 @@ public static class MemoryEstimator
             if (workspace.HasPerWorkerEstimate ||
                 (!wholeImageInvocation && workspace.PerCallEstimate is not null))
             {
-                perWorker = Math.Max(perWorker,
-                    workspace.EstimatePerWorker(width, height, rows, format));
+                // Whole-image operators may run their own RowParallel loops. Their concurrency is independent
+                // of ProcessingPlan.BandRows, which only configures the outer row-band executor.
+                var stepWorkers = wholeImageInvocation
+                    ? step.Definition.Contract.Requirements.Threading == ThreadSafety.SingleThread
+                        ? 1
+                        : Math.Min(resolvedDegree, height)
+                    : bandWorkers;
+                var stepScratch = workspace.EstimatePerWorker(width, height, rows, format);
+                perWorker = Math.Max(perWorker, stepScratch);
+                perWorkerPeak = Math.Max(perWorkerPeak, checked(stepScratch * stepWorkers));
+                workers = Math.Max(workers, stepWorkers);
             }
         }
 
         // The caller holds the source; the executor holds `rented`. Everything beyond the destination is
         // scratch, and the operator terms sit on top of both.
         var planScratch = Math.Max(0, rented - full);
-        var peak = checked(full + rented + (perWorker * workers) + wholeImage);
+        var peak = checked(full + rented + perWorkerPeak + wholeImage);
         return new MemoryEstimate(full, full, planScratch, perWorker, workers, peak)
         {
             WholeImageScratchBytes = wholeImage,
