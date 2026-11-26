@@ -134,16 +134,19 @@ public class ProcessingPlanLeakTests
     }
 
     [Fact]
-    public void Execute_SingleThreadContract_NeverRunsTwoBandsConcurrently()
+    public void Execute_SingleThreadContract_RunsOneWholeImageCall()
     {
         using var source = WorkingBuffer.Rent(Width, Height, WorkingFormat.Rgba8);
         var active = 0;
         var maxActive = 0;
+        var calls = 0;
         var contract = OperatorContract.Create("single-thread", OpCategory.Neighborhood,
             WorkingFormatMask.All, IdentityFootprint.Instance, WorkspaceModel.None,
             requirements: ExecutionRequirements.RowBands with { Threading = ThreadSafety.SingleThread });
         var op = new ImageOp(contract, new KernelImplementations((input, output, destination, _) =>
         {
+            Interlocked.Increment(ref calls);
+            destination.ShouldBe(new PixelRect(0, 0, Width, Height));
             var now = Interlocked.Increment(ref active);
             UpdateMaximum(ref maxActive, now);
             Thread.SpinWait(20_000);
@@ -154,6 +157,7 @@ public class ProcessingPlanLeakTests
         using var result = new ProcessingPlan { BandRows = 1 }.Add(op).ExecuteWithOptions(source.View,
             new ExecuteOptions { MaxDegreeOfParallelism = 4 });
 
+        calls.ShouldBe(1);
         maxActive.ShouldBe(1);
         result.View.Span.ToArray().ShouldBe(source.View.Span.ToArray());
     }
