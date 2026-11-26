@@ -296,10 +296,6 @@ public class MemoryEstimateTests : IDisposable
             using var result = OilPaintOps.OilPaint(source.View, radius, levels, pool);
 
             var windowPixels = (long)(2 * radius + 1) * width;
-            var arrays = (windowPixels * (4 * sizeof(float) + sizeof(float) + sizeof(byte)))
-                + ((long)width * 4 * sizeof(float))
-                + (4L * levels * sizeof(int))
-                + ((long)(2 * radius + 1) * sizeof(int));
             declared.ShouldBeGreaterThanOrEqualTo(pool.PeakBytes + FloatScratch.PeakLiveBytes
                 + (windowPixels * sizeof(byte)) + (4L * levels * sizeof(int))
                 + ((long)(2 * radius + 1) * sizeof(int)));
