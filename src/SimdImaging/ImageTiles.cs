@@ -179,6 +179,7 @@ public sealed partial class Image
                      SourceCapabilities.StableContent,
             Sink = SinkCapabilities.RandomRegionWrite,
             TileRequested = true,
+            BandRows = plan.BandRows,
             TileWidth = tileWidth,
             TileHeight = tileHeight,
             Execute = execute,
