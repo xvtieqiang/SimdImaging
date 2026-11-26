@@ -187,7 +187,7 @@ public sealed class ContractConformanceTests
                 using var image = TestImages.Gradient(64, 48, format);
                 if (!expected.SameFormat)
                 {
-                    using var direct = expected.Factory().Direct!(image[0].Pixels.View);
+                    using var direct = expected.Factory().Kernels.WholeImage!(image[0].Pixels.View);
                     direct.Width.ShouldBe(64, $"{expected.Name}/{format}: width");
                     direct.Height.ShouldBe(48, $"{expected.Name}/{format}: height");
                     direct.Format.ShouldBe(WorkingFormat.Rgba32F, $"{expected.Name}/{format}: output format");
@@ -282,7 +282,7 @@ public sealed class ContractConformanceTests
         foreach (var expected in Ops)
         {
             var op = expected.Factory();
-            if (!expected.SameFormat || op.Direct is not { } direct)
+            if (!expected.SameFormat || op.Kernels.WholeImage is not { } direct)
                 continue;
 
             using var image = TestImages.Gradient(40, 32, WorkingFormat.Rgba8);

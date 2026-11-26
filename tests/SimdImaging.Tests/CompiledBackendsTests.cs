@@ -235,7 +235,9 @@ public sealed class CompiledBackendsTests
     public void CompositeSteps_AreRefusedByStreamAndRegion()
     {
         using var overlay = TestImages.Gradient(8, 8, WorkingFormat.Rgba8);
-        var recipe = Recipe(PlanOps.Composite(overlay[0].Pixels.View, 2, 2));
+        var recipe = new PipelineRecipeBuilder()
+            .Append(PlanOps.Composite(2, 2), second: overlay[0].Pixels.View)
+            .Build();
 
         var stream = Compile(recipe, 32, 32, WorkingFormat.Rgba8, stream: true);
         stream.StreamRefusal.ShouldBe(StreamRefusal.CompositeStep);

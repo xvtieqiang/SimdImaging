@@ -205,7 +205,9 @@ public sealed class RegionPlanningTests
     public void AComposite_ReportsBothPorts()
     {
         using var overlay = TestImages.Gradient(8, 6, WorkingFormat.Rgba8);
-        var recipe = Recipe(PlanOps.Composite(overlay[0].Pixels.View, 2, 3));
+        var recipe = new PipelineRecipeBuilder()
+            .Append(PlanOps.Composite(2, 3), second: overlay[0].Pixels.View)
+            .Build();
         var plan = Compile(recipe, new CompileOptions
         {
             SourceWidth = 32,

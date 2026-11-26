@@ -71,13 +71,13 @@ internal sealed class KernelImplementations
     /// <summary>The band kernel every plan step uses.</summary>
     internal OpKernel PlanKernel { get; }
 
-    /// <summary>The whole-image form, used by the single-step fast path. This was <c>ImageOp.Direct</c>.</summary>
+    /// <summary>The whole-image form, used by the single-step fast path.</summary>
     internal Func<PixelView, WorkingBuffer>? WholeImage { get; }
 
     /// <summary>"Write these rows into that destination", when the operator has that form.</summary>
     internal IntoKernel? Into { get; }
 
-    /// <summary>The second-input form, when the operator takes its overlay from the plan rather than a closure.</summary>
+    /// <summary>The second-input form: the overlay comes from the plan's recorded view.</summary>
     internal OpKernel2? SecondKernel { get; }
 
     /// <summary>The whole-image second-input form: a format-changing composite whose output leaves the plan's

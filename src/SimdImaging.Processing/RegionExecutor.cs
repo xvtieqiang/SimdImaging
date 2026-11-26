@@ -122,22 +122,22 @@ internal static class RegionExecutor
         if (refusal != RegionRefusal.None)
             return new RegionResult(refusal, 0, 0) { RefusingStep = refusingStep };
 
-        var haloX = 0;
         var haloY = 0;
         for (var i = 0; i < steps.Count; i++)
-        {
-            haloX += steps[i].HaloX;
             haloY += steps[i].HaloY;
-        }
 
-        var maxWindowCols = Math.Min(width, region.Width + (2 * haloX));
+        // The read window is the contract's footprint mapped backwards through the chain, not a second halo sum.
+        // Every footprint the region backend accepts is a constant halo, so this equals the old arithmetic; the
+        // difference is that the footprint is now the only source of truth and a new footprint cannot be forgotten.
+        var maxWindowCols = Math.Min(width, SourceWindow(steps, region, width, height).Width);
 
         // Bands run one at a time, so the band height has to keep its own row loop parallel — the whole-image band
         // rule gives 64 rows to a 512-wide region, which falls below the parallel threshold and runs every operator
         // serially (measured 3–5× slower than 192- and 256-row bands on the same pixels).
         var bandRows = SequentialBands.For(plan, maxWindowCols, region.Height, source.Format,
             options.MaxDegreeOfParallelism);
-        var maxWindowRows = Math.Min(height, bandRows + (2 * haloY));
+        var probe = new PixelRect(region.X, region.Y, region.Width, Math.Min(bandRows, region.Height));
+        var maxWindowRows = Math.Min(height, SourceWindow(steps, probe, width, height).Height);
         var bytesPerPixel = source.Format.BytesPerPixel();
 
         var estimate = WorkingSetBudget.Measure(steps, options, maxWindowCols, height, maxWindowCols, maxWindowRows,
@@ -174,12 +174,12 @@ internal static class RegionExecutor
             cancellation.ThrowIfCancellationRequested();
             var bandHeight = Math.Min(bandRows, region.Height - bandTop);
 
-            var winX = Math.Max(0, region.X - haloX);
-            var winY = Math.Max(0, (region.Y + bandTop) - haloY);
-            var winRight = Math.Min(width, region.X + region.Width + haloX);
-            var winBottom = Math.Min(height, region.Y + bandTop + bandHeight + haloY);
-            var winWidth = winRight - winX;
-            var winHeight = winBottom - winY;
+            var band = new PixelRect(region.X, region.Y + bandTop, region.Width, bandHeight);
+            var window = SourceWindow(steps, band, width, height);
+            var winX = window.X;
+            var winY = window.Y;
+            var winWidth = window.Width;
+            var winHeight = window.Height;
 
             var sourceView = sourceWindow.View.Slice(new PixelRect(0, 0, winWidth, winHeight));
             source.ReadRegion(new PixelRect(winX, winY, winWidth, winHeight), sourceView);
@@ -204,5 +204,27 @@ internal static class RegionExecutor
         }
 
         return new RegionResult(RegionRefusal.None, bands, Math.Max(1, RowParallel.LastWorkerCount));
+    }
+
+    /// <summary>
+    /// Maps a destination rectangle backwards through every step's declared footprint. The bounding box is enough
+    /// for the region backend: it accepts only identity and constant-halo footprints, whose union is a rectangle.
+    /// </summary>
+    private static PixelRect SourceWindow(IReadOnlyList<PlanStep> steps, PixelRect destination, int width,
+        int height)
+    {
+        var current = destination;
+        for (var i = steps.Count - 1; i >= 0; i--)
+        {
+            var set = steps[i].Definition.Contract.Footprint
+                .MapSourceRegions(current, width, height)
+                .Normalize()
+                .Clamp(width, height);
+            current = set.BoundingBox;
+            if (current.Width == 0 || current.Height == 0)
+                return current;
+        }
+
+        return current;
     }
 }

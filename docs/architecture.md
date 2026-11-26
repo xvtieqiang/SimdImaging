@@ -586,7 +586,7 @@ bandRows  = min(max(byWorkers, byPixels), byBudget, height);
 | 条件 | 走向 | 并行度来自 | 代价 |
 |---|---|---|---|
 | 链为空 | 直接复制 | 拷贝本身 | 一次全图拷贝 |
-| 单步 + 算子有整图形式（`ImageOp.Direct`） | 整图直调 | **算子自己**（`RowParallel.For`） | 无计划、无分带、无核派发 |
+| 单步 + 算子有整图形式（`Kernels.WholeImage`） | 整图直调 | **算子自己**（`RowParallel.For`） | 无计划、无分带、无核派发 |
 | 单步 + 无整图形式 | 计划，逐步 | 带数 | 每带一次核派发 |
 | 多步 + `ForceFusion` | 融合 | 带数 | halo 每带重算 |
 | 多步 + `AllowFusion=false` 或存在 observer | 逐步 | 带数 | 每步一张中间帧 |
@@ -618,7 +618,7 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 
 | 阶段 | 能力 |
 |---|---|
-| v1（M1–M3） | 整图执行。`MapSourceRect` 曾只在已删除的 `IImageOp` 上声明、全仓零实现；2026-11-26 起由 `IInputFootprint.MapSourceRegions` 真正提供（identity / halo / whole-source / block-aligned），编译器据此推导区域；带泵执行器仍只读 `HaloX/HaloY` |
+| v1（M1–M3） | 整图执行。`MapSourceRect` 曾只在已删除的 `IImageOp` 上声明、全仓零实现；2026-11-26 起由 `IInputFootprint.MapSourceRegions` 真正提供（identity / halo / whole-source / block-aligned），编译器据此推导区域；`RegionExecutor` 也按 footprint 反推窗口，带泵执行器仍只读 `HaloX/HaloY` |
 | P1（M4） | 行带流式：只对 `Neighborhood` / `Separable` 打开，halo = 核半径；内存从 O(H) 降到 O(band + halo) |
 | P2 · 已交付一半（M17） | **矩形执行**：任意源矩形 → 窗口 → `RunWindow` → 内圈，见 §6.6。源只有 TIFF 段级实现 |
 | P2 · 未做 | `Geometric`（尺寸变化）与 `Global` 两遍（先统计后处理），仍受 `MaxWorkingBytes` 约束 |
@@ -843,7 +843,9 @@ Resize 取各自最大 ring，不再只算第一个。执行期把几何/格式�
 
 `Image.ProcessRegion` 现在先 `PipelineCompiler.Compile`（`Region = rect`，源能力含 `RandomRegion`），要求
 `Backend = Region`，再交给 `CompiledPlanExecutor.ExecuteRegion`。区域成本上限（`MaxRegionReadAmplification`，内部旋钮）、
-格式/几何/全局步骤的拒绝原因都来自同一份编译结果；`RegionExecutor` 仍是实际的逐矩形执行器。
+格式/几何/全局步骤的拒绝原因都来自同一份编译结果；`RegionExecutor` 仍是实际的逐矩形执行器。它的读取窗口也改为
+`Footprint.MapSourceRegions` 逐 band 反向推导，不再单独累加 `HaloX/HaloY`——对当前允许的 Identity / Halo footprint
+结果与旧公式相同，但 footprint 成为唯一来源。
 
 ### 6.3.12 计划解释（Plan Explanation）
 
@@ -878,9 +880,9 @@ requirements 与工作空间；文件侧的选路由 `ImageTranscode.Explain()` 
   `PixelView`，`Image.Apply`/`ImageTranscode` 的编译路径因此与 `ProcessingPlan` 一致。
 - 契约仍是唯一来源：`InputPort` 声明端口与 footprint，编译器按端口推导区域。注入式算子在 `Add` 时把视图交给
   `PlanStep.SecondaryRegion`，端口区域因此是精确的，不再保守记整图。
-- `ImagePipeline.Composite/Blend/DrawImage/Watermark` 已切到注入式；旧的 `PlanOps.Composite(PixelView, …)` /
-  `Blend(PixelView, …)` / `DrawImage(PixelView, …)` 闭包重载保留，二者逐字节等价（`CompositeStepTests` 在 Rgba8 /
-  Rgba16 / Rgba32F 三种格式上对照）。
+- `ImagePipeline.Composite/Blend/DrawImage/Watermark` 全部走注入式；旧的 `PlanOps.Composite(PixelView, …)` /
+  `Blend(PixelView, …)` / `DrawImage(PixelView, …)` / `GuidedFilter(guide, …)` / `ApplyGainMap(gainMap, …)` 闭包重载
+  已删除（2026-11-26，不保留兼容层）。所有内置第二输入只有一条路径：`Add(op, view)` 记录，执行器注入。
 - 所有权仍是调用方的：视图必须活到 `ToImage` 或计划执行结束，库不做所有权转移，也没有自动的存活校验。
 - `GuidedFilter(guide)` 与 `ApplyGainMap`（格式边界，整图内核）也已切到注入式；所有内置第二输入都记录在步骤上。
   Stream / Region / Tile 继续以 `CompositeStep` / `FormatChange` 拒绝。

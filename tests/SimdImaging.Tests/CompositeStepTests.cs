@@ -11,7 +11,7 @@ namespace SimdImaging.Tests;
 
 /// <summary>
 /// Composition and blending are the first steps with two inputs. On Frame they run as plan steps with the overlay
-/// captured by the kernel; Stream and Region have no second input and refuse them. These tests pin the bytes against
+/// injected by the plan; Stream and Region have no second input and refuse them. These tests pin the bytes against
 /// the direct calls and the two-input declaration.
 /// </summary>
 public sealed class CompositeStepTests
@@ -32,7 +32,7 @@ public sealed class CompositeStepTests
 
         using var expected = AlphaOps.Composite(background[0].Pixels.View, overlay[0].Pixels.View, 10, 8);
         using var actual = new ProcessingPlan()
-            .Add(PlanOps.Composite(overlay[0].Pixels.View, 10, 8))
+            .Add(PlanOps.Composite(10, 8), overlay[0].Pixels.View)
             .Execute(background[0].Pixels.View);
 
         Rows(actual.View).ShouldBe(Rows(expected.View));
@@ -48,7 +48,7 @@ public sealed class CompositeStepTests
         using var expected = Blend.Apply(background[0].Pixels.View, overlay[0].Pixels.View, 10, 8,
             BlendMode.Multiply);
         using var actual = new ProcessingPlan()
-            .Add(PlanOps.Blend(overlay[0].Pixels.View, 10, 8, BlendMode.Multiply))
+            .Add(PlanOps.Blend(10, 8, BlendMode.Multiply), overlay[0].Pixels.View)
             .Execute(background[0].Pixels.View);
 
         Rows(actual.View).ShouldBe(Rows(expected.View));
@@ -56,22 +56,7 @@ public sealed class CompositeStepTests
 
     [Theory]
     [MemberData(nameof(Formats))]
-    public void InjectedComposite_MatchesTheClosurePlanAndTheDirectCall(WorkingFormat format)
-    {
-        using var background = TestImages.Gradient(64, 48, format);
-        using var overlay = TestImages.Gradient(20, 16, format);
-
-        using var expected = AlphaOps.Composite(background[0].Pixels.View, overlay[0].Pixels.View, 10, 8);
-        var plan = new ProcessingPlan().Add(PlanOps.Composite(10, 8), overlay[0].Pixels.View);
-        plan.Steps[0].Secondary.ShouldNotBeNull();
-
-        using var actual = plan.Execute(background[0].Pixels.View);
-        Rows(actual.View).ShouldBe(Rows(expected.View));
-    }
-
-    [Theory]
-    [MemberData(nameof(Formats))]
-    public void InjectedBlend_AndDrawImage_MatchTheirClosureForms(WorkingFormat format)
+    public void InjectedBlendAndDrawImage_MatchTheDirectCalls(WorkingFormat format)
     {
         using var background = TestImages.Gradient(64, 48, format);
         using var overlay = TestImages.Gradient(20, 16, format);
@@ -84,9 +69,10 @@ public sealed class CompositeStepTests
         Rows(blendActual.View).ShouldBe(Rows(blendExpected.View));
 
         var placement = new PixelRect(7, 5, 20, 16);
-        using var drawExpected = new ProcessingPlan()
-            .Add(PlanOps.DrawImage(overlay[0].Pixels.View, placement, 0.5f))
-            .Execute(background[0].Pixels.View);
+        using var scaled = Canvas.Resize(overlay[0].Pixels.View, placement.Width, placement.Height,
+            Resampler.Bilinear, ResizeMode.Stretch, Anchor.Centre, default);
+        using var faded = PointOps.Opacity(scaled.View, 0.5f);
+        using var drawExpected = AlphaOps.Composite(background[0].Pixels.View, faded.View, placement.X, placement.Y);
         using var drawActual = new ProcessingPlan()
             .Add(PlanOps.DrawImage(placement, 0.5f), overlay[0].Pixels.View)
             .Execute(background[0].Pixels.View);
@@ -94,14 +80,12 @@ public sealed class CompositeStepTests
     }
 
     [Fact]
-    public void InjectedGuidedFilter_MatchesTheClosureForm()
+    public void InjectedGuidedFilter_MatchesTheDirectCall()
     {
         using var source = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
         using var guide = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
 
-        using var expected = new ProcessingPlan()
-            .Add(PlanOps.GuidedFilter(guide[0].Pixels.View, 4, 1e-4f, 32))
-            .Execute(source[0].Pixels.View);
+        using var expected = GuidedFilterOps.GuidedFilter(source[0].Pixels.View, guide[0].Pixels.View, 4, 1e-4f, 32);
         using var actual = new ProcessingPlan()
             .Add(PlanOps.GuidedBy(4, 1e-4f, 32), guide[0].Pixels.View)
             .Execute(source[0].Pixels.View);
@@ -195,14 +179,13 @@ public sealed class CompositeStepTests
     [Fact]
     public void CompositeDeclaresTwoInputPorts_AndAWholeImagePartition()
     {
-        using var overlay = TestImages.Gradient(8, 6, WorkingFormat.Rgba8);
-        var contract = PlanOps.Composite(overlay[0].Pixels.View, 0, 0).Contract;
+        var contract = PlanOps.Composite(0, 0).Contract;
 
         contract.Category.ShouldBe(OpCategory.Composite);
         contract.Inputs.Count.ShouldBe(2);
         contract.Inputs[0].Role.ShouldBe(PortRole.Source);
         contract.Inputs[1].Role.ShouldBe(PortRole.Overlay);
-        contract.Inputs[1].Formats.ShouldBe(WorkingFormatMask.Rgba8);
+        contract.Inputs[1].Formats.ShouldBe(WorkingFormatMask.All);
         contract.Requirements.Partition.ShouldBe(Partitioning.WholeImage);
         contract.Workspace.IsDeclared.ShouldBeTrue();
     }
@@ -225,7 +208,7 @@ public sealed class CompositeStepTests
 
         var recipe = new PipelineRecipeBuilder()
             .Append(PlanOps.Invert())
-            .Append(PlanOps.Composite(overlay[0].Pixels.View, 4, 4))
+            .Append(PlanOps.Composite(4, 4), second: overlay[0].Pixels.View)
             .Build();
         var plan = PipelineCompiler.Compile(recipe, new CompileOptions
         {
@@ -267,7 +250,8 @@ public sealed class CompositeStepTests
         using var faded = PointOps.Opacity(scaled.View, 0.6f);
         using var expected = AlphaOps.Composite(background[0].Pixels.View, faded.View, rect.X, rect.Y);
 
-        using var planned = new ProcessingPlan().Add(PlanOps.DrawImage(overlay[0].Pixels.View, rect, 0.6f))
+        using var planned = new ProcessingPlan()
+            .Add(PlanOps.DrawImage(rect, 0.6f), overlay[0].Pixels.View)
             .Execute(background[0].Pixels.View);
         using var piped = background.Pipe().DrawImage(overlay, rect, 0.6f).ToImage();
 

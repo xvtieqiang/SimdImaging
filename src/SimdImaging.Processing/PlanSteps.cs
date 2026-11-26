@@ -200,54 +200,7 @@ internal static class PlanSteps
         };
     }
 
-    /// <summary>
-    /// Adapts "draw another image into a rectangle": the overlay is resized to the destination rect, optionally
-    /// faded, and composited in place. Composite steps are whole-image, so one seed copy is the right cost.
-    /// </summary>
-    public static OpKernel DrawImage(PixelView image, PixelRect destination, float opacity)
-    {
-        return (source, target, _, _) =>
-        {
-            CopyRows(source, 0, target, 0, source.Height);
-            using var scaled = Canvas.Resize(image, destination.Width, destination.Height, Resampler.Bilinear,
-                ResizeMode.Stretch, Anchor.Centre, default);
-            if (opacity >= 1f)
-            {
-                AlphaOps.CompositeInto(target, scaled.View, destination.X, destination.Y, PorterDuff.SourceOver,
-                    target);
-                return;
-            }
-
-            using var faded = PointOps.Opacity(scaled.View, opacity);
-            AlphaOps.CompositeInto(target, faded.View, destination.X, destination.Y, PorterDuff.SourceOver, target);
-        };
-    }
-
-    /// <summary>
-    /// Adapts a Porter-Duff composition. The executor's destination starts uninitialised, and composition reads
-    /// the background, so the source is copied into it first and the overlay rectangle is blended in place.
-    /// Composite steps are whole-image (never banded), which is why one full copy is the correct cost here.
-    /// </summary>
-    public static OpKernel Composite(PixelView overlay, int x, int y, PorterDuff mode)
-    {
-        return (source, destination, _, _) =>
-        {
-            CopyRows(source, 0, destination, 0, source.Height);
-            AlphaOps.CompositeInto(destination, overlay, x, y, mode, destination);
-        };
-    }
-
-    /// <summary>The same adapter for a W3C blend mode.</summary>
-    public static OpKernel BlendOverlay(PixelView overlay, int x, int y, BlendMode mode)
-    {
-        return (source, destination, _, _) =>
-        {
-            CopyRows(source, 0, destination, 0, source.Height);
-            Blend.ApplyInto(destination, overlay, x, y, mode, destination);
-        };
-    }
-
-    /// <summary>The injected form of <see cref="Composite"/>: the overlay arrives as the kernel's second input.</summary>
+    /// <summary>The injected form of the composite step: the overlay arrives as the kernel's second input.</summary>
     public static OpKernel2 CompositeInto(int x, int y, PorterDuff mode) =>
         (source, second, destination, _, _) =>
         {
@@ -255,7 +208,7 @@ internal static class PlanSteps
             AlphaOps.CompositeInto(destination, second, x, y, mode, destination);
         };
 
-    /// <summary>The injected form of <see cref="BlendOverlay"/>.</summary>
+    /// <summary>The injected form of the blend step.</summary>
     public static OpKernel2 BlendInto(int x, int y, BlendMode mode) =>
         (source, second, destination, _, _) =>
         {
@@ -263,7 +216,7 @@ internal static class PlanSteps
             Blend.ApplyInto(destination, second, x, y, mode, destination);
         };
 
-    /// <summary>The injected form of <see cref="DrawImage"/>.</summary>
+    /// <summary>The injected form of the draw-image step.</summary>
     public static OpKernel2 DrawImageInto(PixelRect placement, float opacity) =>
         (source, second, destination, _, _) =>
         {

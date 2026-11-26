@@ -18,8 +18,6 @@ internal enum InputFootprintKind : byte
     /// <summary>The output rectangle widened to the block grid that contains it.</summary>
     BlockAligned = 3,
 
-    /// <summary>A fixed source rectangle independent of the output region (a composite overlay, a guide).</summary>
-    Fixed = 4,
 }
 
 /// <summary>
@@ -59,24 +57,6 @@ internal interface IInputFootprint
     /// </summary>
     SourceRegionSet MapSourceRegions(PixelRect destination, int sourceWidth, int sourceHeight) =>
         SourceRegionSet.Of(MapSourceRect(destination, sourceWidth, sourceHeight));
-}
-
-/// <summary>A fixed source rectangle: a composite overlay or a guide image at its own coordinates.</summary>
-internal sealed class FixedFootprint(PixelRect region) : IInputFootprint
-{
-    public InputFootprintKind Kind => InputFootprintKind.Fixed;
-
-    public int HaloX => 0;
-
-    public int HaloY => 0;
-
-    public bool CoversWholeImage => false;
-
-    public bool IsBlockAligned => false;
-
-    public string Describe => $"fixed {region.X},{region.Y} {region.Width}x{region.Height}";
-
-    public PixelRect MapSourceRect(PixelRect destination, int sourceWidth, int sourceHeight) => region;
 }
 
 /// <summary>One input pixel per output pixel.</summary>

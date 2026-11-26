@@ -50,8 +50,8 @@ public sealed class ImageOp
 
     internal KernelImplementations Kernels { get; }
 
-    /// <summary>How an injected second view's port rectangle is derived from that view; null for a closure-captured
-    /// second input, whose footprint is already exact. Used only by the region derivation and the explanation.</summary>
+    /// <summary>How an injected second view's port rectangle is derived from that view. Used only by the region
+    /// derivation and the explanation; null when the operator has no injected second input.</summary>
     internal Func<PixelView, PixelRect>? InjectedRect { get; }
 
     /// <summary>Diagnostic name, used in plan reports.</summary>
@@ -85,8 +85,6 @@ public sealed class ImageOp
     /// `image.Pipe().Invert().ToImage()` when both were still on the surface. This delegate is what lets the one
     /// path left behave like the direct call it replaced.
     /// </remarks>
-    internal Func<PixelView, WorkingBuffer>? Direct => Kernels.WholeImage;
-
     /// <summary>
     /// The operator's own working set for a view of <c>width × rows</c>, or <c>null</c> when it has not declared
     /// one.

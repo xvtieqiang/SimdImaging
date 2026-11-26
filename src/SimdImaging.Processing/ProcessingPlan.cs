@@ -72,12 +72,12 @@ public readonly record struct PlanStep
     /// </summary>
     internal PixelView? Secondary { get; init; }
 
-    /// <summary>The second-input kernel, when the operator was built for injection; null for a closure-captured
-    /// composite, which stays supported for callers that used the older <c>PlanOps</c> overload.</summary>
+    /// <summary>The second-input kernel, when the operator was built for injection; null for an operator that
+    /// declares no second input.</summary>
     internal OpKernel2? SecondKernel => Definition.Kernels.SecondKernel;
 
     /// <summary>The exact rectangle the injected second input occupies in its declared coordinates, or null when the
-    /// operator's contract already carries it (closure-captured composites).</summary>
+    /// operator declares no injected rectangle.</summary>
     internal PixelRect? SecondaryRegion => Secondary is { } view && Definition.InjectedRect is { } rect
         ? rect(view)
         : null;
@@ -334,8 +334,7 @@ public sealed class ProcessingPlan
     }
 
     /// <summary>
-    /// Appends an operator whose second input is supplied here and recorded on the step. This is the injected
-    /// counterpart of the closure-captured <c>PlanOps.Composite(overlay, …)</c> overload: the executor reads the
+    /// Appends an operator whose second input is supplied here and recorded on the step: the executor reads the
     /// view from the plan, the compiler derives the port's regions from the same contract, and the caller keeps
     /// ownership — the view must stay valid until the plan finishes.
     /// </summary>
