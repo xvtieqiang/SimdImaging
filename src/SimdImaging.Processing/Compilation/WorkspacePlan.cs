@@ -25,6 +25,8 @@ internal enum WorkspaceTermKind : byte
     ResizeWorkerTapScratch = 13,
     FormatScratch = 14,
     OperatorScratchPeak = 15,
+    CopyBuffer = 16,
+    GeometryRowScratch = 17,
 }
 
 internal readonly record struct WorkspaceTerm(WorkspaceTermKind Kind, long Bytes, string Note);
@@ -83,7 +85,8 @@ internal static class WorkspacePlanner
 
         return backend switch
         {
-            ExecutionBackend.Stream => EstimateStream(recipe, steps, states, options, terms, unmanaged),
+            ExecutionBackend.Stream => EstimateStream(recipe, steps, states, options, outputWidth, outputHeight,
+                terms, unmanaged),
             ExecutionBackend.Tile => EstimateTile(steps, options, terms, unmanaged),
             ExecutionBackend.Region => EstimateRegion(steps, options, terms, unmanaged),
             _ => EstimateFrame(recipe, steps, states, options, outputWidth, outputHeight, terms, unmanaged),
@@ -392,8 +395,8 @@ internal static class WorkspacePlanner
     }
 
     private static WorkspacePlan EstimateStream(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
-        IReadOnlyList<SectionState> states, CompileOptions options, List<WorkspaceTerm> terms,
-        List<UnmanagedTerm> unmanaged)
+        IReadOnlyList<SectionState> states, CompileOptions options, int outputWidth, int outputHeight,
+        List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
     {
         var bandRowsOption = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
 
@@ -455,16 +458,15 @@ internal static class WorkspacePlanner
             operatorScratchPeak = checked(operatorScratchPeak + sectionScratchPeak);
         }
 
-        if (windowBytes == 0)
-        {
-            // A plan with no operator section still copies rows through one window pair.
-            var bandRows = bandRowsOption;
-            var windowRows = Math.Min(options.SourceHeight, bandRows);
-            windowBytes = 2L * options.SourceWidth * windowRows * options.SourceFormat.BytesPerPixel();
-            windowNote = $"2 windows of {options.SourceWidth}x{windowRows}";
-        }
+        // The row-copy driver has its own transfer buffer, separate from every row-source stage.
+        // It remains live while the entire pull chain (operator and geometry wrappers) is resident.
+        var copyRows = Math.Min(Pipeline.TransferRows, outputHeight);
+        var copyBytes = checked((long)outputWidth * copyRows * options.SourceFormat.BytesPerPixel());
+        terms.Add(new WorkspaceTerm(WorkspaceTermKind.CopyBuffer, copyBytes,
+            $"{outputWidth}x{copyRows} pipeline transfer buffer"));
 
-        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes, windowNote));
+        if (windowBytes > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes, windowNote));
 
         if (operatorScratchPeak > 0)
         {
@@ -473,6 +475,7 @@ internal static class WorkspacePlanner
         }
 
         AddResizeTerms(recipe, options, terms);
+        AddGeometryRowScratch(recipe, options, terms);
 
         foreach (var step in recipe.Steps)
         {
@@ -488,6 +491,47 @@ internal static class WorkspacePlanner
         return new WorkspacePlan(terms, unmanaged, undeclared);
     }
 
+
+
+    /// <summary>
+    /// Row wrappers are constructed up front and remain alive with the pull chain. Count their private buffers
+    /// alongside plan windows and resize stages; the wrapper classes use the same geometry arithmetic below.
+    /// </summary>
+    private static void AddGeometryRowScratch(PipelineRecipe recipe, CompileOptions options,
+        List<WorkspaceTerm> terms)
+    {
+        var width = options.SourceWidth;
+        var height = options.SourceHeight;
+        var bytesPerPixel = options.SourceFormat.BytesPerPixel();
+        long bytes = 0;
+
+        foreach (var step in recipe.Steps)
+        {
+            if (step is not GeometryStep geometry)
+                continue;
+
+            var (nextWidth, nextHeight) = geometry.Geometry.Map(width, height);
+            if (geometry.Wrap is not null)
+            {
+                var rowBytes = checked((long)width * bytesPerPixel);
+                var stepBytes = geometry.Kind switch
+                {
+                    GeometryKind.Crop => checked(rowBytes * Math.Min(256L, (long)nextHeight + 1)),
+                    GeometryKind.Pad or GeometryKind.FlipHorizontal => rowBytes,
+                    GeometryKind.Resize => 0L, // Counted by ResizeWorkspace in AddResizeTerms.
+                    _ => 0L,
+                };
+                bytes = checked(bytes + stepBytes);
+            }
+
+            width = nextWidth;
+            height = nextHeight;
+        }
+
+        if (bytes > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.GeometryRowScratch, bytes,
+                "resident crop bands and pad/flip source rows across geometry stages"));
+    }
 
     private static long EstimateStepScratchPeak(PlanStep step, int width, int height, int rows,
         WorkingFormat format, int workers)
