@@ -39,13 +39,22 @@ public sealed class WorkspaceManager
         if (bytes == 0)
             return new Lease(this, 0);
 
-        var outstanding = Interlocked.Add(ref _outstanding, bytes);
-        if (_limit > 0 && outstanding > _limit)
+        long outstanding;
+        while (true)
         {
-            Interlocked.Add(ref _outstanding, -bytes);
-            throw new InvalidOperationException(
-                $"Reserving {bytes} bytes for '{name}' would hold {outstanding} bytes, above the workspace limit " +
-                $"of {_limit} bytes.");
+            var current = Interlocked.Read(ref _outstanding);
+            if (bytes > long.MaxValue - current)
+                throw new InvalidOperationException(
+                    $"Reserving {bytes} bytes for '{name}' would overflow the workspace reservation total.");
+
+            outstanding = current + bytes;
+            if (_limit > 0 && outstanding > _limit)
+                throw new InvalidOperationException(
+                    $"Reserving {bytes} bytes for '{name}' would hold {outstanding} bytes, above the workspace limit " +
+                    $"of {_limit} bytes.");
+
+            if (Interlocked.CompareExchange(ref _outstanding, outstanding, current) == current)
+                break;
         }
 
         var peak = Interlocked.Read(ref _peak);
