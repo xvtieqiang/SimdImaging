@@ -144,20 +144,34 @@ public static class MemoryEstimator
         var resolvedDegree = RowParallel.ResolveDegree(degree);
         var workers = 1;
 
-        // What the executor rents: one destination buffer per step, or — when fused — the destination plus
-        // two band windows per worker. EstimateSegmentBytes already counts the destination in its answer.
+        // The previous segment's full-frame result remains alive while the next segment writes its output.
+        // A fused segment estimate already includes its output and two windows per worker; a single-step
+        // segment owns one full-frame destination. Add the preceding segment result for every segment after
+        // the first, and take the largest simultaneous set rather than summing sequential stages.
         var rented = full;
-        if (allowFusion && steps.Count > 1)
+        if (steps.Count > 1)
         {
-            var segments = FusionPlanner.Segment(steps);
-            foreach (var (first, count) in segments)
+            if (!allowFusion)
             {
-                if (count <= 1)
-                    continue;
+                // Stepwise execution keeps the prior full-frame result alive while the next destination is filled.
+                rented = checked(2L * full);
+            }
+            else
+            {
+                var segments = FusionPlanner.Segment(steps);
+                for (var index = 0; index < segments.Count; index++)
+                {
+                    var (first, count) = segments[index];
+                    var segment = count > 1
+                        ? FusedExecutor.EstimateSegmentBytes(width, height, format, steps, first, count,
+                            bandRows, degree)
+                        : full;
 
-                var segment = FusedExecutor.EstimateSegmentBytes(width, height, format, steps, first, count,
-                    bandRows, degree);
-                rented = Math.Max(rented, segment);
+                    if (index > 0)
+                        segment = checked(segment + full);
+
+                    rented = Math.Max(rented, segment);
+                }
             }
         }
 
