@@ -532,7 +532,14 @@ public sealed class ProcessingPlan
 
         report = null;
         if (_steps.Count == 0)
+        {
+            var bytes = (long)source.Width * source.Height * source.Format.BytesPerPixel();
+            if (options.MaxWorkingBytes > 0 && bytes > options.MaxWorkingBytes)
+                throw new InvalidOperationException(
+                    $"Copying an empty plan needs {bytes} bytes, above ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
+            using var copyLease = options.Workspace?.Reserve(bytes, "empty plan destination");
             return Geometry.Transforms.Copy(source, pool);
+        }
 
         var width = source.Width;
         var height = source.Height;
