@@ -321,8 +321,14 @@ public sealed partial class Image
             if (_disposed)
                 return;
             _disposed = true;
-            _lease?.Dispose();
-            _band.Dispose();
+            try
+            {
+                _band.Dispose();
+            }
+            finally
+            {
+                _lease?.Dispose();
+            }
         }
     }
 }
