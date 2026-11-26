@@ -232,6 +232,51 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
+    public void LocalLaplacianWorkspace_CoversPyramidsAssignmentsCollapseAndOutput()
+    {
+        const int width = 64;
+        const int height = 48;
+        const int levels = 3;
+        const int samples = 32;
+        const long basePixels = (long)width * height;
+        long allLevelPixels = 0;
+        long laplacianPixels = 0;
+        long sampleScratchPixels = 0;
+        long collapseScratchPixels = 0;
+        long collapseOutputPixels = 0;
+        var widths = new[] { 64, 32, 16, 8 };
+        var heights = new[] { 48, 24, 12, 6 };
+
+        for (var level = 0; level <= levels; level++)
+        {
+            var pixels = (long)widths[level] * heights[level];
+            allLevelPixels += pixels;
+            if (level < levels)
+                laplacianPixels += pixels;
+            if (level < levels)
+                sampleScratchPixels = Math.Max(sampleScratchPixels,
+                    Math.Max((long)widths[level] * heights[level + 1], (long)widths[level + 1] * heights[level]));
+            if (level < levels - 1)
+            {
+                collapseScratchPixels = Math.Max(collapseScratchPixels, (long)widths[level] * heights[level + 1]);
+                collapseOutputPixels = Math.Max(collapseOutputPixels, pixels);
+            }
+        }
+
+        var floatPixels = (3L * allLevelPixels) + (3L * laplacianPixels) + (6L * basePixels)
+            + (3L * widths[1] * heights[1]) + sampleScratchPixels + collapseScratchPixels
+            + collapseOutputPixels + (8L * width);
+        var expected = (floatPixels * sizeof(float))
+            + (basePixels * WorkingFormat.Rgba16.BytesPerPixel())
+            + ((long)samples * 65536 * sizeof(float))
+            + (3L * allLevelPixels)
+            + (3L * (levels + 1) * sizeof(int));
+
+        LocalLaplacianOps.ScratchBytes(width, height, WorkingFormat.Rgba16, levels, samples)
+            .ShouldBe(expected);
+    }
+
+    [Fact]
     public void PointAdapterWorkspace_IncludesItsMaterialisedBandResult()
     {
         const int width = 80;
