@@ -4,6 +4,7 @@ using SimdImaging.Processing.Compilation;
 using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Fusion;
 using SimdImaging.Processing.Geometry;
+using SimdImaging.Processing.Internal;
 using Shouldly;
 using Xunit;
 
@@ -251,6 +252,11 @@ public sealed class WorkspacePlanTests
         regionPlan.Backend.ShouldBe(ExecutionBackend.Region);
         regionPlan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.OperatorScratchPeak)
             .Bytes.ShouldBe(2048);
+        var runtimeRegionBytes = WorkingSetBudget.Measure(regionPlan.Steps,
+            new ExecuteOptions { MaxDegreeOfParallelism = 1 }, 64, 40, 32, 20,
+            WorkingFormat.Rgba8, windows: 4, out var undeclared);
+        runtimeRegionBytes.ShouldBe((long)4 * 32 * 20 * WorkingFormat.Rgba8.BytesPerPixel() + 2048);
+        undeclared.ShouldBe(0);
 
         var tilePlan = PipelineCompiler.Compile(recipe, regionOptions with
         {
