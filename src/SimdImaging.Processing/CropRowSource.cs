@@ -132,8 +132,14 @@ internal sealed class CropRowSource : IRowSource, IDisposable
         if (_disposed)
             return;
         _disposed = true;
-        _band.Dispose();
-        _workspaceLease?.Dispose();
-        _workspaceLease = null;
+        try
+        {
+            _band.Dispose();
+        }
+        finally
+        {
+            _workspaceLease?.Dispose();
+            _workspaceLease = null;
+        }
     }
 }
