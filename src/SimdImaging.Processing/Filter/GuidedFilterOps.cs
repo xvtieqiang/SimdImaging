@@ -372,6 +372,24 @@ public static class GuidedFilterOps
         return destination;
     }
 
+    /// <summary>Active temporary arrays used by the self-guided operator on one supplied window.
+    /// The returned image window is counted by the Neighborhood adapter.</summary>
+    internal static long GuidedFilterPlanScratchBytes(int width, int windowRows, int radius, int bandRows = 128)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(windowRows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
+
+        var context = checked(radius * 4);
+        var capacityRows = Math.Min(windowRows, checked(bandRows + context));
+        var planes = checked(5L * width * capacityRows * sizeof(float));
+        var columnSums = checked((long)width * sizeof(float));
+        var prefix = checked(((long)width + 1) * sizeof(float));
+        var row = checked((long)width * 4 * sizeof(float));
+        return checked(planes + columnSums + prefix + row);
+    }
+
     /// <summary>
     /// Workspace of the plan's cross-guided adapter. The adapter invokes this as one whole-image call but keeps
     /// one band-sized set of 12 float planes, a ring and its row/prefix buffers alive. It uses one worker because
