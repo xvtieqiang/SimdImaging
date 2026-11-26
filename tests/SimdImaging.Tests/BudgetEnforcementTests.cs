@@ -115,6 +115,19 @@ public sealed class BudgetEnforcementTests
     }
 
     [Fact]
+    public void BufferReturningTileBudget_IncludesFullFrameResult()
+    {
+        using var image = TestImages.Gradient(16, 16, WorkingFormat.Rgba8);
+        var source = new ViewRegionSource(image[0].Pixels.View);
+        var plan = new ProcessingPlan().Add(PlanOps.Invert());
+
+        // The returned 16x16 frame (1024 bytes) coexists with the 16x16 tile and its two windows (3072 bytes).
+        Should.Throw<InvalidOperationException>(() =>
+            Image.ProcessTiles(source, plan, 16, 16,
+                new ExecuteOptions { MaxWorkingBytes = 4000, MaxDegreeOfParallelism = 1 }));
+    }
+
+    [Fact]
     public void TileBudget_UsesTileFootprintInsteadOfWholeFrame()
     {
         using var image = TestImages.Gradient(512, 512, WorkingFormat.Rgba8);
