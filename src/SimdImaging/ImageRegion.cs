@@ -222,14 +222,18 @@ public sealed partial class Image
 
         var execute = options.Execute ?? new ExecuteOptions();
         var targetBytes = TargetBuffer.Bytes(region.Width, region.Height, source.Format);
-        var regionOptions = execute.MaxWorkingBytes > 0
-            ? execute with { MaxWorkingBytes = execute.MaxWorkingBytes - targetBytes }
-            : execute;
+        var regionOptions = execute with
+        {
+            MaxWorkingBytes = execute.MaxWorkingBytes > 0
+                ? execute.MaxWorkingBytes - targetBytes
+                : 0,
+            // The facade reserves the complete compiled peak before renting the target. RegionExecutor must not
+            // reserve its window subset a second time; the shared lease already covers target + windows + scratch.
+            Workspace = null,
+        };
         var layout = source.Layout;
-        // The compile-time region estimate includes this target and the windows. Keep the target reservation alive
-        // while RegionExecutor reserves only its own windows, and pass it the remaining part of the same ceiling.
-        using var targetLease = TargetBuffer.Reserve(execute, region.Width, region.Height, source.Format,
-            "region destination");
+        using var regionLease = execute.Workspace?.Reserve(compiled.Workspace.BoundedBytes,
+            "complete region working set");
         var buffer = WorkingBuffer.Rent(region.Width, region.Height, source.Format, options.Region?.Pool);
         try
         {
