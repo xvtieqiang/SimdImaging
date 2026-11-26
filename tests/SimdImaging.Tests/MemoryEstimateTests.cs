@@ -480,6 +480,24 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
+    public void Estimate_GlobalBoundaryCountsPreviousOwnedFrameDuringNextStep()
+    {
+        const int width = 256;
+        const int height = 256;
+        var plan = new ProcessingPlan { BandRows = height }
+            .Add(PlanOps.Invert())
+            .Add(PlanOps.Clahe(tilesX: 4, tilesY: 8));
+        var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
+            bandRows: height, allowFusion: true, degree: 2);
+        var fullBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
+        var operatorScratch = PlanOps.Clahe(tilesX: 4, tilesY: 8).Contract.Workspace;
+        var perWorker = operatorScratch.EstimatePerWorker(width, height, height, WorkingFormat.Rgba8);
+        var wholeImage = operatorScratch.EstimateWholeImage(width, height, WorkingFormat.Rgba8);
+
+        estimate.PlanScratchBytes.ShouldBe(fullBytes);
+        estimate.PeakBytes.ShouldBe((3 * fullBytes) + (perWorker * 2) + wholeImage);
+    }
+    [Fact]
     public void Estimate_WithoutDeclarationsSaysSoInsteadOfGuessing()
     {
         var plan = ThreeSteps();
@@ -517,26 +535,27 @@ public class MemoryEstimateTests : IDisposable
     [Fact]
     public void Estimate_LocksTheFusedArithmeticForATwoPointPlan()
     {
-        // Fusion is a speed trade, not a saving: two band windows per worker of a 64-row band cost more
-        // than the single full intermediate the step-by-step path holds. The model has to say so, or a
-        // working-set ceiling would let exactly the plans that need headroom through.
+        // Stepwise execution keeps the prior full-frame result alive while the next destination is being written.
+        // Fusion instead keeps two bounded windows per worker. Both simultaneous lifetimes must be represented.
         var plan = new ProcessingPlan { BandRows = 64 }
             .Add("a", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v)))
             .Add("b", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 1.2f)));
 
-        var fused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps, bandRows: 64, allowFusion: true, degree: 4);
-        var unfused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps, bandRows: 64, allowFusion: false, degree: 4);
+        var fused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps,
+            bandRows: 64, allowFusion: true, degree: 4);
+        var unfused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps,
+            bandRows: 64, allowFusion: false, degree: 4);
 
-        const long full = 1920L * 1080 * 4;          // 8_294_400
-        const long window = 1920L * 64 * 4;          // 491_520, one band
+        const long full = 1920L * 1080 * 4;
+        const long window = 1920L * 64 * 4;
         const long workers = 4;
 
-        unfused.PlanScratchBytes.ShouldBe(0);
-        unfused.PeakBytes.ShouldBe(2 * full);
+        unfused.PlanScratchBytes.ShouldBe(full);
+        unfused.PeakBytes.ShouldBe(3 * full);
 
         fused.PlanScratchBytes.ShouldBe(2 * workers * window);
-        fused.PeakBytes.ShouldBe(full + full + 2 * workers * window);
-        fused.PeakBytes.ShouldBeGreaterThan(unfused.PeakBytes);
+        fused.PeakBytes.ShouldBe((2 * full) + (2 * workers * window));
+        fused.PeakBytes.ShouldBeLessThan(unfused.PeakBytes);
     }
 
     [Theory]
