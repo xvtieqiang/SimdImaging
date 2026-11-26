@@ -73,8 +73,6 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
 
         _weightsX = WeightTable.Build(_sourceWidth, width, resampler);
         _weightsY = WeightTable.Build(_sourceHeight, height, resampler);
-        _sourceRow = new byte[_srcRowBytes];
-
         _tapX = 0;
         _tapY = 0;
         _nearest = resampler == Resampler.Nearest && _format == WorkingFormat.Rgba8
@@ -90,19 +88,35 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
         // release, because a throwing constructor has no Dispose.
         ResidentBytes = workspace.TotalBytes;
         _workspaceLease = options.Workspace?.Reserve(ResidentBytes, "resize ring");
+        float[]? ring = null;
+        byte[]? staging = null;
+        WorkingBuffer? ready = null;
         try
         {
+            // Keep partial construction local: a failed later rent must return every earlier allocation because a
+            // throwing constructor cannot be disposed by its caller.
+            var sourceRow = new byte[_srcRowBytes];
             if (!workspace.IsNearest)
             {
-                _ring = FloatScratch.Rent(checked(_ringRows * _destStride));
-                _staging = ArrayPool<byte>.Shared.Rent(checked(_chunkRows * _srcRowBytes));
+                ring = FloatScratch.Rent(checked(_ringRows * _destStride));
+                staging = ArrayPool<byte>.Shared.Rent(checked(_chunkRows * _srcRowBytes));
             }
 
-            _ready = WorkingBuffer.Rent(width, workspace.ReadyRows, _format);
+            ready = WorkingBuffer.Rent(width, workspace.ReadyRows, _format);
+            _sourceRow = sourceRow;
+            _ring = ring;
+            _staging = staging;
+            _ready = ready ?? throw new InvalidOperationException("The resize output batch was not allocated.");
         }
         catch
         {
+            ready?.Dispose();
+            if (ring is not null)
+                FloatScratch.Return(ring);
+            if (staging is not null)
+                ArrayPool<byte>.Shared.Return(staging);
             _workspaceLease?.Dispose();
+            _workspaceLease = null;
             throw;
         }
     }
@@ -302,10 +316,11 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
 
     public void Dispose()
     {
-        _workspaceLease?.Dispose();
         if (_disposed)
             return;
         _disposed = true;
+        _workspaceLease?.Dispose();
+        _workspaceLease = null;
         _ready.Dispose();
         if (_ring is not null)
             FloatScratch.Return(_ring);
