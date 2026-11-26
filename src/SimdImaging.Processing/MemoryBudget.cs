@@ -140,7 +140,7 @@ public static class MemoryEstimator
     {
         ValidateEstimateArguments(width, height, steps, bandRows, degree);
         var stepwiseRows = ProcessingPlan.ResolveStepwiseRows(height, bandRows, degree,
-            useDefaultBandPolicy: bandRows == ProcessingPlan.DefaultBandRows);
+            useDefaultPolicy: bandRows == ProcessingPlan.DefaultBandRows);
         return EstimateCore(width, height, format, steps, bandRows, stepwiseRows, allowFusion, degree);
     }
 
