@@ -142,36 +142,36 @@ public sealed partial class Image
 
         var (outputWidth, outputHeight) = sizeOf(reader.Width, reader.Height);
 
-        // The encoder session is opened only after the chain's output size is known: creating one and abandoning it
-        // uncommitted would leave whatever it had already written in the caller's stream.
-        var encodeOptions = BuildEncodeOptions(format, save);
-        using var session = ImageCodecs.CreateEncoder(format, destination, encodeOptions, leaveOpen: true);
-        // Colour encoding always travels (it is in the header the reader already parsed). Metadata blocks do not,
-        // unless the caller asked for them or supplied their own: reading them means walking the whole file.
-        var metadata = save.Metadata ?? headerMetadata;
-        var frame = session.AddFrame(outputWidth, outputHeight, pixelFormat, reader.Info.ColorEncoding,
-            metadata ?? ImageMetadata.Empty, null);
-
+        // Build and reserve the complete pull chain before opening the encoder. A budget refusal or a failed stage
+        // construction must not leave a partial header/frame in the caller's destination stream.
         var sourceRows = new CodecRowSource(reader, working, cancellationToken);
-        var sink = new CodecRowSink(frame, cancellationToken);
-
-        // A caller-supplied stage chain (crop / pad / flip / plan / resize, in order). Its output size was settled
-        // before the encoder was opened, so the frame already has it.
         var chained = chain(sourceRows);
-        int writtenRows;
         try
         {
-            writtenRows = Pipeline.Copy(chained, sink, cancellationToken);
+            // Rent the final copy buffer as well as every row stage before the encoder can write its header.
+            using var transfer = Pipeline.RentTransferBuffer(chained, options.Execute);
+
+            // The encoder session is opened only after both output geometry and the engine-managed working set have
+            // been validated. Codec-owned encoder buffers remain outside WorkspaceManager.
+            var encodeOptions = BuildEncodeOptions(format, save);
+            using var session = ImageCodecs.CreateEncoder(format, destination, encodeOptions, leaveOpen: true);
+            // Colour encoding always travels (it is in the header the reader already parsed). Metadata blocks do not,
+            // unless the caller asked for them or supplied their own: reading them means walking the whole file.
+            var metadata = save.Metadata ?? headerMetadata;
+            var frame = session.AddFrame(outputWidth, outputHeight, pixelFormat, reader.Info.ColorEncoding,
+                metadata ?? ImageMetadata.Empty, null);
+            var sink = new CodecRowSink(frame, cancellationToken);
+            var writtenRows = Pipeline.Copy(chained, sink, cancellationToken, transfer);
+
+            var report = new ProcessReport(ProcessMode.Streamed, StreamRefusal.None, reader.IsStreaming,
+                session.IsStreaming, outputWidth, outputHeight, writtenRows, metadata is not null);
+            session.Commit(cancellationToken);
+            return report;
         }
         finally
         {
             (chained as IDisposable)?.Dispose();
         }
-
-        var report = new ProcessReport(ProcessMode.Streamed, StreamRefusal.None, reader.IsStreaming,
-            session.IsStreaming, outputWidth, outputHeight, writtenRows, metadata is not null);
-        session.Commit(cancellationToken);
-        return report;
     }
 
     /// <summary>

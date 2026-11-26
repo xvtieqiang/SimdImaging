@@ -26,16 +26,27 @@ public sealed partial class Image
         ExecuteOptions? options = null, IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(plan);
         var execute = options ?? new ExecuteOptions();
-        // This overload rents the whole frame, so it reserves it before the rent: TileExecutor reserves the one
-        // tile it hands to the per-rectangle work, and the region executor counts only its windows, so nothing is
-        // charged twice and a refused reservation leaves nothing allocated.
+        // Compile and validate before renting the full-frame destination. Compilation is where MaxWorkingBytes
+        // rejects a plan; doing it after this rent made that refusal too late.
+        var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
+        var targetBytes = TargetBuffer.Bytes(source.Width, source.Height, source.Format);
+        var tileWorkingBytes = compiled.Workspace.BoundedBytes;
+        if (execute.MaxWorkingBytes > 0 && checked(targetBytes + tileWorkingBytes) > execute.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"The tiled result plus tile working set needs {targetBytes + tileWorkingBytes} bytes, above " +
+                $"ExecuteOptions.MaxWorkingBytes = {execute.MaxWorkingBytes}.");
+        var tileOptions = execute.MaxWorkingBytes > 0
+            ? execute with { MaxWorkingBytes = execute.MaxWorkingBytes - targetBytes }
+            : execute;
         using var targetLease = TargetBuffer.Reserve(execute, source.Width, source.Height, source.Format,
             "tiled destination");
         var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         try
         {
-            ProcessTiles(source, new BufferRegionSink(destination), plan, tileWidth, tileHeight, execute, pool);
+            CompiledPlanExecutor.ExecuteTiles(compiled, source, new BufferRegionSink(destination), tileWidth,
+                tileHeight, tileOptions, pool);
             return destination;
         }
         catch
@@ -87,29 +98,52 @@ public sealed partial class Image
         var workspace = saved.Workspace ?? new WorkspaceManager(saved.MaxWorkingBytes);
         var execute = saved with { Workspace = workspace };
         var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
+        tileWidth = Math.Min(tileWidth, source.Width);
+        tileHeight = Math.Min(tileHeight, source.Height);
+        var encoderBandRows = Math.Min(tileHeight, source.Height);
+        var encoderBandBytes = checked((long)source.Width * encoderBandRows * source.Format.BytesPerPixel()
+            + (long)encoderBandRows * sizeof(int));
+        if (execute.MaxWorkingBytes > 0 &&
+            checked(encoderBandBytes + compiled.Workspace.BoundedBytes) > execute.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"The encoder band plus tile working set needs {encoderBandBytes + compiled.Workspace.BoundedBytes} " +
+                $"bytes, above ExecuteOptions.MaxWorkingBytes = {execute.MaxWorkingBytes}.");
+        var tileOptions = execute.MaxWorkingBytes > 0
+            ? execute with { MaxWorkingBytes = execute.MaxWorkingBytes - encoderBandBytes }
+            : execute;
 
-        var encodeOptions = BuildEncodeOptions(format, save);
-        using var session = ImageCodecs.CreateEncoder(format, destination, encodeOptions, leaveOpen: true);
-        var metadata = save.Metadata ?? ImageMetadata.Empty;
-        var frame = session.AddFrame(source.Width, source.Height, source.Format.ToPixelFormat(),
-            ColorEncoding.AssumedSrgb, metadata, null);
+        var predictedTotalBytes = checked(compiled.Workspace.BoundedBytes + encoderBandBytes);
+        if (workspace.LimitBytes > 0 &&
+            checked(workspace.OutstandingBytes + predictedTotalBytes) > workspace.LimitBytes)
+            throw new InvalidOperationException(
+                $"The tiled pipeline needs {predictedTotalBytes} bytes in addition to " +
+                $"{workspace.OutstandingBytes} already reserved, above the WorkspaceManager limit of " +
+                $"{workspace.LimitBytes} bytes.");
 
-        using (var sink = new TileEncoderSink(source.Width, source.Height, source.Format, frame,
+        // Allocate and reserve the encoder band before opening the destination encoder. This catches both an
+        // account-limit refusal and a band allocation failure without leaving a partial output header.
+        using (var sink = new TileEncoderSink(source.Width, source.Height, source.Format,
                    Math.Min(tileHeight, source.Height), pool, execute, cancellationToken))
         {
-            CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, execute, pool);
+            var encodeOptions = BuildEncodeOptions(format, save);
+            using var session = ImageCodecs.CreateEncoder(format, destination, encodeOptions, leaveOpen: true);
+            var metadata = save.Metadata ?? ImageMetadata.Empty;
+            var frame = session.AddFrame(source.Width, source.Height, source.Format.ToPixelFormat(),
+                ColorEncoding.AssumedSrgb, metadata, null);
+            sink.Attach(frame);
+
+            CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, tileOptions, pool);
             sink.Complete();
+            session.Commit(cancellationToken);
+
+            return new ProcessReport(ProcessMode.Tiled, StreamRefusal.None, ReaderIsStreaming: false,
+                EncoderIsStreaming: session.IsStreaming, source.Width, source.Height, source.Height,
+                MetadataCarried: save.Metadata is not null)
+            {
+                PeakWorkingBytes = workspace.PeakBytes,
+                PredictedWorkingBytes = predictedTotalBytes,
+            };
         }
-
-        session.Commit(cancellationToken);
-
-        return new ProcessReport(ProcessMode.Tiled, StreamRefusal.None, ReaderIsStreaming: false,
-            EncoderIsStreaming: session.IsStreaming, source.Width, source.Height, source.Height,
-            MetadataCarried: save.Metadata is not null)
-        {
-            PeakWorkingBytes = workspace.PeakBytes,
-            PredictedWorkingBytes = compiled.Workspace.BoundedBytes,
-        };
     }
 
     /// <summary>
@@ -126,16 +160,46 @@ public sealed partial class Image
         ArgumentNullException.ThrowIfNull(plan);
 
         options ??= TranscodeOptions.Default;
-        using var source = TiffRegionSource.Open(sourcePath, options.Region?.PageIndex ?? 0,
-            options.Region?.Format, options.Region?.MaxSegmentBytes ?? (64L << 20));
-        using var destination = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        return ProcessTilesTo(source, destination, FormatFromExtension(Path.GetExtension(destinationPath)), plan,
-            tileWidth, tileHeight, options.Execute, options.Save, options.Region?.Pool, cancellationToken);
+        return WriteTileOutputAtomically(destinationPath, temporaryPath =>
+        {
+            using var source = TiffRegionSource.Open(sourcePath, options.Region?.PageIndex ?? 0,
+                options.Region?.Format, options.Region?.MaxSegmentBytes ?? (64L << 20));
+            using var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None);
+            return ProcessTilesTo(source, destination, FormatFromExtension(Path.GetExtension(destinationPath)),
+                plan, tileWidth, tileHeight, options.Execute, options.Save, options.Region?.Pool, cancellationToken);
+        });
+    }
+
+
+    /// <summary>Preserves an existing destination when tile compilation, workspace admission or encoding fails.</summary>
+    private static T WriteTileOutputAtomically<T>(string destinationPath, Func<string, T> write)
+    {
+        var fullPath = Path.GetFullPath(destinationPath);
+        var directory = Path.GetDirectoryName(fullPath)!;
+        var extension = Path.GetExtension(fullPath);
+        var name = Path.GetFileNameWithoutExtension(fullPath);
+        var temporaryPath = Path.Combine(directory, $".{name}.{Guid.NewGuid():N}{extension}");
+        try
+        {
+            var result = write(temporaryPath);
+            File.Move(temporaryPath, fullPath, overwrite: true);
+            return result;
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
     }
 
     private static CompiledExecutionPlan CompileTiles(IRegionSource source, ProcessingPlan plan, int tileWidth,
         int tileHeight, ExecuteOptions execute)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tileWidth);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tileHeight);
+        tileWidth = Math.Min(tileWidth, source.Width);
+        tileHeight = Math.Min(tileHeight, source.Height);
         var recipe = new PipelineRecipeBuilder();
         foreach (var step in plan.Steps)
             recipe.Append(step.Definition, step.Lut, step.Secondary);
@@ -151,6 +215,7 @@ public sealed partial class Image
                      SourceCapabilities.StableContent,
             Sink = SinkCapabilities.RandomRegionWrite,
             TileRequested = true,
+            BandRows = plan.BandRows,
             TileWidth = tileWidth,
             TileHeight = tileHeight,
             Execute = execute,
@@ -191,9 +256,9 @@ public sealed partial class Image
     /// </summary>
     private sealed class TileEncoderSink : IRegionSink, IDisposable
     {
-        private readonly StreamFrameEncoder _frame;
+        private StreamFrameEncoder? _frame;
         private readonly WorkingBuffer _band;
-        private readonly int[] _filled;
+        private int[] _filled;
         private readonly CancellationToken _cancellation;
         private readonly IDisposable? _lease;
         private readonly int _bandCapacity;
@@ -201,19 +266,18 @@ public sealed partial class Image
         private int _bandRows;
         private bool _disposed;
 
-        internal TileEncoderSink(int width, int height, WorkingFormat format, StreamFrameEncoder frame,
-            int bandRows, IPixelPool? pool, ExecuteOptions options, CancellationToken cancellationToken)
+        internal TileEncoderSink(int width, int height, WorkingFormat format, int bandRows, IPixelPool? pool,
+            ExecuteOptions options, CancellationToken cancellationToken)
         {
             Width = width;
             Height = height;
             Format = format;
-            _frame = frame;
             _bandCapacity = bandRows;
             _bandRows = Math.Min(bandRows, height);
-            _filled = new int[bandRows];
             _cancellation = cancellationToken;
 
-            var bytes = (long)width * _bandRows * format.BytesPerPixel();
+            var bytes = checked((long)width * _bandRows * format.BytesPerPixel()
+                + (long)bandRows * sizeof(int));
             if (options.MaxWorkingBytes > 0 && bytes > options.MaxWorkingBytes)
                 throw new InvalidOperationException(
                     $"The encoder band ({width}x{_bandRows} {format}) needs {bytes} bytes, above " +
@@ -221,10 +285,12 @@ public sealed partial class Image
             _lease = options.Workspace?.Reserve(bytes, "tile encoder band");
             try
             {
+                _filled = new int[bandRows];
                 _band = WorkingBuffer.Rent(width, _bandRows, format, pool);
             }
             catch
             {
+                _filled = Array.Empty<int>();
                 _lease?.Dispose();
                 throw;
             }
@@ -233,6 +299,15 @@ public sealed partial class Image
         public int Width { get; }
         public int Height { get; }
         public WorkingFormat Format { get; }
+
+        internal void Attach(StreamFrameEncoder frame)
+        {
+            ArgumentNullException.ThrowIfNull(frame);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_frame is not null)
+                throw new InvalidOperationException("The tile encoder sink already has a frame.");
+            _frame = frame;
+        }
 
         public void WriteRegion(PixelRect region, PixelView source)
         {
@@ -281,7 +356,8 @@ public sealed partial class Image
 
         private void FlushBand()
         {
-            _frame.WriteRows(_band.View.Span, _bandRows, Width * Format.BytesPerPixel(), _cancellation);
+            (_frame ?? throw new InvalidOperationException("The tile encoder sink has no attached frame."))
+                .WriteRows(_band.View.Span, _bandRows, Width * Format.BytesPerPixel(), _cancellation);
             _bandTop += _bandRows;
             _bandRows = Math.Min(_bandCapacity, Height - _bandTop);
             Array.Clear(_filled);
@@ -292,8 +368,15 @@ public sealed partial class Image
             if (_disposed)
                 return;
             _disposed = true;
-            _lease?.Dispose();
-            _band.Dispose();
+            try
+            {
+                _band.Dispose();
+            }
+            finally
+            {
+                _filled = Array.Empty<int>();
+                _lease?.Dispose();
+            }
         }
     }
 }

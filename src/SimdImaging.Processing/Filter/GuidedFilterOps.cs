@@ -188,7 +188,10 @@ public static class GuidedFilterOps
 
         // Eight image planes per worker is what running bands in parallel costs: 17.7 MB each at 4K with
         // bandRows 128, so the worker count is capped by a byte budget rather than by core count.
-        var perWorkerBytes = (8L * capacity * sizeof(float)) + ((long)((radius * 2 + 1) * width) * sizeof(float));
+        // Each ProcessBands worker owns six decoded input/guide planes and six coefficient/work planes. Include
+        // the persistent row, prefix, ring and local decode rows when applying the aggregate scratch cap.
+        var fixedFloats = ((19L + (2L * radius)) * width) + 1;
+        var perWorkerBytes = ((12L * capacity) + fixedFloats) * sizeof(float);
         var workers = Math.Min(RowParallel.Degree, bandCount);
         if (workers > 1 && workers * perWorkerBytes > ParallelScratchBytes)
             workers = (int)Math.Max(1, ParallelScratchBytes / perWorkerBytes);
@@ -369,6 +372,54 @@ public static class GuidedFilterOps
         return destination;
     }
 
+    /// <summary>Active temporary arrays used by the self-guided operator on one supplied window.
+    /// The returned image window is counted by the Neighborhood adapter.</summary>
+    internal static long GuidedFilterPlanScratchBytes(int width, int windowRows, int radius, int bandRows = 128)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(windowRows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
+
+        var context = checked(radius * 4);
+        var capacityRows = Math.Min(windowRows, checked(bandRows + context));
+        var planes = checked(5L * width * capacityRows * sizeof(float));
+        var columnSums = checked((long)width * sizeof(float));
+        var prefix = checked(((long)width + 1) * sizeof(float));
+        var row = checked((long)width * 4 * sizeof(float));
+        return checked(planes + columnSums + prefix + row);
+    }
+
+    /// <summary>
+    /// Workspace of the plan's cross-guided adapter. The adapter invokes this as one whole-image call but keeps
+    /// one band-sized set of 12 float planes, a ring and its row/prefix buffers alive. It uses one worker because
+    /// the plan adapter enters the nested-execution scope before calling this kernel.
+    /// </summary>
+    internal static long CrossGuidedPlanPerWorkerScratchBytes(int width, int height, int radius, int bandRows)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
+
+        var capacityRows = Math.Min(height, checked(bandRows + (4 * radius)));
+        var capacity = checked((long)capacityRows * width);
+        var fixedFloats = checked(((19L + (2L * radius)) * width) + 1);
+        return checked(((12L * capacity) + fixedFloats) * sizeof(float));
+    }
+
+    internal static long CrossGuidedPlanReturnedBufferBytes(int width, int height, WorkingFormat format)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        return checked((long)width * height * format.BytesPerPixel());
+    }
+
+    /// <summary>Combined scratch plus returned image for standalone callers/tests.</summary>
+    internal static long CrossGuidedPlanWorkspaceBytes(int width, int height, WorkingFormat format, int radius,
+        int bandRows) =>
+        checked(CrossGuidedPlanPerWorkerScratchBytes(width, height, radius, bandRows)
+            + CrossGuidedPlanReturnedBufferBytes(width, height, format));
     /// <summary>Bytes of working set the parallel band path may hold across all its workers.</summary>
     private const long ParallelScratchBytes = 96L << 20;
 

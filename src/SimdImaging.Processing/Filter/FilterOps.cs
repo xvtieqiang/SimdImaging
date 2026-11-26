@@ -120,6 +120,73 @@ public static class FilterOps
         Math.Max(32, ScratchBudgetBytes / Math.Max(1, width * ScratchBytesPerPixel));
 
     /// <summary>
+    /// Active per-call workspace for the plan adapter: the temporary output frame plus the separable worker's
+    /// FloatScratch arrays, stack tiles and kernel. The generic rows×width estimate is insufficient for tiny
+    /// windows because the fixed planar/vertical buffers do not shrink with the window height.
+    /// </summary>
+    internal static long SeparablePlanWorkerScratchBytes(int width, int rows, int radius,
+        WorkingFormat format, bool sharpen = false)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(width);
+        ArgumentOutOfRangeException.ThrowIfNegative(rows);
+        ArgumentOutOfRangeException.ThrowIfNegative(radius);
+        if (radius == 0)
+            return 0;
+
+        var taps = checked(2 * radius + 1);
+        var ringRows = Math.Min(rows, checked(2 * radius + VerticalTileRows));
+        var floatCount = checked((long)width * 8
+            + (long)ringRows * width * 4
+            + (long)width * 4
+            + (long)width * 4 * VerticalTileRows);
+        var stackBytes = checked((long)VerticalTileRows * taps * sizeof(int)
+            + (long)VerticalTileRows * VerticalBlockFloats * sizeof(float));
+        var kernelBytes = (long)taps * sizeof(float);
+        var total = checked(floatCount * sizeof(float) + stackBytes + kernelBytes);
+
+        if (sharpen)
+        {
+            var combineBytes = format == WorkingFormat.Rgba8 && (long)width * rows >= TwoInputLutFloor
+                ? 256L * 256
+                : (long)width * 3 * 4 * sizeof(float);
+            total = checked(total + combineBytes);
+        }
+
+        return total;
+    }
+
+    internal static long SeparablePlanWorkspaceBytes(int width, int rows, int radius, WorkingFormat format,
+        bool sharpen = false) =>
+        checked((long)width * rows * format.BytesPerPixel()
+            + SeparablePlanWorkerScratchBytes(width, rows, radius, format, sharpen));
+
+    /// <summary>Glow's frame-lifetime allocations, excluding its worker-private rows and final returned image.</summary>
+    internal static long GlowPlanWholeImageScratchBytes(int width, int height, WorkingFormat format)
+    {
+        var frameBytes = checked((long)width * height * format.BytesPerPixel());
+        var tableBytes = format == WorkingFormat.Rgba8 && (long)width * height >= TwoInputLutFloor
+            ? 256L * 256
+            : 0L;
+        return checked((2L * frameBytes) + tableBytes); // threshold highlights + blurred highlights + optional LUT
+    }
+
+    /// <summary>Glow's worker-private allocations: separable blur planes plus the highlight and combine rows.</summary>
+    internal static long GlowPlanWorkerScratchBytes(int width, int height, WorkingFormat format, float sigma)
+    {
+        var radius = Math.Max(1, (int)MathF.Ceiling(3f * sigma));
+        var blurScratch = SeparablePlanWorkerScratchBytes(width, height, radius, format);
+        var highlightRow = (long)width * 4 * sizeof(float);
+        var combineRows = format == WorkingFormat.Rgba8 && (long)width * height >= TwoInputLutFloor
+            ? 0L
+            : 2L * width * 4 * sizeof(float);
+        return checked(blurScratch + highlightRow + combineRows);
+    }
+
+    internal static long GlowPlanWorkspaceBytes(int width, int height, WorkingFormat format, float sigma) =>
+        checked(GlowPlanWholeImageScratchBytes(width, height, format)
+            + GlowPlanWorkerScratchBytes(width, height, format, sigma));
+
+    /// <summary>
     /// Runs a separable kernel as a horizontal pass followed by a vertical one. Work is done in row bands: a
     /// band keeps only <c>bandRows + 2·radius</c> horizontally filtered rows, so 4K needs about 9 MB of scratch
     /// instead of a full float plane (162 MB at σ 3). The recomputed rows are the band's context, and the
@@ -1929,6 +1996,203 @@ public static class FilterOps
         }
     }
 
+    /// <summary>Scratch for the 3×3 direct-write median adapter. The output belongs to the executor.</summary>
+    internal static long Median3x3PlanScratchBytes(int width, WorkingFormat format)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        if (format == WorkingFormat.Rgba8 && Vector128.IsHardwareAccelerated)
+            return 0;
+
+        // One three-row float block and one output float row per worker.
+        return checked(4L * width * 4 * sizeof(float));
+    }
+
+    /// <summary>Scratch for the direct-write gradient adapters (Sobel/Prewitt/Scharr). GradientInto
+    /// has one outer and one per-worker luma ring, plus input and output float rows.</summary>
+    internal static long GradientPlanScratchBytes(int width)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        return checked(14L * width * sizeof(float));
+    }
+
+    /// <summary>Scratch for the direct-write 3×3 morphology adapters.</summary>
+    internal static long Morph3x3PlanScratchBytes(int width)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        return checked(5L * width * 4 * sizeof(float));
+    }
+
+    /// <summary>Scratch for the separable 3×3 convolution adapter.</summary>
+    internal static long Convolve3x3PlanScratchBytes(int width)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        return checked((16L * width * 4 * sizeof(float)) + (9L * sizeof(float)));
+    }
+
+    /// <summary>Per-worker arrays used by Laplacian's luma-ring implementation.</summary>
+    internal static long LaplacianPlanScratchBytes(int width)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        return checked(11L * width * sizeof(float));
+    }
+
+    /// <summary>Per-worker row-ring scratch plus the generated kernel arrays used by GaussianSharpen's
+    /// two-dimensional convolution. The result window is counted by the Neighborhood adapter.</summary>
+    internal static long GaussianSharpenPlanScratchBytes(int width, int rows, int radius)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        var side = checked(2 * radius + 1);
+        var stride = checked((long)width * 4);
+        var workerRows = checked((long)(side + 2) * stride * sizeof(float));
+        var kernel = checked(((long)side + ((long)side * side)) * sizeof(float));
+        return checked(workerRows + kernel);
+    }
+
+    /// <summary>Per-worker arrays used by the row-shift AverageOffsets family (MotionBlur/BokehBlur).</summary>
+    internal static long AverageOffsetsPlanScratchBytes(int width, int maxDy, int offsetCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxDy);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(offsetCount);
+        var windowRows = checked(2 * maxDy + 1);
+        var stride = checked((long)width * 4);
+        return checked(((long)(windowRows + 2) * stride * sizeof(float))
+            + ((long)offsetCount * 2 * sizeof(int)));
+    }
+
+    /// <summary>Additional scratch used by ConvolveBanded beyond its full float window plane.</summary>
+    internal static long ConvolveBandedPlanScratchBytes(int width, int rows, int kernelWeights)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
+        ArgumentOutOfRangeException.ThrowIfNegative(kernelWeights);
+        // Full float window plane + sum row + row-cache + current row + copied kernel.
+        return checked(((long)rows * width * 16)
+            + (3L * width * 4 * sizeof(float))
+            + ((long)kernelWeights * sizeof(float)));
+    }
+
+    /// <summary>Per-worker scratch for the oil-paint ring and its histogram state. The result band is
+    /// accounted separately by the Neighborhood adapter.</summary>
+    internal static long OilPaintPlanScratchBytes(int width, int radius, int levels)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(levels);
+        var window = checked(2 * radius + 1);
+        var windowPixels = checked((long)window * width);
+        var rgbaFloats = checked(windowPixels * 4 * sizeof(float));
+        var packedFloats = checked(windowPixels * sizeof(float));
+        var bins = windowPixels;
+        var output = checked((long)width * 4 * sizeof(float));
+        var histogram = checked(4L * levels * sizeof(int));
+        var bases = checked((long)window * sizeof(int));
+        return checked(rgbaFloats + packedFloats + bins + output + histogram + bases);
+    }
+
+    /// <summary>Per-worker row ring and lookup tables used by bilateral filtering. The result band is accounted
+    /// separately by the Neighborhood adapter.</summary>
+    internal static long BilateralPlanScratchBytes(int width, int radius)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        var window = checked(2 * radius + 1);
+        var stride = checked((long)width * 4);
+        var rowRing = checked((long)window * stride * sizeof(float));
+        var output = checked(stride * sizeof(float));
+        var spatial = checked((long)window * window * sizeof(float));
+        const long rangeTableBytes = 512L * sizeof(float);
+        return checked(rowRing + output + spatial + rangeTableBytes);
+    }
+
+    /// <summary>Per-worker scratch for the plan adapter's median result. The returned band buffer is
+    /// accounted separately by <see cref="PlanOps.Neighborhood"/>.</summary>
+    internal static long MedianPlanScratchBytes(int width, WorkingFormat format, int radius)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        var side = checked(2 * radius + 1);
+        var stride = checked((long)width * 4);
+
+        if (radius == 1)
+            return checked(4L * stride * sizeof(float));
+
+        if (format == WorkingFormat.Rgba8)
+        {
+            // Sliding histogram: side × 256 column counts, one 256-bin histogram, one output byte row
+            // and side source rows in the worker's byte window.
+            return checked(((long)side * 256 * sizeof(int))
+                + (256L * sizeof(int))
+                + (stride * sizeof(byte))
+                + ((long)side * stride * sizeof(byte)));
+        }
+
+        // Wider formats use a float ring, row + output buffers, a side² sort window and row load markers.
+        return checked(((long)side * stride * sizeof(float))
+            + ((long)2 * stride * sizeof(float))
+            + ((long)side * side * sizeof(float))
+            + ((long)side * sizeof(int)));
+    }
+
+    /// <summary>
+    /// Temporary workspace for a morphology plan step. Radius one uses the streaming 3×3 kernel; larger radii
+    /// compose two sliding passes and two transposes, so four full window buffers can be simultaneously live.
+    /// Opening/closing retains the first morphology result while the second runs.
+    /// </summary>
+    internal static long MorphPlanWorkspaceBytes(int width, int rows, WorkingFormat format, int radius,
+        Morphology kind)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+
+        var bytesPerPixel = format.BytesPerPixel();
+        var frameBytes = checked((long)width * rows * bytesPerPixel);
+        var strideFloats = checked((long)width * 4);
+
+        long primitiveScratch;
+        if (radius == 1)
+        {
+            // Morph3x3Into: three cached source rows, one source row and one output row, all float RGBA.
+            primitiveScratch = checked(5L * strideFloats * sizeof(float));
+        }
+        else
+        {
+            var window = checked((radius * 2) + 1);
+            static long SlideScratchFloats(int rowWidth, int window, int radius)
+            {
+                var paddedWidth = checked(rowWidth + (radius * 2));
+                var blocks = checked(((paddedWidth + window - 1) / window) * window);
+                // SlideRows: row + output (4W each), and padded/prefix/suffix (4*blocks each).
+                return checked((8L * rowWidth) + (12L * blocks));
+            }
+
+            // Morph transposes between passes: the second SlideRows sees the original band height as its row width.
+            var floats = Math.Max(SlideScratchFloats(width, window, radius),
+                SlideScratchFloats(rows, window, radius));
+            primitiveScratch = checked(floats * sizeof(float));
+        }
+
+        var primitivePeak = radius == 1
+            ? checked(frameBytes + primitiveScratch)
+            : checked((4L * frameBytes) + primitiveScratch);
+
+        if (kind is Morphology.Erode or Morphology.Dilate)
+            return primitivePeak;
+
+        // Open/Close keep the first morphology result while the second morphology runs. TopHat/BlackHat
+        // subsequently hold the opened/closed result and Difference's destination plus three float rows.
+        var combinedPeak = radius == 1
+            ? checked((2L * frameBytes) + primitiveScratch)
+            : checked((5L * frameBytes) + primitiveScratch);
+        // Difference allocates exactly three float RGBA rows per active worker (left, right and output).
+        // strideFloats is already width * 4, so multiplying it by 12 counted four times the live row arrays.
+        var differencePeak = checked((2L * frameBytes) + (3L * strideFloats * sizeof(float)));
+        return Math.Max(combinedPeak, differencePeak);
+    }
+
     /// <summary>Per-channel clamped difference: source − opened, or closed − source.</summary>
     private static WorkingBuffer Difference(PixelView source, PixelView other, bool subtractOpened, IPixelPool? pool)
     {
@@ -2564,17 +2828,23 @@ public static class FilterOps
         //     row-major order, so every sum is bit-identical.
         //   * the whole thing ran on one thread. Block rows are independent, so bands cannot change a byte.
         var blockRows = (height + blockSize - 1) / blockSize;
+        try
+        {
         RowParallel.ForBands(blockRows, (firstBand, lastBand) =>
         {
             // Rented, not allocated: one set per worker per call, and at 1920 px that was ~1 MiB of float
             // scratch per call (measured: 1007 KiB/op against the oracle's 35). The contents are cleared below
-            // over the range actually used, so a larger rented buffer is harmless.
-            var sums = ArrayPool<float>.Shared.Rent(columns * 4);
-            var row = ArrayPool<float>.Shared.Rent(stride);
-            var output = ArrayPool<float>.Shared.Rent(stride);
+            // over the range actually used, so a larger rented buffer is harmless. Protect the first rent too:
+            // subsequent rent failures must not strand earlier buffers in the shared pool.
+            float[]? sums = null;
+            float[]? row = null;
+            float[]? output = null;
             try
             {
-            for (var band = firstBand; band < lastBand; band++)
+                sums = ArrayPool<float>.Shared.Rent(columns * 4);
+                row = ArrayPool<float>.Shared.Rent(stride);
+                output = ArrayPool<float>.Shared.Rent(stride);
+                for (var band = firstBand; band < lastBand; band++)
             {
                 var top = band * blockSize;
                 var bottom = Math.Min(top + blockSize, height);
@@ -2629,13 +2899,18 @@ public static class FilterOps
             }
             finally
             {
-                ArrayPool<float>.Shared.Return(sums);
-                ArrayPool<float>.Shared.Return(row);
-                ArrayPool<float>.Shared.Return(output);
+                if (output is not null) ArrayPool<float>.Shared.Return(output);
+                if (row is not null) ArrayPool<float>.Shared.Return(row);
+                if (sums is not null) ArrayPool<float>.Shared.Return(sums);
             }
-        });
-
-        return destination;
+            });
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -2658,6 +2933,8 @@ public static class FilterOps
         var destination = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba8, pool);
         var view = destination.View;
 
+        try
+        {
         RowParallel.ForBands(blockRows, (firstBand, lastBand) =>
         {
             var sums = ArrayPool<long>.Shared.Rent(columns * 4);
@@ -2733,9 +3010,14 @@ public static class FilterOps
             {
                 ArrayPool<long>.Shared.Return(sums);
             }
-        });
-
-        return destination;
+            });
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
     }
 
     /// <summary>

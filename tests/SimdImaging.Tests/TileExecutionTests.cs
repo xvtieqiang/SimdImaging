@@ -114,15 +114,18 @@ public sealed class TileExecutionTests
         const int size = 16;
         const long tileBytes = (long)size * size * 4;
         const long windowBytes = 2 * tileBytes;
+        var step = PlanOps.Invert();
+        var scratchBytes = step.Contract.Workspace
+            .EstimatePerWorker(size, size, size, WorkingFormat.Rgba8);
         using var image = TestImages.Gradient(size, size, WorkingFormat.Rgba8);
-        var workspace = new WorkspaceManager(tileBytes + windowBytes);
+        var workspace = new WorkspaceManager(tileBytes + windowBytes + scratchBytes);
 
         Image.ProcessTiles(new BufferRegionSource(image[0].Pixels.View), new DiscardSink(size, size),
-            new ProcessingPlan().Add(PlanOps.Invert()), size, size,
+            new ProcessingPlan().Add(step), size, size,
             new ExecuteOptions { Workspace = workspace, MaxDegreeOfParallelism = 1 });
 
-        workspace.PeakBytes.ShouldBe(tileBytes + windowBytes,
-            "one target tile and its windows, not the tile twice");
+        workspace.PeakBytes.ShouldBe(tileBytes + windowBytes + scratchBytes,
+            "one target tile, its windows and the operator's declared scratch, not the tile twice");
         workspace.OutstandingBytes.ShouldBe(0);
     }
 

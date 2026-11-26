@@ -77,7 +77,7 @@ public sealed class BudgetEnforcementTests
 
         var error = Should.Throw<InvalidOperationException>(() =>
             Compile(recipe, new ExecuteOptions { MaxWorkingBytes = 1024 }));
-        error.Message.ShouldContain("working set");
+        error.Message.ShouldContain("estimated peak");
         error.Message.ShouldContain("MaxWorkingBytes");
     }
 
@@ -99,6 +99,45 @@ public sealed class BudgetEnforcementTests
             CompiledPlanExecutor.ExecuteTiles(tilePlan, new ViewRegionSource(image[0].Pixels.View),
                 new DiscardSink(32, 32), 16, 12, new ExecuteOptions { MaxWorkingBytes = 512 }));
         error.Message.ShouldContain("tile");
+    }
+
+    [Fact]
+    public void TileBudget_CombinesTargetAndRegionWindows()
+    {
+        using var image = TestImages.Gradient(16, 16, WorkingFormat.Rgba8);
+        var source = new ViewRegionSource(image[0].Pixels.View);
+        var plan = new ProcessingPlan().Add(PlanOps.Invert());
+
+        // One 16x16 target tile (1024 bytes) and two 16x16 windows (2048 bytes) are resident together.
+        Should.Throw<InvalidOperationException>(() =>
+            Image.ProcessTiles(source, new DiscardSink(16, 16), plan, 16, 16,
+                new ExecuteOptions { MaxWorkingBytes = 2500, MaxDegreeOfParallelism = 1 }));
+    }
+
+    [Fact]
+    public void BufferReturningTileBudget_IncludesFullFrameResult()
+    {
+        using var image = TestImages.Gradient(16, 16, WorkingFormat.Rgba8);
+        var source = new ViewRegionSource(image[0].Pixels.View);
+        var plan = new ProcessingPlan().Add(PlanOps.Invert());
+
+        // The returned 16x16 frame (1024 bytes) coexists with the 16x16 tile and its two windows (3072 bytes).
+        Should.Throw<InvalidOperationException>(() =>
+            Image.ProcessTiles(source, plan, 16, 16,
+                new ExecuteOptions { MaxWorkingBytes = 4000, MaxDegreeOfParallelism = 1 }));
+    }
+
+    [Fact]
+    public void TileBudget_UsesTileFootprintInsteadOfWholeFrame()
+    {
+        using var image = TestImages.Gradient(512, 512, WorkingFormat.Rgba8);
+        var source = new ViewRegionSource(image[0].Pixels.View);
+        var plan = new ProcessingPlan().Add(PlanOps.Invert());
+
+        // A 16x16 tile walk holds the tile, two windows and the point step's declared scratch (about 5 KiB);
+        // any whole-frame accounting would need the 512x512 frame's 1 MiB and refuse this budget.
+        Image.ProcessTiles(source, new DiscardSink(512, 512), plan, 16, 16,
+            new ExecuteOptions { MaxWorkingBytes = 8192, MaxDegreeOfParallelism = 1 });
     }
 
     [Fact]

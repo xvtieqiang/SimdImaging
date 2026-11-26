@@ -23,7 +23,7 @@ internal static class RowParallel
     internal static int RowsPerWorker => RowsPerWorkerOverride > 0 ? RowsPerWorkerOverride : 32;
 
     /// <summary>
-    /// Pixels below which <see cref="For"/> runs the body on the calling thread. Shared with the fusion decision:
+    /// Pixels below which <see cref="For(int, int, Action{int, int})"/> runs the body on the calling thread. Shared with the fusion decision:
     /// an image this small has no other way to use more than one core, so fusing is what gives it parallelism.
     /// </summary>
     internal const long MinWorkPixels = 64 * 1024;
@@ -85,10 +85,29 @@ internal static class RowParallel
             _nesting--;
     }
 
-    internal static int Degree => _nesting > 0
-        ? 1
+    internal static int Degree => ResolveDegree(0);
+
+    /// <summary>One resolution rule for execution and every workspace estimate. Zero means inherit the active
+    /// pump/test override, then fall back to the machine; nested row loops always execute inline.</summary>
+    internal static int ResolveDegree(int degreeOverride) =>
+        _nesting > 0 ? 1
+        : degreeOverride > 0 ? degreeOverride
         : _pumpDegree > 0 ? _pumpDegree
-        : DegreeOverride > 0 ? DegreeOverride : Environment.ProcessorCount;
+        : DegreeOverride > 0 ? DegreeOverride
+        : Environment.ProcessorCount;
+
+    /// <summary>The number of workers <see cref="For(int, int, Action{int, int})"/> can actually launch for this geometry.</summary>
+    internal static int ResolveWorkers(int width, int height, int degreeOverride)
+    {
+        if (height <= 0 || width <= 0)
+            return 1;
+        var degree = ResolveDegree(degreeOverride);
+        var workersByRows = Math.Max(1, (height + Math.Max(1, RowsPerWorker) - 1) /
+            Math.Max(1, RowsPerWorker));
+        if (degree <= 1 || (long)width * height < MinWorkPixels)
+            return 1;
+        return Math.Min(degree, workersByRows);
+    }
 
     /// <summary>Same fixed-band rule for work already divided into coarse bands (blur / resize), where the
     /// band count is small but each band is expensive. Each worker owns its scratch for all its bands.</summary>
@@ -100,7 +119,7 @@ internal static class RowParallel
     /// because a skipped band would return a partially written image that looks successful.</summary>
     internal static void ForBands(int count, Action<int, int> body, int degreeOverride, CancellationToken cancellation)
     {
-        var degree = _nesting > 0 ? 1 : degreeOverride > 0 ? degreeOverride : Environment.ProcessorCount;
+        var degree = ResolveDegree(degreeOverride);
         if (degree <= 1 || count <= 1)
         {
             cancellation.ThrowIfCancellationRequested();
@@ -129,17 +148,22 @@ internal static class RowParallel
             Parallel.For(0, workers, Run);
     }
 
-    internal static void For(int width, int height, Action<int, int> body)
+    internal static void For(int width, int height, Action<int, int> body) =>
+        For(width, height, body, Degree, default);
+
+    /// <summary>Explicit-degree, cancellable variant for option-driven operators such as resize. The same
+    /// resolved degree is used by workspace estimation and execution; legacy callers retain the old overload.</summary>
+    internal static void For(int width, int height, Action<int, int> body, int degreeOverride,
+        CancellationToken cancellation)
     {
         // A loop entered from inside a band worker runs inline, so it says nothing about how many workers the image
         // was given — and writing 1 here would overwrite the count the band split just reported.
         var nested = _nesting > 0;
-        var degree = Degree;
-        const long minWorkPixels = MinWorkPixels;
-        var perWorker = Math.Max(1, RowsPerWorker);
-        var workers = Math.Min(degree, Math.Max(1, (height + perWorker - 1) / perWorker));
-        if (degree <= 1 || (long)width * height < minWorkPixels || workers <= 1)
+        var degree = ResolveDegree(degreeOverride);
+        var workers = ResolveWorkers(width, height, degreeOverride);
+        if (degree <= 1 || workers <= 1)
         {
+            cancellation.ThrowIfCancellationRequested();
             if (!nested)
                 LastWorkerCount = 1;
             body(0, height);
@@ -149,12 +173,18 @@ internal static class RowParallel
         if (!nested)
             LastWorkerCount = workers;
         var band = (height + workers - 1) / workers;
-        Parallel.For(0, workers, worker =>
+        void Run(int worker)
         {
+            cancellation.ThrowIfCancellationRequested();
             var start = worker * band;
             if (start >= height)
                 return;
             body(start, Math.Min(start + band, height));
-        });
+        }
+
+        if (cancellation.CanBeCanceled)
+            Parallel.For(0, workers, new ParallelOptions { CancellationToken = cancellation }, Run);
+        else
+            Parallel.For(0, workers, Run);
     }
 }

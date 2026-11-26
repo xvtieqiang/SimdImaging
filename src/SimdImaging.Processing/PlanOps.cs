@@ -40,10 +40,11 @@ public static class PlanOps
     /// </summary>
     private static ImageOp FormatStep(string name, Func<PixelView, WorkingBuffer> op,
         Func<int, int, int, WorkingFormat, long> scratch, IInputFootprint footprint, WorkingFormat outputFormat,
-        PassModel pass, PixelSemantics semantics, InputPort? second = null)
+        PassModel pass, PixelSemantics semantics, InputPort? second = null,
+        WorkspaceScope scratchScope = WorkspaceScope.PerWorker)
     {
         return Create(name, second is null ? OpCategory.Global : OpCategory.Composite, footprint,
-            WorkspaceModel.Of(scratch, WorkspaceScope.WholeImage),
+            WorkspaceModel.Of(scratch, scratchScope),
             new KernelImplementations(
                 (_, _, _, _) => throw new NotSupportedException(
                     $"'{name}' changes the working format; run it through a compiled recipe."),
@@ -74,7 +75,7 @@ public static class PlanOps
         WorkingFormatMask formats = WorkingFormatMask.All, PixelSemantics? semantics = null) =>
         ForceAdapterPoint
             ? Point(name, op, formats, semantics)
-            : Create(name, OpCategory.Point, IdentityFootprint.Instance, WorkspaceModel.Of(PointScratch),
+            : Create(name, OpCategory.Point, IdentityFootprint.Instance, WorkspaceModel.Of(PointTableScratch),
                 new KernelImplementations(
                     PlanSteps.PointTable(
                         new Lazy<byte[]>(() => BuildByteTable(op), LazyThreadSafetyMode.ExecutionAndPublication),
@@ -143,10 +144,47 @@ public static class PlanOps
     /// <see cref="PointOps.Lut16PixelFloor"/> builds a 4 × 65536-entry table (512 KiB) because building it beats the
     /// float path. Declaring zero there made the estimator promise memory the step would then take.
     /// </summary>
-    private static long PointScratch(int width, int height, int rows, WorkingFormat format) =>
-        format == WorkingFormat.Rgba16 && (long)width * height >= PointOps.Lut16PixelFloor
-            ? 4L * 65536 * sizeof(ushort)
-            : 0L;
+    private static long PointScratch(int width, int height, int rows, WorkingFormat format)
+    {
+        // PlanSteps.Point materialises the operator's result for the current band, then copies it into the
+        // executor-owned destination. PointOps may also keep a worker-local LUT/row buffer while doing so.
+        var resultBytes = checked((long)width * rows * format.BytesPerPixel());
+        var workerBytes = checked((long)width * 4 * sizeof(float));
+        var lookupBytes = format switch
+        {
+            WorkingFormat.Rgba16 when (long)width * height >= PointOps.Lut16PixelFloor =>
+                4L * 65536 * sizeof(ushort),
+            WorkingFormat.Rgba8 => (4L * 256) + (3L * 256 * 4 * sizeof(float)),
+            _ => 0L,
+        };
+
+        if (format == WorkingFormat.Rgba16 && (long)width * height >= PointOps.Lut16PixelFloor)
+            workerBytes = 0; // the 16-bit LUT path does not rent a float row
+
+        return checked(resultBytes + workerBytes + lookupBytes);
+    }
+
+    private static long PointTableScratch(int width, int height, int rows, WorkingFormat format)
+    {
+        // Large Rgba8 table-backed steps write directly into the executor destination. Other formats and
+        // small images fall back to the ordinary operator, which materialises one band result.
+        if (format == WorkingFormat.Rgba8 && (long)width * height >= TablePixelFloor)
+            return 4L * 4 * 256; // cached LUT, lazy table, probe input and probe output
+
+        var resultBytes = checked((long)width * rows * format.BytesPerPixel());
+        var workerBytes = format == WorkingFormat.Rgba16 &&
+            (long)width * height >= PointOps.Lut16PixelFloor
+                ? 0L
+                : checked((long)width * 4 * sizeof(float));
+        var lookupBytes = format switch
+        {
+            WorkingFormat.Rgba8 => 4L * 256,
+            WorkingFormat.Rgba16 when (long)width * height >= PointOps.Lut16PixelFloor =>
+                4L * 65536 * sizeof(ushort),
+            _ => 0L,
+        };
+        return checked(resultBytes + workerBytes + lookupBytes);
+    }
 
     private static WorkingFormatMask FormatMask(WorkingFormat format) => format switch
     {
@@ -163,12 +201,19 @@ public static class PlanOps
     /// </summary>
     private static ImageOp Neighborhood(string name, int halo, Func<PixelView, WorkingBuffer> op,
         Func<int, int, int, WorkingFormat, long>? scratch = null, IntoKernel? into = null,
-        PassModel pass = PassModel.Single, PixelSemantics? semantics = null)
+        PassModel pass = PassModel.Single, PixelSemantics? semantics = null, bool scratchIncludesResult = false)
     {
         var footprint = halo == 0
             ? (IInputFootprint)IdentityFootprint.Instance
             : new HaloFootprint(halo, halo);
-        var workspace = WorkspaceModel.Of(scratch ?? ((width, _, rows, _) => (long)rows * width * 16));
+        var estimate = scratch ?? ((width, _, rows, _) => (long)rows * width * 16);
+        var workspace = WorkspaceModel.Of((width, height, rows, format) =>
+        {
+            var bytes = estimate(width, height, rows, format);
+            return into is not null || scratchIncludesResult
+                ? bytes
+                : checked(bytes + ((long)width * rows * format.BytesPerPixel()));
+        });
         return Create(name, OpCategory.Neighborhood, footprint, workspace,
             new KernelImplementations(PlanSteps.Neighborhood(op, halo, halo, into), op, into),
             requirements: ExecutionRequirements.RowBands, pass: pass, semantics: semantics);
@@ -182,7 +227,9 @@ public static class PlanOps
         Func<int, int, int, WorkingFormat, long>? scratch = null, IInputFootprint? footprint = null,
         PassModel pass = PassModel.Single, StateScope state = StateScope.None,
         ExecutionOrder order = ExecutionOrder.Any, Determinism determinism = Determinism.CoordinateDeterministic,
-        PixelSemantics? semantics = null, WorkingFormat? outputFormat = null)
+        PixelSemantics? semantics = null, WorkingFormat? outputFormat = null, bool scratchIncludesResult = false,
+        WorkspaceScope scratchScope = WorkspaceScope.PerWorker,
+        Func<int, int, int, WorkingFormat, long>? wholeImageScratch = null)
     {
         var requirements = ExecutionRequirements.WholeImage with
         {
@@ -191,8 +238,60 @@ public static class PlanOps
             Determinism = determinism,
         };
 
+        WorkspaceModel workspace;
+        if (scratch is null && wholeImageScratch is null)
+        {
+            workspace = WorkspaceModel.Undeclared;
+        }
+        else if (wholeImageScratch is not null)
+        {
+            if (scratchScope != WorkspaceScope.PerWorker)
+                throw new ArgumentException("A mixed global workspace requires per-worker scratch.", nameof(scratchScope));
+
+            workspace = WorkspaceModel.OfMixed(scratch,
+                (width, height, rows, format) =>
+                {
+                    var bytes = wholeImageScratch(width, height, rows, format);
+                    return scratchIncludesResult
+                        ? bytes
+                        : checked(bytes + ((long)width * height * format.BytesPerPixel()));
+                });
+        }
+        else if (scratch is not null && scratchScope == WorkspaceScope.WholeImage)
+        {
+            var declared = scratch;
+            workspace = WorkspaceModel.Of((width, height, rows, format) =>
+            {
+                var bytes = declared(width, height, rows, format);
+                return scratchIncludesResult
+                    ? bytes
+                    : checked(bytes + ((long)width * height * format.BytesPerPixel()));
+            }, WorkspaceScope.WholeImage);
+        }
+        else if (scratchScope == WorkspaceScope.PerCall)
+        {
+            // The algorithm's temporary state lives for one whole-image call, and the returned frame is also
+            // resident while the executor copies it into its destination.
+            workspace = WorkspaceModel.OfMixed(null,
+                scratchIncludesResult
+                    ? null
+                    : (width, height, _, format) =>
+                        (long)width * height * format.BytesPerPixel(),
+                scratch);
+        }
+        else
+        {
+            // Whole-frame buffers exist once for the call, while the operator's declared scratch is private to
+            // every active worker. Keep those lifetimes separate instead of multiplying the result frame.
+            workspace = WorkspaceModel.OfMixed(scratch,
+                scratchIncludesResult
+                    ? null
+                    : (width, height, _, format) =>
+                        (long)width * height * format.BytesPerPixel());
+        }
+
         return Create(name, OpCategory.Global, footprint ?? WholeSourceFootprint.Instance,
-            scratch is null ? WorkspaceModel.Undeclared : WorkspaceModel.Of(scratch),
+            workspace,
             new KernelImplementations(PlanSteps.Global(op), op),
             requirements: requirements, pass: pass, semantics: semantics, outputFormat: outputFormat);
     }
@@ -230,12 +329,16 @@ public static class PlanOps
     /// <summary>Gaussian blur; support is <c>ceil(3σ)</c>, which is where the halo comes from.</summary>
     public static ImageOp GaussianBlur(float sigma) =>
         Neighborhood(nameof(FilterOps.GaussianBlur), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)),
-            v => FilterOps.GaussianBlur(v, sigma), pass: PassModel.SeparableRows);
+            v => FilterOps.GaussianBlur(v, sigma),
+            (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows,
+                Math.Max(1, (int)MathF.Ceiling(sigma * 3f)), format),
+            pass: PassModel.SeparableRows, scratchIncludesResult: true);
 
     /// <summary>Box blur of the given radius; support is the radius.</summary>
     public static ImageOp BoxBlur(int radius) =>
         Neighborhood(nameof(FilterOps.BoxBlur), radius, v => FilterOps.BoxBlur(v, radius),
-            pass: PassModel.SeparableRows);
+            (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows, radius, format),
+            pass: PassModel.SeparableRows, scratchIncludesResult: true);
 
     /// <summary>
     /// Unsharp mask. It blurs internally, so its support follows the Gaussian (<c>ceil(3σ)</c>), not the single
@@ -243,21 +346,27 @@ public static class PlanOps
     /// </summary>
     public static ImageOp Sharpen(float amount = 0.5f, float sigma = 1f) =>
         Neighborhood(nameof(FilterOps.Sharpen), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)),
-            v => FilterOps.Sharpen(v, amount, sigma), pass: PassModel.SeparableRows);
+            v => FilterOps.Sharpen(v, amount, sigma),
+            (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows,
+                Math.Max(1, (int)MathF.Ceiling(sigma * 3f)), format, sharpen: true),
+            pass: PassModel.SeparableRows, scratchIncludesResult: true);
 
     /// <summary>3x3 emboss; one row and one column.</summary>
     public static ImageOp Emboss(float strength = 1f) =>
         Neighborhood(nameof(FilterOps.Emboss), 1, v => FilterOps.Emboss(v, strength),
+            (width, _, _, _) => FilterOps.Convolve3x3PlanScratchBytes(width),
             into: (window, destination, destinationY, rows, offset) =>
                 FilterOps.EmbossInto(window, destination, destinationY, rows, offset, strength));
 
     /// <summary>3x3 Sobel magnitude; one row and one column.</summary>
     public static ImageOp Sobel() => Neighborhood(nameof(FilterOps.Sobel), 1, v => FilterOps.Sobel(v),
+        (width, _, _, _) => FilterOps.GradientPlanScratchBytes(width),
         into: (window, destination, destinationY, rows, offset) =>
             FilterOps.SobelInto(window, destination, destinationY, rows, offset));
 
     /// <summary>3x3 median; one row and one column of context. Alpha is filtered like the colour channels.</summary>
     public static ImageOp Median3x3() => Neighborhood(nameof(FilterOps.Median3x3), 1, v => FilterOps.Median3x3(v),
+        (width, _, _, format) => FilterOps.Median3x3PlanScratchBytes(width, format),
         into: (window, destination, destinationY, rows, offset) =>
             FilterOps.Median3x3Into(window, destination, destinationY, rows, offset),
         semantics: PixelSemantics.EncodedFloatAlphaComputed);
@@ -273,8 +382,7 @@ public static class PlanOps
     /// <param name="radius">Window radius; 1 is 3×3, up to 8.</param>
     public static ImageOp Median(int radius) =>
         Neighborhood(nameof(FilterOps.Median), radius, v => FilterOps.Median(v, radius),
-            // Four channels are medianed, read from a band of rows widened by the radius on each side.
-            (width, _, rows, _) => (long)rows * width * 4,
+            (width, _, _, format) => FilterOps.MedianPlanScratchBytes(width, format, radius),
             semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     /// <summary>
@@ -301,7 +409,9 @@ public static class PlanOps
         var weights = kernel.ToArray();
         return Create("convolve", OpCategory.Neighborhood, WholeSourceFootprint.Instance,
             // One float RGBA copy of the window, which is a band plus the halo on both sides.
-            WorkspaceModel.Of((width, _, rows, _) => (long)rows * width * 16),
+            WorkspaceModel.Of((width, _, rows, format) =>
+                FilterOps.ConvolveBandedPlanScratchBytes(width, rows, weights.Length)
+                    + ((long)width * rows * format.BytesPerPixel())),
             new KernelImplementations(PlanSteps.Neighborhood(
                 (window, context, full) =>
                     FilterOps.ConvolveBanded(window, context, full, weights, radius, border, bias, constantValue),
@@ -334,7 +444,9 @@ public static class PlanOps
             throw new ArgumentException("A chain needs at least one transform.", nameof(transforms));
 
         var chain = transforms.ToArray();
-        return Create("point-chain", OpCategory.Point, IdentityFootprint.Instance, WorkspaceModel.None,
+        return Create("point-chain", OpCategory.Point, IdentityFootprint.Instance,
+            WorkspaceModel.Of((width, _, rows, format) =>
+                (long)width * rows * format.BytesPerPixel()),
             new KernelImplementations(PlanSteps.Point(v => FilterOps.PointChain(v, chain))),
             WorkingFormatMask.Rgba8, semantics: PixelSemantics.EncodedInteger);
     }
@@ -344,14 +456,22 @@ public static class PlanOps
     /// </summary>
     /// <param name="radius">Window radius; 1 is 3×3.</param>
     /// <param name="kind">Erode or dilate.</param>
-    public static ImageOp Morph(int radius, Abstractions.Morphology kind = Abstractions.Morphology.Erode) =>
-        kind is Abstractions.Morphology.Open or Abstractions.Morphology.Close
-            or Abstractions.Morphology.TopHat or Abstractions.Morphology.BlackHat
-            ? Neighborhood(nameof(FilterOps.MorphCombine), radius, v => FilterOps.MorphCombine(v, radius, kind), 
-                (width, height, _, _) => 4L * width * height * 4)
-            : Neighborhood(nameof(FilterOps.Morph), radius, v => FilterOps.Morph(v, radius, kind == Abstractions.Morphology.Erode),
-            // The separable passes hold the horizontal result plus its transpose: two extra frames.
-            (width, height, _, _) => 2L * width * height * 4);
+    public static ImageOp Morph(int radius, Abstractions.Morphology kind = Abstractions.Morphology.Erode)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        var combination = kind is Abstractions.Morphology.Open or Abstractions.Morphology.Close
+            or Abstractions.Morphology.TopHat or Abstractions.Morphology.BlackHat;
+        return combination
+            ? Neighborhood(nameof(FilterOps.MorphCombine), radius, v => FilterOps.MorphCombine(v, radius, kind),
+                (width, _, rows, format) =>
+                    FilterOps.MorphPlanWorkspaceBytes(width, rows, format, radius, kind),
+                scratchIncludesResult: true)
+            : Neighborhood(nameof(FilterOps.Morph), radius,
+                v => FilterOps.Morph(v, radius, kind == Abstractions.Morphology.Erode),
+                (width, _, rows, format) =>
+                    FilterOps.MorphPlanWorkspaceBytes(width, rows, format, radius, kind),
+                scratchIncludesResult: true);
+    }
 
     /// <summary>
     /// Porter-Duff composition whose overlay is supplied to <see cref="ProcessingPlan.Add(ImageOp, PixelView)"/>
@@ -447,12 +567,14 @@ public static class PlanOps
             outputFormat: WorkingFormat.Rgba32F,
             injectedRect: view => new PixelRect(0, 0, view.Width, view.Height));
 
-    /// <summary>Thresholded bloom. The highlights and the blurred copy are both full frames, so this is a whole-image
-    /// step (Frame only) rather than a banded one.</summary>
+    /// <summary>Thresholded bloom. The highlights and blurred copy are full frames, so the step runs as a
+    /// whole-image operation; its returned output buffer is included by the Global workspace wrapper.</summary>
     public static ImageOp Glow(float threshold = 0.7f, float sigma = 8f, float amount = 0.6f) =>
         Global(nameof(FilterOps.Glow), v => FilterOps.Glow(v, threshold, sigma, amount),
             (width, height, _, format) =>
-                (2L * width * height * format.BytesPerPixel()) + (16L * width * height));
+                FilterOps.GlowPlanWorkerScratchBytes(width, height, format, sigma),
+            wholeImageScratch: (width, height, _, format) =>
+                FilterOps.GlowPlanWholeImageScratchBytes(width, height, format));
 
     /// <summary>Warm or cool shift.</summary>
     /// <param name="amount">Positive warms, negative cools.</param>
@@ -557,7 +679,8 @@ public static class PlanOps
         ArgumentNullException.ThrowIfNull(palette);
         Func<PixelView, WorkingBuffer> op = v => PaletteQuantizer.Apply(v, palette);
         return Create("map-to-palette", OpCategory.Point, IdentityFootprint.Instance,
-            WorkspaceModel.Of((width, _, _, _) => 32768L + (16L * width)),
+            WorkspaceModel.Of((width, _, rows, format) =>
+                32768L + (16L * width) + ((long)width * rows * format.BytesPerPixel())),
             new KernelImplementations(PlanSteps.Point(op), op));
     }
 
@@ -566,15 +689,18 @@ public static class PlanOps
 
     /// <summary>Prewitt gradient magnitude; one row and one column.</summary>
     public static ImageOp Prewitt(bool bt709 = false) =>
-        Neighborhood(nameof(FilterOps.Prewitt), 1, v => FilterOps.Prewitt(v, bt709));
+        Neighborhood(nameof(FilterOps.Prewitt), 1, v => FilterOps.Prewitt(v, bt709),
+            (width, _, _, _) => FilterOps.GradientPlanScratchBytes(width));
 
     /// <summary>Scharr gradient magnitude; one row and one column.</summary>
     public static ImageOp Scharr(bool bt709 = false) =>
-        Neighborhood(nameof(FilterOps.Scharr), 1, v => FilterOps.Scharr(v, bt709));
+        Neighborhood(nameof(FilterOps.Scharr), 1, v => FilterOps.Scharr(v, bt709),
+            (width, _, _, _) => FilterOps.GradientPlanScratchBytes(width));
 
     /// <summary>Laplacian; one row and one column.</summary>
     public static ImageOp Laplacian(bool bt709 = false) =>
-        Neighborhood(nameof(FilterOps.Laplacian), 1, v => FilterOps.Laplacian(v, bt709));
+        Neighborhood(nameof(FilterOps.Laplacian), 1, v => FilterOps.Laplacian(v, bt709),
+            (width, _, _, _) => FilterOps.LaplacianPlanScratchBytes(width));
 
     /// <summary>A 3x3 convolution; one row and one column.</summary>
     public static ImageOp Convolve3x3(ReadOnlySpan<float> kernel, float bias = 0f)
@@ -582,7 +708,8 @@ public static class PlanOps
         if (kernel.Length != 9)
             throw new ArgumentException("A 3x3 kernel needs 9 weights.", nameof(kernel));
         var weights = kernel.ToArray();
-        return Neighborhood(nameof(FilterOps.Convolve3x3), 1, v => FilterOps.Convolve3x3(v, weights, bias));
+        return Neighborhood(nameof(FilterOps.Convolve3x3), 1, v => FilterOps.Convolve3x3(v, weights, bias),
+            (width, _, _, _) => FilterOps.Convolve3x3PlanScratchBytes(width));
     }
 
     /// <summary>
@@ -592,9 +719,10 @@ public static class PlanOps
     public static ImageOp DistanceTransform(float threshold = 0.5f) =>
         FormatStep("distance-transform", v => DistanceTransformOps.SquaredEuclidean(v, threshold),
             (width, height, _, _) =>
-                (4L * width * height) + (256L * height) + (16L * Math.Max(width, height)) + (16L * width),
+                (4L * width * height) + (256L * height) + (16L * Math.Max(width, height)) + (32L * width),
             WholeSourceFootprint.Instance, WorkingFormat.Rgba32F, PassModel.GatherThenApply,
-            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
+            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded },
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>
     /// Converts to a colour model (XYZ, Lab, YCbCr, ...) in Rgba32F. The output format differs from the input, so
@@ -606,7 +734,8 @@ public static class PlanOps
         FormatStep("convert-color-space",
             v => ColorConversionOps.Convert(v, target, ycbcr, limitedRange, white, adaptation),
             (width, _, _, _) => 16L * width, IdentityFootprint.Instance, WorkingFormat.Rgba32F, PassModel.Single,
-            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
+            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded },
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>
     /// ICC profile conversion. The profiles are parsed once for the whole image, so this is a Global step; its
@@ -617,8 +746,9 @@ public static class PlanOps
         var from = sourceProfile.ToArray();
         var to = destinationProfile.ToArray();
         return Global("icc-transform", v => IccTransformOps.Transform(v, from, to),
-            (width, _, _, _) => (8L << 20) + (16L * width),
-            footprint: IdentityFootprint.Instance);
+            (width, _, _, _) => 16L * width,
+            footprint: IdentityFootprint.Instance,
+            wholeImageScratch: (_, _, _, _) => 8L << 20);
     }
 
     /// <summary>
@@ -637,7 +767,7 @@ public static class PlanOps
                 var capacity = ((bandRows / 2) + 2) * chromaWidth;
                 return (2L * capacity * sizeof(float)) + (2L * chromaWidth * sizeof(double))
                     + (chromaWidth * sizeof(int)) + (16L * width);
-            });
+            }, scratchScope: WorkspaceScope.WholeImage);
     }
 
     /// <summary>HDR tone mapping. Auto-exposure needs the whole image's geometric mean first.</summary>
@@ -645,16 +775,18 @@ public static class PlanOps
         float whitePoint = 1f, bool autoExposure = false, float targetLuminance = 0.18f) =>
         Global(nameof(HdrOps.ToneMap),
             v => HdrOps.ToneMap(v, curve, exposure, whitePoint, autoExposure, targetLuminance),
-            (width, _, _, _) => (long)width * 16 * (autoExposure ? 2 : 1),
+            (width, _, _, _) => (long)width * 16,
             pass: autoExposure ? PassModel.GatherThenApply : PassModel.Single,
-            state: autoExposure ? StateScope.PerImage : StateScope.None);
+            state: autoExposure ? StateScope.PerImage : StateScope.None,
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>Error-diffusion or ordered dithering to <paramref name="bits"/> per channel; order matters.</summary>
     public static ImageOp Dither(int bits, DitherKernel kernel = DitherKernel.FloydSteinberg) =>
         Global(nameof(DitherOps.Dither), v => DitherOps.Dither(v, bits, kernel),
             (width, _, _, _) => 64L * width,
             state: StateScope.PerCall,
-            order: ExecutionOrder.SourceOrder);
+            order: ExecutionOrder.SourceOrder,
+            scratchScope: WorkspaceScope.PerCall);
 
     /// <summary>Builds a palette from the whole image and maps every pixel to it.</summary>
     public static ImageOp Quantize(int maxColors, Quantizer quantizer = Quantizer.MedianCut) =>
@@ -662,7 +794,8 @@ public static class PlanOps
             v => PaletteQuantizer.Apply(v, PaletteQuantizer.BuildWith(v, maxColors, quantizer)),
             (width, _, _, _) => (2L << 20) + (32L * width),
             pass: PassModel.GatherThenApply,
-            state: StateScope.PerImage);
+            state: StateScope.PerImage,
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>Builds a palette from the whole image, then dithers to it.</summary>
     public static ImageOp ReduceColors(int maxColors, Quantizer quantizer = Quantizer.MedianCut,
@@ -671,7 +804,8 @@ public static class PlanOps
             v => PaletteQuantizer.Dither(v, PaletteQuantizer.BuildWith(v, maxColors, quantizer), kernel, maxError),
             (width, _, _, _) => (2L << 20) + (80L * width),
             pass: PassModel.GatherThenApply,
-            state: StateScope.PerImage);
+            state: StateScope.PerImage,
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>Dithers to a caller-supplied palette; order matters.</summary>
     public static ImageOp DitherToPalette(ColorPalette palette,
@@ -681,7 +815,8 @@ public static class PlanOps
         return Global("dither-to-palette", v => PaletteQuantizer.Dither(v, palette, kernel, maxError),
             (width, _, _, _) => 32768L + (64L * width),
             state: StateScope.PerCall,
-            order: ExecutionOrder.SourceOrder);
+            order: ExecutionOrder.SourceOrder,
+            scratchScope: WorkspaceScope.PerCall);
     }
 
     /// <summary>
@@ -703,23 +838,34 @@ public static class PlanOps
     /// <param name="sigma">Gaussian sigma; the halo follows it.</param>
     public static ImageOp GaussianSharpen(float amount = 0.5f, float sigma = 1f) =>
         Neighborhood(nameof(FilterOps.GaussianSharpen), (int)Math.Ceiling(3 * sigma),
-            v => FilterOps.GaussianSharpen(v, amount, sigma), pass: PassModel.SeparableRows);
+            v => FilterOps.GaussianSharpen(v, amount, sigma),
+            (width, _, rows, _) =>
+                FilterOps.GaussianSharpenPlanScratchBytes(width, rows, (int)Math.Ceiling(3 * sigma)),
+            pass: PassModel.SeparableRows);
 
     /// <summary>3x3 erosion; one row and one column.</summary>
     public static ImageOp Erode3x3() => Neighborhood(nameof(FilterOps.Erode3x3), 1, v => FilterOps.Erode3x3(v),
+        (width, _, _, _) => FilterOps.Morph3x3PlanScratchBytes(width),
         into: (window, destination, destinationY, rows, offset) =>
             FilterOps.Erode3x3Into(window, destination, destinationY, rows, offset));
 
     /// <summary>3x3 dilation; one row and one column.</summary>
     public static ImageOp Dilate3x3() => Neighborhood(nameof(FilterOps.Dilate3x3), 1, v => FilterOps.Dilate3x3(v),
+        (width, _, _, _) => FilterOps.Morph3x3PlanScratchBytes(width),
         into: (window, destination, destinationY, rows, offset) =>
             FilterOps.Dilate3x3Into(window, destination, destinationY, rows, offset));
 
     /// <summary>Erosion then dilation, so two rows and two columns.</summary>
-    public static ImageOp Open3x3() => Neighborhood(nameof(FilterOps.Open3x3), 2, v => FilterOps.Open3x3(v));
+    public static ImageOp Open3x3() => Neighborhood(nameof(FilterOps.Open3x3), 2, v => FilterOps.Open3x3(v),
+        (width, _, rows, format) =>
+            FilterOps.MorphPlanWorkspaceBytes(width, rows, format, 1, Morphology.Open),
+        scratchIncludesResult: true);
 
     /// <summary>Dilation then erosion, so two rows and two columns.</summary>
-    public static ImageOp Close3x3() => Neighborhood(nameof(FilterOps.Close3x3), 2, v => FilterOps.Close3x3(v));
+    public static ImageOp Close3x3() => Neighborhood(nameof(FilterOps.Close3x3), 2, v => FilterOps.Close3x3(v),
+        (width, _, rows, format) =>
+            FilterOps.MorphPlanWorkspaceBytes(width, rows, format, 1, Morphology.Close),
+        scratchIncludesResult: true);
 
     /// <summary>Edge-preserving bilateral filter; its window is the radius.</summary>
     public static ImageOp Bilateral(int radius, float sigmaRange = 0.1f) =>
@@ -728,23 +874,32 @@ public static class PlanOps
     /// <summary>Bilateral with an explicit spatial sigma; the support is still the radius.</summary>
     public static ImageOp Bilateral(int radius, float sigmaSpace, float sigmaRange) =>
         Neighborhood(nameof(FilterOps.Bilateral), radius,
-            v => FilterOps.Bilateral(v, radius, sigmaSpace, sigmaRange));
+            v => FilterOps.Bilateral(v, radius, sigmaSpace, sigmaRange),
+            (width, _, _, _) => FilterOps.BilateralPlanScratchBytes(width, radius));
 
     /// <summary>Directional blur; its taps span half the length either side.</summary>
     public static ImageOp MotionBlur(int length, float angleDegrees = 0f) =>
-        Neighborhood(nameof(FilterOps.MotionBlur), Math.Max(1, (length + 1) / 2), v => FilterOps.MotionBlur(v, length, angleDegrees));
+        Neighborhood(nameof(FilterOps.MotionBlur), Math.Max(1, (length + 1) / 2),
+            v => FilterOps.MotionBlur(v, length, angleDegrees),
+            (width, _, _, _) => FilterOps.AverageOffsetsPlanScratchBytes(width, length / 2, length));
 
     /// <summary>Disc-shaped bokeh; its offsets stay inside the radius.</summary>
-    public static ImageOp BokehBlur(int radius) => Neighborhood(nameof(FilterOps.BokehBlur), radius, v => FilterOps.BokehBlur(v, radius));
+    public static ImageOp BokehBlur(int radius)
+    {
+        var offsets = 0;
+        for (var y = -radius; y <= radius; y++)
+        for (var x = -radius; x <= radius; x++)
+            if ((x * x) + (y * y) <= radius * radius)
+                offsets++;
+
+        return Neighborhood(nameof(FilterOps.BokehBlur), radius, v => FilterOps.BokehBlur(v, radius),
+            (width, _, _, _) => FilterOps.AverageOffsetsPlanScratchBytes(width, radius, offsets));
+    }
 
     /// <summary>Guided filter; its window is the radius.</summary>
     public static ImageOp GuidedFilter(int radius, float epsilon = 1e-4f) =>
         Neighborhood("guided", radius, v => GuidedFilterOps.GuidedFilter(v, radius, epsilon),
-            // Five float planes over bandRows + 4·radius rows (the operator widens the band by 2·radius on each
-            // side, so its row count is the estimator's `rows` plus another 2·radius), plus the full-image copy
-            // it makes up front. Both terms are read off GuidedFilterOps, not assumed.
-            (width, height, rows, format) =>
-                ((long)(rows + (2 * radius)) * width * 20) + ((long)width * height * format.BytesPerPixel()));
+            (width, _, rows, _) => GuidedFilterOps.GuidedFilterPlanScratchBytes(width, rows, radius));
 
     /// <summary>Guided filter whose guide is supplied at <c>Add</c> time. The port reports the whole guide until the
     /// view is known, which is the safe direction.</summary>
@@ -753,14 +908,15 @@ public static class PlanOps
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
         return Create("guided-by", OpCategory.Composite, new HaloFootprint(radius, radius),
-            WorkspaceModel.Of((width, height, rows, format) =>
-                ((long)(rows + (2 * radius)) * width * 20) + ((long)width * height * format.BytesPerPixel()),
+            WorkspaceModel.Of(
+                (width, height, _, format) =>
+                    GuidedFilterOps.CrossGuidedPlanWorkspaceBytes(width, height, format, radius, bandRows),
                 WorkspaceScope.WholeImage),
             new KernelImplementations(
                 (_, _, _, _) => throw new InvalidOperationException(
                     "'guided-by' needs its guide injected; add it with ProcessingPlan.Add(operator, second)."),
                 secondKernel: PlanSteps.GuidedBy(radius, epsilon, bandRows)),
-            WorkingFormatMask.All, ExecutionRequirements.WholeImage,
+            WorkingFormatMask.All, ExecutionRequirements.WholeImage with { Threading = ThreadSafety.SingleThread },
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("guide", PortRole.Guide, WorkingFormatMask.All, Required: true,
                 WholeSourceFootprint.Instance),
@@ -774,15 +930,18 @@ public static class PlanOps
     public static ImageOp NonLocalMeans(int searchRadius, int patchRadius = 1, float h = 0.1f) =>
         Neighborhood(nameof(NonLocalMeansOps.NonLocalMeans), searchRadius + patchRadius,
             v => NonLocalMeansOps.NonLocalMeans(v, searchRadius, patchRadius, h),
-            // Per worker: the decoded ring (rows × one pixel per row) plus six scratch arrays of width entries —
-            // one long[] and five double[] — plus the output row of four floats. `rows` already carries the
-            // search + patch halo. ArrayPool may hand back a longer array, which this does not model.
+            // Per worker: the decoded ring (rows × one pixel per row) plus the output row of four floats.
+            // Integer formats also use a rolling SSD path with one long[] and five double[] accumulators;
+            // Rgba32F deliberately uses the exact per-tap path and does not allocate those six arrays.
+            // ArrayPool may hand back longer arrays; the declaration describes requested lengths.
             (width, _, rows, format) =>
-                ((long)rows * width * format.BytesPerPixel()) + ((long)width * (8 + 40 + 16)));
+                ((long)rows * width * format.BytesPerPixel()) +
+                ((long)width * (format == WorkingFormat.Rgba32F ? 16 : 8 + 40 + 16)));
 
     /// <summary>Oil paint; its histogram window is the radius.</summary>
     public static ImageOp OilPaint(int radius, int levels = 20) =>
-        Neighborhood(nameof(OilPaintOps.OilPaint), radius, v => OilPaintOps.OilPaint(v, radius, levels));
+        Neighborhood(nameof(OilPaintOps.OilPaint), radius, v => OilPaintOps.OilPaint(v, radius, levels),
+            (width, _, _, _) => FilterOps.OilPaintPlanScratchBytes(width, radius, levels));
 
     /// <summary>
     /// Vignette. It darkens by distance from the image centre, so a band would see its own centre instead — the
@@ -796,29 +955,37 @@ public static class PlanOps
     public static ImageOp Clahe(int tilesX = 8, int tilesY = 8, float clipLimit = 3f) =>
         // One int histogram per tile per channel, plus the destination row.
         Global(nameof(ClaheOps.Clahe), v => ClaheOps.Clahe(v, tilesX, tilesY, clipLimit),
-            (width, _, _, _) => ((long)tilesX * tilesY * 3 * 256 * 4) + ((long)width * 16),
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+            (width, _, _, _) => 16L * width,
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage,
+            wholeImageScratch: (_, _, _, _) =>
+                2L * tilesX * tilesY * 3 * 256 * sizeof(float));
 
     /// <summary>Local Laplacian: a pyramid, so every band would need the whole image anyway.</summary>
     public static ImageOp LocalLaplacian(int levels = 5, int samples = 32, float alpha = 0.25f, float beta = 1f,
         float sigmaR = 0.15f) =>
         Global(nameof(LocalLaplacianOps.LocalLaplacian),
             v => LocalLaplacianOps.LocalLaplacian(v, levels, samples, alpha, beta, sigmaR),
-            (width, height, _, _) => LocalLaplacianOps.ScratchBytes(width, height, levels, samples),
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+            (width, height, _, format) =>
+                LocalLaplacianOps.ScratchBytes(width, height, format, levels, samples),
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage, scratchIncludesResult: true,
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>Per-channel histogram stretch; whole-image statistics.</summary>
     public static ImageOp Normalize() =>
-        // One 256-bin histogram plus the destination row the executor already provides.
-        Global(nameof(PointOps.Normalize), v => PointOps.Normalize(v), (width, _, _, _) => 1024L + ((long)width * 16),
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+        Global(nameof(PointOps.Normalize), v => PointOps.Normalize(v),
+            (width, _, _, _) => (long)width * 16,
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage,
+            wholeImageScratch: (width, _, _, _) => (16L * width) + (6L * sizeof(float)));
 
     /// <summary>Adaptive threshold: a local mean, but its window is wider than any band worth carrying.</summary>
     public static ImageOp AdaptiveThreshold(int radius = 8, float offset = 0.05f) =>
         // A (2r+1)-row float window of the full width, plus the working row.
         Global(nameof(ThresholdOps.AdaptiveThreshold), v => ThresholdOps.AdaptiveThreshold(v, radius, offset),
-            (width, _, _, _) => ((long)((radius * 2) + 1) * width * 4) + ((long)width * 16),
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+            (width, _, _, _) =>
+                ((long)((radius * 2) + 1) * width * sizeof(float))
+                + (52L * width) + (2L * sizeof(double)),
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage,
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>
     /// Block-aligned mosaic. A block spans rows that a band boundary can cut anywhere, so no halo is correct —
@@ -838,21 +1005,28 @@ public static class PlanOps
             // when the transmission is refined — the luma guide, the guided filter's six planes and the box
             // mean's temporary, all alive at once. Ten planes, not three: the earlier declaration charged the
             // whole refinement as "one more plane" and under-reported the 1080p peak by 58 MiB.
-            (width, _, rows, _) =>
+            (width, height, rows, format) =>
             {
                 var planes = refineRadius > 0 ? 10 : 2;
                 var ringRows = Math.Min(rows, (2 * patchRadius) + 1);
+                // Dehaze returns its own full-size WorkingBuffer; PlanSteps.Global copies that into the
+                // executor's destination, so this frame is additional operator workspace.
                 return (planes * (long)width * rows * sizeof(float))
                     + ((long)ringRows * width * sizeof(float))
                     + ((long)width * sizeof(float))
-                    + (2L * width * 4 * sizeof(float));
+                    + (2L * width * 4 * sizeof(float))
+                    + ((long)width * height * format.BytesPerPixel());
             },
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage, scratchIncludesResult: true,
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>Histogram equalisation needs the whole image to build its transfer curve.</summary>
     public static ImageOp Equalize() =>
-        // Three 256-bin histograms turned into three LUTs, plus the destination row.
         Global(nameof(HistogramOps.Equalize), v => HistogramOps.Equalize(v),
-            (width, _, _, _) => (3L * 256 * 4) + ((long)width * 16),
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+            // The Rgba8 histogram pass allocates one 3×256 int histogram per worker. The merged histograms,
+            // three LUTs and BuildLut CDF are shared; non-Rgba8 uses one serial float row while gathering.
+            (width, _, _, format) => format == WorkingFormat.Rgba8 ? 3L * 256 * sizeof(int) : 0L,
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage,
+            wholeImageScratch: (width, _, _, format) =>
+                8192L + (format == WorkingFormat.Rgba8 ? 0L : (16L * width)));
 }

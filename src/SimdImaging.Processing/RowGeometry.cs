@@ -5,18 +5,42 @@ namespace SimdImaging.Processing;
 
 /// <summary>Mirrors each row left to right as it passes: the row-local half of <c>FlipHorizontal</c>, streamable
 /// because no row depends on any other.</summary>
-internal sealed class FlipRowSource(IRowSource source) : IRowSource, IDisposable
+internal sealed class FlipRowSource : IRowSource, IDisposable
 {
-    private readonly byte[] _row = new byte[source.Width * source.Format.BytesPerPixel()];
-    private readonly int _rowBytes = source.Width * source.Format.BytesPerPixel();
-    private readonly int _bytesPerPixel = source.Format.BytesPerPixel();
+    private readonly IRowSource _source;
+    private byte[] _row;
+    private readonly int _rowBytes;
+    private readonly int _bytesPerPixel;
+    private readonly IDisposable? _workspaceLease;
     private bool _disposed;
 
-    public int Width => source.Width;
+    public FlipRowSource(IRowSource source, ExecuteOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        options ??= new ExecuteOptions();
+        _source = source;
+        _rowBytes = checked(source.Width * source.Format.BytesPerPixel());
+        _bytesPerPixel = source.Format.BytesPerPixel();
+        if (options.MaxWorkingBytes > 0 && _rowBytes > options.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"The horizontal-flip row buffer needs {_rowBytes} bytes, above " +
+                $"ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
 
-    public int Height => source.Height;
+        _workspaceLease = options.Workspace?.Reserve(_rowBytes, "horizontal-flip row");
+        try
+        {
+            _row = new byte[_rowBytes];
+        }
+        catch
+        {
+            _workspaceLease?.Dispose();
+            throw;
+        }
+    }
 
-    public WorkingFormat Format => source.Format;
+    public int Width => _source.Width;
+    public int Height => _source.Height;
+    public WorkingFormat Format => _source.Format;
 
     public int ReadRows(Span<byte> destination, int stride, int maxRows)
     {
@@ -24,17 +48,18 @@ internal sealed class FlipRowSource(IRowSource source) : IRowSource, IDisposable
         if (stride == 0)
             stride = _rowBytes;
 
+        var row = _row;
         var copied = 0;
         while (copied < maxRows)
         {
-            var read = source.ReadRows(_row, 0, 1);
+            var read = _source.ReadRows(row, 0, 1);
             if (read <= 0)
                 break;
 
             var target = destination.Slice(copied * stride, _rowBytes);
             for (var x = 0; x < Width; x++)
             {
-                _row.AsSpan(x * _bytesPerPixel, _bytesPerPixel)
+                row.AsSpan(x * _bytesPerPixel, _bytesPerPixel)
                     .CopyTo(target.Slice((Width - 1 - x) * _bytesPerPixel, _bytesPerPixel));
             }
 
@@ -44,7 +69,14 @@ internal sealed class FlipRowSource(IRowSource source) : IRowSource, IDisposable
         return copied;
     }
 
-    public void Dispose() => _disposed = true;
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        _row = Array.Empty<byte>();
+        _workspaceLease?.Dispose();
+    }
 }
 
 /// <summary>
@@ -61,11 +93,13 @@ internal sealed class PadRowSource : IRowSource, IDisposable
     private readonly int _bytesPerPixel;
     private readonly int _sourceRowBytes;
     private readonly int _rowBytes;
-    private readonly byte[] _row;
+    private byte[] _row;
+    private IDisposable? _workspaceLease;
     private int _outRow;
     private bool _disposed;
 
-    public PadRowSource(IRowSource source, int left, int top, int right, int bottom, RgbaColor color)
+    public PadRowSource(IRowSource source, int left, int top, int right, int bottom, RgbaColor color,
+        ExecuteOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentOutOfRangeException.ThrowIfNegative(left);
@@ -79,10 +113,28 @@ internal sealed class PadRowSource : IRowSource, IDisposable
         _right = right;
         _color = color;
         _bytesPerPixel = source.Format.BytesPerPixel();
-        _sourceRowBytes = source.Width * _bytesPerPixel;
-        _rowBytes = (source.Width + left + right) * _bytesPerPixel;
-        _row = new byte[_sourceRowBytes];
-        Height = source.Height + top + bottom;
+        _sourceRowBytes = checked(source.Width * _bytesPerPixel);
+        _rowBytes = checked(checked(source.Width + left + right) * _bytesPerPixel);
+        var outputHeight = checked(source.Height + top + bottom);
+        options ??= new ExecuteOptions();
+        if (options.MaxWorkingBytes > 0 && _sourceRowBytes > options.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"The padding source-row buffer needs {_sourceRowBytes} bytes, above " +
+                $"ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
+
+        _workspaceLease = options.Workspace?.Reserve(_sourceRowBytes, "padding source row");
+        try
+        {
+            _row = new byte[_sourceRowBytes];
+        }
+        catch
+        {
+            _workspaceLease?.Dispose();
+            _workspaceLease = null;
+            throw;
+        }
+
+        Height = outputHeight;
     }
 
     public int Width => _source.Width + _left + _right;
@@ -97,6 +149,7 @@ internal sealed class PadRowSource : IRowSource, IDisposable
         if (stride == 0)
             stride = _rowBytes;
 
+        var row = _row;
         var copied = 0;
         while (copied < maxRows && _outRow < Height)
         {
@@ -107,14 +160,14 @@ internal sealed class PadRowSource : IRowSource, IDisposable
             }
             else
             {
-                var read = _source.ReadRows(_row, 0, 1);
+                var read = _source.ReadRows(row, 0, 1);
                 if (read != 1)
                     throw new InvalidDataException(
                         $"The row source ended at output row {_outRow}; the pad needs {_source.Height} source rows.");
 
                 if (_left > 0)
                     DrawOps.FillRow(target[..(_left * _bytesPerPixel)], _left, _color, Format);
-                _row.AsSpan(0, _sourceRowBytes)
+                row.AsSpan(0, _sourceRowBytes)
                     .CopyTo(target.Slice(_left * _bytesPerPixel, _sourceRowBytes));
                 if (_right > 0)
                     DrawOps.FillRow(target[((_left * _bytesPerPixel) + _sourceRowBytes)..], _right, _color, Format);
@@ -127,5 +180,13 @@ internal sealed class PadRowSource : IRowSource, IDisposable
         return copied;
     }
 
-    public void Dispose() => _disposed = true;
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        _row = Array.Empty<byte>();
+        _workspaceLease?.Dispose();
+        _workspaceLease = null;
+    }
 }

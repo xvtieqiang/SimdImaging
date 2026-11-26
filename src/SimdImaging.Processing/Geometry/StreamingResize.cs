@@ -8,7 +8,7 @@ namespace SimdImaging.Processing.Geometry;
 /// <summary>
 /// A resize presented as rows: destination rows are produced on demand from a forward source, so a resize can sit
 /// between two plans (or between a region and a sink) without an intermediate image.
-/// <para>The arithmetic is the separable path <see cref="Resample.Resize"/> uses — the same <c>WeightTable</c>, the
+/// <para>The arithmetic is the separable path <see cref="Resample.Resize(PixelView, int, int, Resampler, IPixelPool?)"/> uses — the same <c>WeightTable</c>, the
 /// same premultiplied float rows, the same vertical convolution — so the bytes are identical.</para>
 /// <para>Source rows are pulled in chunks so the horizontal pass can run one row per worker (a 4× downscale spends
 /// four times as much work horizontally as vertically), and destination rows are emitted in batches so the vertical
@@ -34,6 +34,7 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
     private readonly WeightTable _weightsX;
     private readonly WeightTable _weightsY;
     private readonly CancellationToken _cancellation;
+    private readonly int _degree;
 
     // Nearest keeps the whole-image path's point-sampling fast path; every other filter takes the separable one.
     private readonly bool _nearest;
@@ -70,11 +71,10 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
         _srcRowBytes = checked(_sourceWidth * _format.BytesPerPixel());
         _destStride = checked(width * 4);
         _cancellation = options.CancellationToken;
+        _degree = options.MaxDegreeOfParallelism > 0 ? options.MaxDegreeOfParallelism : RowParallel.Degree;
 
         _weightsX = WeightTable.Build(_sourceWidth, width, resampler);
         _weightsY = WeightTable.Build(_sourceHeight, height, resampler);
-        _sourceRow = new byte[_srcRowBytes];
-
         _tapX = 0;
         _tapY = 0;
         _nearest = resampler == Resampler.Nearest && _format == WorkingFormat.Rgba8
@@ -90,19 +90,35 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
         // release, because a throwing constructor has no Dispose.
         ResidentBytes = workspace.TotalBytes;
         _workspaceLease = options.Workspace?.Reserve(ResidentBytes, "resize ring");
+        float[]? ring = null;
+        byte[]? staging = null;
+        WorkingBuffer? ready = null;
         try
         {
+            // Keep partial construction local: a failed later rent must return every earlier allocation because a
+            // throwing constructor cannot be disposed by its caller.
+            var sourceRow = new byte[_srcRowBytes];
             if (!workspace.IsNearest)
             {
-                _ring = FloatScratch.Rent(checked(_ringRows * _destStride));
-                _staging = ArrayPool<byte>.Shared.Rent(checked(_chunkRows * _srcRowBytes));
+                ring = FloatScratch.Rent(checked(_ringRows * _destStride));
+                staging = ArrayPool<byte>.Shared.Rent(checked(_chunkRows * _srcRowBytes));
             }
 
-            _ready = WorkingBuffer.Rent(width, workspace.ReadyRows, _format);
+            ready = WorkingBuffer.Rent(width, workspace.ReadyRows, _format);
+            _sourceRow = sourceRow;
+            _ring = ring;
+            _staging = staging;
+            _ready = ready ?? throw new InvalidOperationException("The resize output batch was not allocated.");
         }
         catch
         {
+            ready?.Dispose();
+            if (ring is not null)
+                FloatScratch.Return(ring);
+            if (staging is not null)
+                ArrayPool<byte>.Shared.Return(staging);
             _workspaceLease?.Dispose();
+            _workspaceLease = null;
             throw;
         }
     }
@@ -264,7 +280,7 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
             {
                 FloatScratch.Return(floatRow);
             }
-        });
+        }, _degree, _cancellation);
     }
 
     /// <summary>Produces destination rows <c>[start, start + count)</c> into the ready batch.</summary>
@@ -278,21 +294,32 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
         // 64 K-pixel gate and would run the vertical pass on one core.
         RowParallel.ForBands(count, (from, to) =>
         {
-            var outputRow = FloatScratch.Rent(_destStride);
+            float[]? outputRow = null;
+            int[]? tapRows = null;
+            float[]? tapWeights = null;
             try
             {
+                outputRow = FloatScratch.Rent(_destStride);
+                if (_weightsY.Taps > Resample.VerticalStackTapLimit)
+                {
+                    tapRows = new int[_weightsY.Taps];
+                    tapWeights = new float[_weightsY.Taps];
+                }
+
                 for (var k = from; k < to; k++)
                 {
                     var dy = start + k;
-                    Resample.VerticalRow(ring, _ringRows, _sourceHeight, _destWidth, dy, _weightsY, outputRow);
-                    Pixels.WriteRowUnpremultiplied(outputRow, _destWidth, _format, bandView.Row(outBase + k));
+                    Resample.VerticalRow(ring, _ringRows, _sourceHeight, _destWidth, dy, _weightsY, outputRow!,
+                        tapRows, tapWeights);
+                    Pixels.WriteRowUnpremultiplied(outputRow!, _destWidth, _format, bandView.Row(outBase + k));
                 }
             }
             finally
             {
-                FloatScratch.Return(outputRow);
+                if (outputRow is not null)
+                    FloatScratch.Return(outputRow);
             }
-        });
+        }, _degree, _cancellation);
 
         _readyCount += count;
     }
@@ -302,15 +329,22 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
 
     public void Dispose()
     {
-        _workspaceLease?.Dispose();
         if (_disposed)
             return;
         _disposed = true;
-        _ready.Dispose();
-        if (_ring is not null)
-            FloatScratch.Return(_ring);
-        if (_staging is not null)
-            ArrayPool<byte>.Shared.Return(_staging);
+        try
+        {
+            _ready.Dispose();
+            if (_ring is not null)
+                FloatScratch.Return(_ring);
+            if (_staging is not null)
+                ArrayPool<byte>.Shared.Return(_staging);
+        }
+        finally
+        {
+            _workspaceLease?.Dispose();
+            _workspaceLease = null;
+        }
     }
 }
 
@@ -328,8 +362,25 @@ internal static class StreamingResize
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sink);
         options ??= new ExecuteOptions();
+        options = options.Workspace is not null
+            ? options
+            : options with { Workspace = new WorkspaceManager(options.MaxWorkingBytes) };
+
+        var weightsX = WeightTable.Build(source.Width, width, resampler);
+        var weightsY = WeightTable.Build(source.Height, height, resampler);
+        var tapX = 0;
+        var tapY = 0;
+        var nearest = resampler == Resampler.Nearest && source.Format == WorkingFormat.Rgba8
+                      && Resample.TryNearestTap(weightsX, out tapX)
+                      && Resample.TryNearestTap(weightsY, out tapY);
+        var workspace = ResizeWorkspace.Estimate(source.Width, source.Height, width, height, weightsY.Taps,
+            nearest, source.Format, options);
+        var copyBytes = checked((long)width * Math.Min(Pipeline.TransferRows, height)
+            * source.Format.BytesPerPixel());
+        WorkingSetBudget.Ensure(checked(workspace.TotalBytes + copyBytes), 0, 1, options,
+            "The streaming resize and transfer pipeline");
 
         using var rows = new ResizeRowSource(source, width, height, resampler, options);
-        return Pipeline.Copy(rows, sink, options.CancellationToken);
+        return Pipeline.Copy(rows, sink, options.CancellationToken, options);
     }
 }

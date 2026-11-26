@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Internal;
+using SimdImaging.Processing.Contracts;
 
 namespace SimdImaging.Tests;
 
@@ -96,6 +98,21 @@ public class GuidedFilterTests
     }
 
     [Fact]
+    public void CrossGuidedPlanAdapter_DeclaresOneWholeImageScratchLifetime()
+    {
+        const int width = 96;
+        const int height = 96;
+        const int radius = 3;
+        const int bandRows = 32;
+        var op = PlanOps.GuidedBy(radius, bandRows: bandRows);
+
+        op.Scratch!(width, height, height, WorkingFormat.Rgba8).ShouldBe(
+            GuidedFilterOps.CrossGuidedPlanWorkspaceBytes(width, height, WorkingFormat.Rgba8, radius, bandRows));
+        op.Contract.Workspace.HasPerWorkerEstimate.ShouldBeFalse();
+        op.Contract.Workspace.HasWholeImageEstimate.ShouldBeTrue();
+        op.Contract.Requirements.Threading.ShouldBe(ThreadSafety.SingleThread);
+    }
+    [Fact]
     public void TheCrossFilterMatchesADirectWindowReference()
     {
         const int width = 7;
@@ -134,6 +151,32 @@ public class GuidedFilterTests
         return values;
     }
 
+    [Fact]
+    public void CrossGuidedParallelBandWorkersMatchSingleWorkerOutput()
+    {
+        const int width = 40;
+        const int height = 24;
+        const int radius = 2;
+        const int bandRows = 4;
+        using var source = FloatImage(width, height, (x, y, c) => ((x * 3 + y * 5 + c) % 11) / 10f);
+        using var guide = FloatImage(width, height, (x, y, c) => ((x + y * 2 + c * 3) % 7) / 6f);
+        var previousDegree = RowParallel.DegreeOverride;
+        try
+        {
+            RowParallel.DegreeOverride = 1;
+            using var serial = GuidedFilterOps.GuidedFilter(source[0].Pixels.View, guide[0].Pixels.View,
+                radius, 0.01f, bandRows);
+            RowParallel.DegreeOverride = 4;
+            using var parallel = GuidedFilterOps.GuidedFilter(source[0].Pixels.View, guide[0].Pixels.View,
+                radius, 0.01f, bandRows);
+
+            parallel.View.Span.ToArray().ShouldBe(serial.View.Span.ToArray());
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previousDegree;
+        }
+    }
     [Fact]
     public void PassingTheImageItselfIsByteIdenticalToTheSelfGuidedOverload()
     {

@@ -1,6 +1,8 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Geometry;
+using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Processing.Compilation;
 
@@ -22,11 +24,26 @@ internal static class CompiledPlanExecutor
         options ??= new ExecuteOptions();
 
         var current = source;
+        var sourceBytes = checked((long)source.Width * source.Height * source.Format.BytesPerPixel());
         WorkingBuffer? owned = null;
+        IDisposable? retainedSourceLease = null;
+        var retainedSourceReserved = false;
+        var hasCompletedSection = false;
         try
         {
             foreach (var section in plan.Sections)
             {
+                // The caller's original source remains live after the first section has produced an owned frame.
+                // Keep that baseline in the shared account while later sections operate on their own intermediates.
+                if (hasCompletedSection && !retainedSourceReserved)
+                {
+                    retainedSourceLease = options.Workspace?.Reserve(sourceBytes, "compiled frame retained source");
+                    retainedSourceReserved = true;
+                    if (options.MaxWorkingBytes > 0 && sourceBytes >= options.MaxWorkingBytes)
+                        throw new InvalidOperationException(
+                            $"The retained source needs {sourceBytes} bytes, leaving no budget for the next frame section.");
+                }
+
                 WorkingBuffer next;
                 if (section.Kind == CompiledSectionKind.OperatorRun)
                 {
@@ -34,8 +51,14 @@ internal static class CompiledPlanExecutor
                     var sectionObserver = observe is null
                         ? null
                         : new PlanObserver((index, name, view) => observe(section.FirstStep + index, name, view));
+                    var sectionOptions = options;
+                    if (hasCompletedSection && options.MaxWorkingBytes > 0)
+                        sectionOptions = options with
+                        {
+                            MaxWorkingBytes = options.MaxWorkingBytes - sourceBytes,
+                        };
                     next = ProcessingPlan.FromCompiled(steps, plan.BandRows)
-                        .ExecuteWithOptions(current, options, pool, sectionObserver);
+                        .ExecuteWithOptions(current, sectionOptions, pool, sectionObserver);
                 }
                 else if (section.Kind == CompiledSectionKind.Format)
                 {
@@ -45,9 +68,30 @@ internal static class CompiledPlanExecutor
                     var output = formatStep.Operator.Contract.Output.Format!.Value;
                     var formatOld = (long)current.Width * current.Height * current.Format.BytesPerPixel();
                     var formatNew = (long)current.Width * current.Height * output.BytesPerPixel();
-                    CheckBudget(options, formatOld + formatNew, $"the format step '{formatStep.Name}'");
-                    using (options.Workspace?.Reserve(formatOld + formatNew, "format transition"))
+                    var formatWorkspace = formatStep.Operator.Contract.Workspace;
+                    var formatScratch = 0L;
+                    if (formatWorkspace.HasWholeImageEstimate ||
+                        formatWorkspace.PerCallEstimate is not null)
+                        formatScratch = checked(formatScratch
+                            + formatWorkspace.EstimateWholeImage(current.Width, current.Height, current.Format));
+                    if (formatWorkspace.HasPerWorkerEstimate)
                     {
+                        var workers = formatStep.Operator.Contract.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : Math.Min(RowParallel.ResolveDegree(options.MaxDegreeOfParallelism), current.Height);
+                        formatScratch = checked(formatScratch + checked(formatWorkspace.EstimatePerWorkerScratch(
+                            current.Width, current.Height, current.Height, current.Format) * workers));
+                    }
+                    var formatWorkingSet = checked(formatOld + formatNew + formatScratch);
+                    var totalFormatWorkingSet = checked(formatWorkingSet
+                        + (hasCompletedSection ? sourceBytes : 0L));
+                    CheckBudget(options, totalFormatWorkingSet, $"the format step '{formatStep.Name}'");
+                    using (options.Workspace?.Reserve(formatWorkingSet, "format transition"))
+                    {
+                        var degree = formatStep.Operator.Contract.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : options.MaxDegreeOfParallelism;
+                        using var topLevel = RowParallel.EnterTopLevel(degree);
                         next = formatStep.Second is { } second &&
                                formatStep.Operator.Kernels.WholeImageSecond is { } two
                             ? two(current, second)
@@ -64,12 +108,30 @@ internal static class CompiledPlanExecutor
                     // scratch, so the ceiling is checked against everything the reshape can allocate — before the
                     // allocation, not after it.
                     var (width, height) = geometry.Geometry.Map(current.Width, current.Height);
-                    var scratch = geometry.Descriptor.WorkspaceModel.Estimate?.Invoke(width, height, height,
-                        current.Format) ?? 0;
-                    var bytes = oldBytes + ((long)width * height * current.Format.BytesPerPixel()) + scratch;
-                    CheckBudget(options, bytes, $"the geometry step '{geometry.Name}'");
+                    var geometryWorkspace = geometry.Descriptor.WorkspaceModel;
+                    var scratch = 0L;
+                    if (geometryWorkspace.HasWholeImageEstimate ||
+                        geometryWorkspace.PerCallEstimate is not null)
+                        scratch = checked(scratch
+                            + geometryWorkspace.EstimateWholeImage(width, height, current.Format));
+                    if (geometryWorkspace.HasPerWorkerEstimate)
+                    {
+                        var workers = geometry.Descriptor.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : Math.Min(RowParallel.ResolveDegree(options.MaxDegreeOfParallelism), height);
+                        scratch = checked(scratch + checked(geometryWorkspace.EstimatePerWorkerScratch(
+                            width, height, height, current.Format) * workers));
+                    }
+                    var bytes = checked(oldBytes
+                        + ((long)width * height * current.Format.BytesPerPixel()) + scratch);
+                    var totalBytes = checked(bytes + (hasCompletedSection ? sourceBytes : 0L));
+                    CheckBudget(options, totalBytes, $"the geometry step '{geometry.Name}'");
                     using (options.Workspace?.Reserve(bytes, "geometry transition"))
                     {
+                        var degree = geometry.Descriptor.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : options.MaxDegreeOfParallelism;
+                        using var topLevel = RowParallel.EnterTopLevel(degree);
                         next = geometry.Reshape(current, pool);
                     }
                 }
@@ -77,16 +139,33 @@ internal static class CompiledPlanExecutor
                 owned?.Dispose();
                 owned = next;
                 current = next.View;
+                hasCompletedSection = true;
             }
         }
         catch
         {
-            owned?.Dispose();
+            try
+            {
+                owned?.Dispose();
+            }
+            finally
+            {
+                retainedSourceLease?.Dispose();
+            }
             throw;
         }
 
-        // An empty plan is still a request for a picture of the caller's own.
-        return owned ?? Transforms.Copy(source, pool);
+        retainedSourceLease?.Dispose();
+
+        // An empty plan is still a request for a picture of the caller's own. Reserve the copy destination
+        // before renting it, just as the non-empty paths reserve their output before execution.
+        if (owned is not null)
+            return owned;
+
+        var copyBytes = checked((long)source.Width * source.Height * source.Format.BytesPerPixel());
+        CheckBudget(options, checked(sourceBytes + copyBytes), "the empty frame plan copy");
+        using (options.Workspace?.Reserve(copyBytes, "empty frame plan destination"))
+            return Transforms.Copy(source, pool);
     }
 
     /// <summary>
@@ -127,29 +206,38 @@ internal static class CompiledPlanExecutor
 
         var owned = new List<IDisposable>();
         IRowSource current = source;
-        foreach (var section in plan.Sections)
+        try
         {
-            if (section.Kind == CompiledSectionKind.Format)
-                throw new InvalidOperationException(
-                    "A format-changing section has no row form; the compiler must not choose Stream for it.");
-
-            if (section.Kind == CompiledSectionKind.OperatorRun)
+            foreach (var section in plan.Sections)
             {
-                var steps = Slice(plan.Steps, section.FirstStep, section.StepCount);
-                var stage = new PlanRowSource(ProcessingPlan.FromCompiled(steps, plan.BandRows), current, options);
-                owned.Add(stage);
-                current = stage;
-                continue;
+                if (section.Kind == CompiledSectionKind.Format)
+                    throw new InvalidOperationException(
+                        "A format-changing section has no row form; the compiler must not choose Stream for it.");
+
+                if (section.Kind == CompiledSectionKind.OperatorRun)
+                {
+                    var steps = Slice(plan.Steps, section.FirstStep, section.StepCount);
+                    var stage = new PlanRowSource(ProcessingPlan.FromCompiled(steps, plan.BandRows), current, options);
+                    owned.Add(stage);
+                    current = stage;
+                    continue;
+                }
+
+                var geometry = (GeometryStep)plan.Recipe.Steps[section.RecipeIndex];
+                var next = geometry.Wrap!(current, pool, options);
+                if (next is IDisposable disposable)
+                    owned.Add(disposable);
+                current = next;
             }
 
-            var geometry = (GeometryStep)plan.Recipe.Steps[section.RecipeIndex];
-            var next = geometry.Wrap!(current, pool, options);
-            if (next is IDisposable disposable)
-                owned.Add(disposable);
-            current = next;
+            return owned.Count == 0 ? current : new OwnedRowChain(current, owned);
         }
-
-        return owned.Count == 0 ? current : new OwnedRowChain(current, owned);
+        catch
+        {
+            for (var i = owned.Count - 1; i >= 0; i--)
+                owned[i].Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -192,10 +280,15 @@ internal static class CompiledPlanExecutor
         public int ReadRows(Span<byte> destination, int stride, int maxRows) =>
             inner.ReadRows(destination, stride, maxRows);
 
+        private bool _disposed;
+
         public void Dispose()
         {
-            foreach (var disposable in owned)
-                disposable.Dispose();
+            if (_disposed)
+                return;
+            _disposed = true;
+            for (var i = owned.Count - 1; i >= 0; i--)
+                owned[i].Dispose();
         }
     }
 }

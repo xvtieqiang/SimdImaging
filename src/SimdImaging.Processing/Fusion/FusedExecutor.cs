@@ -43,16 +43,19 @@ internal static class FusedExecutor
             {
                 // One window pair per WORKER (not per band): a worker's bands reuse its buffers.
                 var window = WorkingBuffer.Rent(width, maxWindowRows, source.Format, pool);
-                var next = WorkingBuffer.Rent(width, maxWindowRows, source.Format, pool);
+                WorkingBuffer? next = null;
                 try
                 {
+                    // The second rent can fail; keep the first rent inside the try so it is returned even when
+                    // the pair cannot be completed.
+                    next = WorkingBuffer.Rent(width, maxWindowRows, source.Format, pool);
                     for (var b = start; b < end; b++)
                         RunBand(source, output.View, steps, first, count, b, bandRows, haloTotal,
                             window.View, next.View);
                 }
                 finally
                 {
-                    next.Dispose();
+                    next?.Dispose();
                     window.Dispose();
                 }
             }, degree, cancellation);
@@ -83,7 +86,7 @@ internal static class FusedExecutor
             haloTotal += steps[first + i].HaloY;
 
         var bandCount = (height + bandRows - 1) / bandRows;
-        var workers = Math.Max(1, Math.Min(degree > 0 ? degree : Environment.ProcessorCount, bandCount));
+        var workers = Math.Max(1, Math.Min(RowParallel.ResolveDegree(degree), bandCount));
         var windowRows = Math.Min(height, bandRows + 2 * haloTotal);
         var windowBytes = (long)width * windowRows * bytesPerPixel;
         return (long)width * height * bytesPerPixel + 2 * workers * windowBytes;
@@ -103,10 +106,15 @@ internal static class FusedExecutor
 
         // Source and destination views share this origin and height, so every rect below is
         // "global row minus winTop" and the two views address the same rows.
+        // The scratch buffers are rented at maxWindowRows; hand the kernel only the rows this window owns.
+        // A kernel clamps against source.Height, so a taller view would expose rows the last step never wrote
+        // (they hold the previous band's data) instead of clamping at the image edge.
+        var scratchRect = new PixelRect(0, 0, width, windowRows);
         RunWindow(width, height,
             source.Slice(new PixelRect(0, winTop, width, windowRows)),
             output.Slice(new PixelRect(0, winTop, width, windowRows)),
-            winTop, steps, first, count, band, bandRows, haloTotal, window, next);
+            winTop, steps, first, count, band, bandRows, haloTotal,
+            window.Slice(scratchRect), next.Slice(scratchRect));
     }
 
     /// <summary>

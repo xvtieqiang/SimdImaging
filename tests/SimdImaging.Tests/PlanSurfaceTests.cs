@@ -156,21 +156,23 @@ public class PointScratchEstimateTests
         estimate.UndeclaredSteps.ShouldBe(0);
     }
 
-    /// <summary>Below the floor the operator stays on the float path and allocates no table.</summary>
+    /// <summary>Below the floor the operator stays on the float path: it materialises a band result, but no
+    /// 512 KiB table.</summary>
     [Fact]
-    public void Rgba16BelowTheFloor_DeclaresNothing()
+    public void Rgba16BelowTheFloor_DeclaresNoTable()
     {
         var estimate = MemoryEstimator.Estimate(320, 200, WorkingFormat.Rgba16, OnePointStep().Steps);
 
-        estimate.PerWorkerBytes.ShouldBe(0);
+        estimate.PerWorkerBytes.ShouldBeGreaterThan(0);
+        estimate.PerWorkerBytes.ShouldBeLessThan(512 * 1024);
     }
 
-    /// <summary>Eight-bit never builds the table at any size.</summary>
+    /// <summary>Eight-bit builds a small 4 KiB table instead of the 16-bit one, at any size.</summary>
     [Fact]
-    public void Rgba8_DeclaresNothing()
+    public void Rgba8_DeclaresTheSmallTable()
     {
         var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, OnePointStep().Steps);
 
-        estimate.PerWorkerBytes.ShouldBe(0);
+        estimate.PerWorkerBytes.ShouldBe(4L * 4 * 256);
     }
 }

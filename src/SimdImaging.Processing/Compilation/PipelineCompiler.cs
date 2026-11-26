@@ -174,7 +174,7 @@ internal static class PipelineCompiler
         if (options.Execute.MaxWorkingBytes > 0 && workspace.BoundedBytes > options.Execute.MaxWorkingBytes)
         {
             throw new InvalidOperationException(
-                $"The plan's working set is at most {workspace.BoundedBytes} bytes, above " +
+                $"The plan's estimated peak is {workspace.BoundedBytes} bytes, above " +
                 $"ExecuteOptions.MaxWorkingBytes = {options.Execute.MaxWorkingBytes}. Lower the band height, split " +
                 "the chain, or raise the limit.");
         }
@@ -307,11 +307,27 @@ internal static class PipelineCompiler
         int bytesPerPixel, CompileOptions options, List<string> explanation)
     {
         var allowed = options.Execute.AllowFusion && !options.ObserveSteps;
-        var fused = allowed &&
+        var incompatible = -1;
+        for (var i = first; i < first + count; i++)
+        {
+            var requirements = steps[i].Definition.Contract.Requirements;
+            if (requirements.Partition != Partitioning.RowBands ||
+                requirements.State != StateScope.None ||
+                requirements.Order != ExecutionOrder.Any ||
+                requirements.Threading != ThreadSafety.Concurrent ||
+                requirements.Determinism != Determinism.CoordinateDeterministic)
+            {
+                incompatible = i;
+                break;
+            }
+        }
+
+        var fused = allowed && incompatible < 0 &&
             (options.Execute.ForceFusion || FusionDecision.ShouldFuse(steps, first, count, width, height, bytesPerPixel));
 
         var reason = !options.Execute.AllowFusion ? "fusion disabled"
             : options.ObserveSteps ? "observer needs full steps"
+            : incompatible >= 0 ? $"step {incompatible} has execution requirements incompatible with fusion"
             : fused ? "fusion chosen"
             : "stepwise";
         explanation.Add($"steps {first}-{first + count - 1}: {(fused ? "fused" : "stepwise")} ({reason})");

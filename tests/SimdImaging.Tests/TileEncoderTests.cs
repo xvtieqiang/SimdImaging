@@ -61,6 +61,24 @@ public sealed class TileEncoderTests
         decoded.WritablePixels.ToArray().ShouldBe(expected.View.Span.ToArray());
     }
 
+
+    [Fact]
+    public void ProcessTilesTo_WorkspaceRefusal_DoesNotWriteToTheDestination()
+    {
+        using var image = TestImages.Gradient(37, 23, WorkingFormat.Rgba8);
+        var plan = new ProcessingPlan().Add(PlanOps.Invert());
+        var manager = new WorkspaceManager(limitBytes: 1);
+        using var encoded = new MemoryStream();
+
+        Should.Throw<InvalidOperationException>(() => Image.ProcessTilesTo(
+            new ViewRegionSource(image[0].Pixels.View), encoded, ImageFormat.Png,
+            plan, 16, 12, new ExecuteOptions { Workspace = manager }));
+
+        encoded.Length.ShouldBe(0,
+            "tile execution and encoder-band reservations must succeed before the encoder writes its header");
+        manager.OutstandingBytes.ShouldBe(0);
+    }
+
     [Fact]
     public void ProcessTilesTo_FromATiff_MatchesLoadApply()
     {
@@ -82,6 +100,36 @@ public sealed class TileEncoderTests
                 actual.Height.ShouldBe(expected.Height);
                 actual.WritablePixels.ToArray().ShouldBe(expected.WritablePixels.ToArray());
             }
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
+
+    [Fact]
+    public void ProcessTilesTo_PathBudgetRefusal_PreservesExistingDestination()
+    {
+        var source = Path.Combine(Path.GetTempPath(), $"simd-tile-{Guid.NewGuid():N}.tif");
+        var destination = Path.Combine(Path.GetTempPath(), $"simd-tile-{Guid.NewGuid():N}.png");
+        var original = new byte[] { 5, 13, 17, 29 };
+        try
+        {
+            File.WriteAllBytes(source, TiffFixture.Strips(37, 23, PixelFormat.Rgb24, Pattern(37, 23)));
+            File.WriteAllBytes(destination, original);
+            var plan = new ProcessingPlan().Add(PlanOps.Invert());
+
+            Should.Throw<InvalidOperationException>(() => Image.ProcessTilesTo(source, destination, plan,
+                16, 12, new TranscodeOptions
+                {
+                    Execute = new ExecuteOptions { Workspace = new WorkspaceManager(limitBytes: 1) },
+                }));
+
+            File.ReadAllBytes(destination).ShouldBe(original);
+            Directory.GetFiles(Path.GetDirectoryName(destination)!, $".{Path.GetFileNameWithoutExtension(destination)}.*.png")
+                .ShouldBeEmpty("the failed tile transcode must remove its sibling temporary output");
         }
         finally
         {

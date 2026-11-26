@@ -203,6 +203,81 @@ public class ImageTranscodeTests
         }
     }
 
+
+    [Fact]
+    public void StreamWorkspaceRefusal_DoesNotWriteToTheDestination()
+    {
+        var sourcePath = Temp(".png");
+        try
+        {
+            using (var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8))
+                Image.Save(image, sourcePath);
+
+            using var source = File.OpenRead(sourcePath);
+            using var destination = new MemoryStream();
+            var error = Should.Throw<InvalidOperationException>(() =>
+                ImageTranscode.From(source).Invert()
+                    .WithOptions(new TranscodeOptions
+                    {
+                        Execute = new ExecuteOptions { MaxWorkingBytes = 1 },
+                    })
+                    .Run(destination, ImageFormat.Png));
+
+            error.Message.ShouldContain("estimated peak");
+            destination.Length.ShouldBe(0,
+                "the compiled chain and its reservations must be ready before the encoder writes a header");
+
+            // A caller-supplied WorkspaceManager can be tighter than MaxWorkingBytes. The operator windows fit,
+            // but the additional Pipeline.Copy buffer does not; that refusal must still happen before encoding.
+            var manager = new WorkspaceManager(limitBytes: 30_000);
+            using var secondSource = File.OpenRead(sourcePath);
+            using var secondDestination = new MemoryStream();
+            Should.Throw<InvalidOperationException>(() => ImageTranscode.From(secondSource).Invert()
+                .WithOptions(new TranscodeOptions
+                {
+                    Execute = new ExecuteOptions { Workspace = manager },
+                })
+                .Run(secondDestination, ImageFormat.Png));
+            secondDestination.Length.ShouldBe(0);
+            manager.OutstandingBytes.ShouldBe(0);
+        }
+        finally
+        {
+            File.Delete(sourcePath);
+        }
+    }
+
+
+    [Fact]
+    public void PathTranscode_BudgetRefusal_PreservesExistingDestination()
+    {
+        var source = Temp(".png");
+        var destination = Temp(".png");
+        var original = new byte[] { 7, 11, 19, 23, 31 };
+        try
+        {
+            using (var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+            File.WriteAllBytes(destination, original);
+
+            Should.Throw<InvalidOperationException>(() => ImageTranscode.From(source).Invert()
+                .WithOptions(new TranscodeOptions
+                {
+                    Execute = new ExecuteOptions { MaxWorkingBytes = 1 },
+                })
+                .Run(destination));
+
+            File.ReadAllBytes(destination).ShouldBe(original);
+            Directory.GetFiles(Path.GetDirectoryName(destination)!, $".{Path.GetFileNameWithoutExtension(destination)}.*.png")
+                .ShouldBeEmpty("the failed operation must remove its sibling temporary output");
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
     [Fact]
     public void StreamSourceAndDestination_MatchThePathForm()
     {

@@ -142,8 +142,7 @@ public class StreamingResizeTests
         var error = Should.Throw<InvalidOperationException>(() =>
             StreamingResize.Execute(source, sink, 1920, 1080, Resampler.Bicubic,
                 new ExecuteOptions { MaxWorkingBytes = 4L << 20 }));
-        error.Message.ShouldContain("ring");
-        error.Message.ShouldContain("output batch");
+        error.Message.ShouldContain("working set");
     }
 
     public static TheoryData<int, int, int, int, long> BudgetMatrix => new()

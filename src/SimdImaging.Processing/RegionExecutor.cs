@@ -35,6 +35,7 @@ public enum RegionRefusal : byte
 
     /// <summary>A step declares order-dependent or per-call state, which a rectangle walk cannot reproduce.</summary>
     StatefulStep,
+
 }
 
 /// <summary>What <see cref="ProcessingPlan.TryExecuteRegion"/> did.</summary>
@@ -127,6 +128,14 @@ internal static class RegionExecutor
         if (refusal != RegionRefusal.None)
             return new RegionResult(refusal, 0, 0) { RefusingStep = refusingStep };
 
+        // A no-op region is a direct source copy: it rents no windows and has no operator scratch.
+        if (steps.Count == 0)
+        {
+            options.CancellationToken.ThrowIfCancellationRequested();
+            source.ReadRegion(region, destination);
+            return new RegionResult(RegionRefusal.None, 1, 1);
+        }
+
         var haloY = 0;
         for (var i = 0; i < steps.Count; i++)
             haloY += steps[i].HaloY;
@@ -163,12 +172,6 @@ internal static class RegionExecutor
         // inside the band. Without this scope the plan adapters' unconditional EnterNested would force every
         // operator onto one thread and the whole region would run serially — correct, and several times slower.
         using var pump = RowParallel.EnterTopLevel(options.MaxDegreeOfParallelism);
-
-        if (steps.Count == 0)
-        {
-            source.ReadRegion(region, destination);
-            return new RegionResult(RegionRefusal.None, 1, 1);
-        }
 
         using var sourceWindow = WorkingBuffer.Rent(maxWindowCols, maxWindowRows, source.Format, pool);
         using var outputWindow = WorkingBuffer.Rent(maxWindowCols, maxWindowRows, source.Format, pool);

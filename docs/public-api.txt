@@ -89,9 +89,11 @@
   SimdImaging.Abstractions.MemoryEstimate.HasEstimatedTerms : System.Boolean { get; }
   SimdImaging.Abstractions.MemoryEstimate.InputBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.OperatorScratchBytes : System.Int64 { get; }
+  SimdImaging.Abstractions.MemoryEstimate.OperatorScratchPeakBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.OutputBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.PeakBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.PerWorkerBytes : System.Int64 { get; set; }
+  SimdImaging.Abstractions.MemoryEstimate.PerWorkerPeakBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.PlanScratchBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.ToString() -> System.String
   SimdImaging.Abstractions.MemoryEstimate.UndeclaredSteps : System.Int32 { get; set; }
@@ -949,6 +951,7 @@
   SimdImaging.Processing.Geometry.PixelWarp.EndInvoke(System.Single& sourceX, System.Single& sourceY, System.IAsyncResult result) -> System.Void
   SimdImaging.Processing.Geometry.PixelWarp.Invoke(System.Single destinationX, System.Single destinationY, System.Single& sourceX, System.Single& sourceY) -> System.Void
   SimdImaging.Processing.Geometry.Resample.Resize(SimdImaging.Abstractions.PixelView source, System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
+  SimdImaging.Processing.Geometry.Resample.Resize(SimdImaging.Abstractions.PixelView source, System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.IPixelPool? pool, SimdImaging.Abstractions.ExecuteOptions? options) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.Geometry.Resample.ResizeWithOptions(SimdImaging.Abstractions.PixelView source, System.Int32 width, System.Int32 height, SimdImaging.Processing.Resampler resampler, SimdImaging.Abstractions.SampleOptions options, SimdImaging.Abstractions.RgbaColor background, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Processing.Geometry.ResizeMode.BoxPad = 1
   SimdImaging.Processing.Geometry.ResizeMode.CropPad = 2

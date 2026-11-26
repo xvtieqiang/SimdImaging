@@ -8,7 +8,7 @@ namespace SimdImaging.Comparison;
 /// <summary>
 /// Are we winning because the kernel is faster, or because we use more cores?
 ///
-/// <para><see cref="RowParallel.For"/> gates on work and caps workers at one per 32 rows, so at 640×360 it
+/// <para><see cref="RowParallel.For(int, int, Action{int, int})"/> gates on work and caps workers at one per 32 rows, so at 640×360 it
 /// already runs 12 workers. The question this section answers is not "is the gate right" but "what happens when
 /// the parallel win is taken away" — and, separately, "does the oracle use more than one core", because if it
 /// does not, then the headline ratio is many-cores against one and saying otherwise would be misleading.</para>

@@ -8,6 +8,23 @@ namespace SimdImaging.Tests;
 /// <summary>The reservation account: peak, release, limit, and the plan/transcode integration.</summary>
 public sealed class WorkspaceManagerTests
 {
+
+    [Fact]
+    public void Reserve_RejectsCumulativeOverflowWithoutCorruptingTheAccount()
+    {
+        var manager = new WorkspaceManager();
+        using (manager.Reserve(long.MaxValue, "maximum reservation"))
+        {
+            manager.OutstandingBytes.ShouldBe(long.MaxValue);
+            manager.PeakBytes.ShouldBe(long.MaxValue);
+            Should.Throw<InvalidOperationException>(() => manager.Reserve(1, "overflow"));
+            manager.OutstandingBytes.ShouldBe(long.MaxValue);
+            manager.PeakBytes.ShouldBe(long.MaxValue);
+        }
+
+        manager.OutstandingBytes.ShouldBe(0);
+    }
+
     [Fact]
     public void Reserve_RecordsThePeak_AndReleases()
     {

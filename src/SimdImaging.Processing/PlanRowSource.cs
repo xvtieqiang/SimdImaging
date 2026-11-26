@@ -78,19 +78,35 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
         // release, because a throwing constructor has no Dispose. The estimate includes the declared scratch
         // for every worker, not only the window buffers.
         _workspaceLease = options.Workspace?.Reserve(estimate, "stream windows");
+        WorkingBuffer? cache = null;
+        WorkingBuffer? output = null;
+        WorkingBuffer? scratchA = null;
+        WorkingBuffer? scratchB = null;
         try
         {
-            _cache = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
-            _output = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
+            // Keep partial construction local: a failed later rent must return every earlier allocation because a
+            // throwing constructor cannot be disposed by its caller.
+            cache = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
+            output = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
             if (steps.Count > 1)
             {
-                _scratchA = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
-                _scratchB = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
+                scratchA = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
+                scratchB = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
             }
+
+            _cache = cache;
+            _output = output;
+            _scratchA = scratchA;
+            _scratchB = scratchB;
         }
         catch
         {
+            scratchB?.Dispose();
+            scratchA?.Dispose();
+            output?.Dispose();
+            cache?.Dispose();
             _workspaceLease?.Dispose();
+            _workspaceLease = null;
             throw;
         }
     }
@@ -199,13 +215,20 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
 
     public void Dispose()
     {
-        _workspaceLease?.Dispose();
         if (_disposed)
             return;
         _disposed = true;
-        _cache?.Dispose();
-        _output?.Dispose();
-        _scratchA?.Dispose();
-        _scratchB?.Dispose();
+        try
+        {
+            _cache?.Dispose();
+            _output?.Dispose();
+            _scratchA?.Dispose();
+            _scratchB?.Dispose();
+        }
+        finally
+        {
+            _workspaceLease?.Dispose();
+            _workspaceLease = null;
+        }
     }
 }

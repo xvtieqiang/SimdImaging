@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using SimdImaging.Abstractions;
@@ -197,6 +196,7 @@ internal sealed class WeightTable
 /// </summary>
 public static class Resample
 {
+    internal const int VerticalStackTapLimit = 256;
     /// <summary>
     /// Row-band float scratch budget. A same-process sweep (16/8/4/2/1 MiB, three repeats each) showed
     /// 16 MiB pays a 2.2× cold-start penalty on the first call (43.1 ms vs 19.5 ms afterwards), while
@@ -209,8 +209,15 @@ public static class Resample
     /// the point at which the working set would break the documented limit, so it throws instead of growing.</summary>
     private const long MaxScratchBytes = 512L << 20;
 
-    public static WorkingBuffer Resize(PixelView source, int width, int height, Resampler resampler, IPixelPool? pool)
+    public static WorkingBuffer Resize(PixelView source, int width, int height, Resampler resampler, IPixelPool? pool) =>
+        Resize(source, width, height, resampler, pool, options: null);
+
+    /// <summary>Resize with the execution degree and cancellation policy supplied by the owning plan.</summary>
+    public static WorkingBuffer Resize(PixelView source, int width, int height, Resampler resampler, IPixelPool? pool,
+        ExecuteOptions? options)
     {
+        options ??= new ExecuteOptions();
+        var degree = options.MaxDegreeOfParallelism > 0 ? options.MaxDegreeOfParallelism : RowParallel.Degree;
         if (width <= 0)
             throw new ArgumentOutOfRangeException(nameof(width), width, "Width must be positive.");
         if (height <= 0)
@@ -218,6 +225,17 @@ public static class Resample
 
         var weightsX = WeightTable.Build(source.Width, width, resampler);
         var weightsY = WeightTable.Build(source.Height, height, resampler);
+        var nearestPath = resampler == Resampler.Nearest && source.Format == WorkingFormat.Rgba8
+            && TryNearestTap(weightsX, out _) && TryNearestTap(weightsY, out _);
+        var estimatedBytes = EstimateWorkingBytes(source, width, height, weightsY.Taps, nearestPath, degree);
+        if (options.MaxWorkingBytes > 0 && estimatedBytes > options.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"Resize needs an estimated {estimatedBytes} bytes, above ExecuteOptions.MaxWorkingBytes = " +
+                $"{options.MaxWorkingBytes}.");
+
+        // The reservation must precede the destination rent and remain held for the full resize. The estimate
+        // includes the live source/output pair and per-worker scratch, matching MaxWorkingBytes semantics.
+        using var workspaceLease = options.Workspace?.Reserve(estimatedBytes, "resize");
 
         // Nearest is point sampling. Sending it through the separable path expands the entire source to float,
         // runs two convolution passes and contracts again — measured 2.170 ms at 1080p -> 960x540 against
@@ -232,120 +250,174 @@ public static class Resample
             && TryNearestTap(weightsX, out var tapX) && TryNearestTap(weightsY, out var tapY))
         {
             var nearest = WorkingBuffer.Rent(width, height, source.Format, pool);
-            var nearestView = nearest.View;
-            var startsX = weightsX.Starts;
-            var startsY = weightsY.Starts;
-
-            // ForBands, not For: `For` refuses to parallelise below 64 K pixels, and a 640x360 source
-            // resized to 320x180 is 57.6 K — so the fast path silently ran on one core and reported
-            // LastWorkerCount = 1. Bands have no such gate; the split is explicit and rows are disjoint.
-            var degree = RowParallel.Degree;
-            var bandRows = Math.Max(16, (height + Math.Max(1, degree) - 1) / Math.Max(1, degree));
-            var bands = Math.Max(1, (height + bandRows - 1) / bandRows);
-
-            RowParallel.ForBands(bands, (firstBand, lastBand) =>
-            {
-                for (var band = firstBand; band < lastBand; band++)
+            try
                 {
-                    var firstRow = band * bandRows;
-                    var lastRow = Math.Min(firstRow + bandRows, height);
-                    for (var y = firstRow; y < lastRow; y++)
+                var nearestView = nearest.View;
+                var startsX = weightsX.Starts;
+                var startsY = weightsY.Starts;
+
+                // ForBands, not For: `For` refuses to parallelise below 64 K pixels, and a 640x360 source
+                // resized to 320x180 is 57.6 K — so the fast path silently ran on one core and reported
+                // LastWorkerCount = 1. Bands have no such gate; the split is explicit and rows are disjoint.
+                var bandRows = Math.Max(16, (height + Math.Max(1, degree) - 1) / Math.Max(1, degree));
+                var bands = Math.Max(1, (height + bandRows - 1) / bandRows);
+
+                RowParallel.ForBands(bands, (firstBand, lastBand) =>
+                {
+                    for (var band = firstBand; band < lastBand; band++)
                     {
-                        var sourceRow = source.Row(startsY[y] + tapY);
-                        var destinationRow = nearestView.Row(y);
-                        for (var x = 0; x < width; x++)
+                        var firstRow = band * bandRows;
+                        var lastRow = Math.Min(firstRow + bandRows, height);
+                        for (var y = firstRow; y < lastRow; y++)
                         {
-                            var from = (startsX[x] + tapX) * 4;
-                            var to = x * 4;
-                            // Rgba8 pixel = 4 bytes. One unaligned 32-bit copy replaces four byte
-                            // load/stores; it is a pure bit copy, so the byte sequence is identical on
-                            // every endianness and every SIMD tier (no integer reinterpretation).
-                            // Measured 1.90-1.99x on the inner loop vs the four-byte version
-                            // (`nearest-ablate`), byte-identical across all three shapes.
-                            Unsafe.WriteUnaligned(ref destinationRow[to],
-                                Unsafe.ReadUnaligned<uint>(ref sourceRow[from]));
+                            var sourceRow = source.Row(startsY[y] + tapY);
+                            var destinationRow = nearestView.Row(y);
+                            for (var x = 0; x < width; x++)
+                            {
+                                var from = (startsX[x] + tapX) * 4;
+                                var to = x * 4;
+                                // Rgba8 pixel = 4 bytes. One unaligned 32-bit copy replaces four byte
+                                // load/stores; it is a pure bit copy, so the byte sequence is identical on
+                                // every endianness and every SIMD tier (no integer reinterpretation).
+                                // Measured 1.90-1.99x on the inner loop vs the four-byte version
+                                // (`nearest-ablate`), byte-identical across all three shapes.
+                                Unsafe.WriteUnaligned(ref destinationRow[to],
+                                    Unsafe.ReadUnaligned<uint>(ref sourceRow[from]));
+                            }
                         }
                     }
-                }
-            });
+                }, degree, options.CancellationToken);
 
-            return nearest;
+                return nearest;
+            }
+            catch
+            {
+                nearest.Dispose();
+                throw;
+            }
         }
 
         // The tap offset that carries the whole weight, or false when the table is not a single unit tap.
         var stride = width * 4;
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
-        var view = destination.View;
-
-        var budgetBytes = ScratchBudgetBytes;
-        var budgetRows = Math.Max(weightsY.Taps + 2, (int)(budgetBytes / Math.Max(1L, (long)stride * 4)));
-        var scaleY = (double)height / source.Height;
-        var bandHeight = Math.Max(1, (int)((budgetRows - weightsY.Taps) * Math.Max(scaleY, 1e-9)));
-        bandHeight = Math.Min(bandHeight, 512);
-        // Also split by core count so a 1080p resize uses all cores, not just the 5 bands that
-        // the scratch budget alone would produce. Floor at 32 rows so tap overlap stays cheap.
-        var coreBands = Math.Max(32, (height + RowParallel.Degree - 1) / RowParallel.Degree);
-        bandHeight = Math.Min(bandHeight, coreBands);
-        var bandCount = (height + bandHeight - 1) / bandHeight;
-
-        // Each worker owns its own row/scratch buffers (FloatScratch is thread-local), so bands can
-        // run concurrently without aliasing. Output rows are disjoint; source rows are read-only.
-        RowParallel.ForBands(bandCount, (start, end) =>
-        {
-            var row = FloatScratch.Rent(source.Width * 4);
-            var outputRow = FloatScratch.Rent(stride);
-
-            // A ring of horizontally resized rows instead of a whole source band. Bands used to redo the
-            // 2-taps rows of overlap at every boundary, which is why a small scratch cost time and a big
-            // one cost memory: the eight-megabyte band held 94 MiB at 7680 wide for a 960-wide answer.
-            var ringRows = Math.Min(source.Height, weightsY.Taps + 2);
-            var scratch = FloatScratch.Rent(stride * ringRows);
-            var filledThrough = -1;
-            try
+        try
             {
-                for (var b = start; b < end; b++)
+            var view = destination.View;
+
+            var budgetBytes = ScratchBudgetBytes;
+            var budgetRows = Math.Max(weightsY.Taps + 2, (int)(budgetBytes / Math.Max(1L, (long)stride * 4)));
+            var scaleY = (double)height / source.Height;
+            var bandHeight = Math.Max(1, (int)((budgetRows - weightsY.Taps) * Math.Max(scaleY, 1e-9)));
+            bandHeight = Math.Min(bandHeight, 512);
+            // Also split by core count so a 1080p resize uses all cores, not just the 5 bands that
+            // the scratch budget alone would produce. Floor at 32 rows so tap overlap stays cheap.
+            var coreBands = Math.Max(32, (height + degree - 1) / degree);
+            bandHeight = Math.Min(bandHeight, coreBands);
+            var bandCount = (height + bandHeight - 1) / bandHeight;
+
+            // Each worker owns its own row/scratch buffers (FloatScratch is thread-local), so bands can
+            // run concurrently without aliasing. Output rows are disjoint; source rows are read-only.
+            RowParallel.ForBands(bandCount, (start, end) =>
+            {
+                float[]? row = null;
+                float[]? outputRow = null;
+                float[]? scratch = null;
+                int[]? tapRows = null;
+                float[]? tapWeights = null;
+                var ringRows = Math.Min(source.Height, weightsY.Taps + 2);
+                var filledThrough = -1;
+                try
                 {
-                    var bandStart = b * bandHeight;
-                    var bandEnd = Math.Min(bandStart + bandHeight, height);
-
-                    var required = (long)stride * ringRows * sizeof(float);
-                    if (required > MaxScratchBytes)
-                        throw new InvalidOperationException(
-                            $"The vertical pass needs {required / (1024 * 1024)} MiB of scratch " +
-                            $"({ringRows} rows x {stride} floats), above the {MaxScratchBytes / (1024 * 1024)} MiB " +
-                            "working-set limit. Reduce the downsample ratio or resize in two steps.");
-
-                    for (var dy = bandStart; dy < bandEnd; dy++)
+                    // Keep all worker-local rentals inside the cleanup scope. For wide downscales, allocate the
+                    // exact tap arrays once per worker and reuse them for every output row in that worker's bands.
+                    row = FloatScratch.Rent(source.Width * 4);
+                    outputRow = FloatScratch.Rent(stride);
+                    scratch = FloatScratch.Rent(stride * ringRows);
+                    if (weightsY.Taps > VerticalStackTapLimit)
                     {
-                        // Tap windows advance monotonically, so each source row is resized once per worker.
-                        var first = Math.Clamp(weightsY.Starts[dy], 0, source.Height - 1);
-                        var last = Math.Clamp(weightsY.Starts[dy] + weightsY.Taps - 1, 0, source.Height - 1);
-                        for (var sy = Math.Max(filledThrough + 1, first); sy <= last; sy++)
-                        {
-                            Pixels.ReadRowPremultiplied(source.Row(sy), source.Width, source.Format, row);
-                            HorizontalRow(row, source.Width, scratch.AsSpan(sy % ringRows * stride, stride), width, weightsX);
-                            filledThrough = sy;
-                        }
+                        tapRows = new int[weightsY.Taps];
+                        tapWeights = new float[weightsY.Taps];
+                    }
 
-                        VerticalRow(scratch, ringRows, source.Height, width, dy, weightsY, outputRow);
-                        Pixels.WriteRowUnpremultiplied(outputRow, width, source.Format, view.Row(dy));
+                    for (var b = start; b < end; b++)
+                    {
+                        var bandStart = b * bandHeight;
+                        var bandEnd = Math.Min(bandStart + bandHeight, height);
+
+                        var required = (long)stride * ringRows * sizeof(float);
+                        if (required > MaxScratchBytes)
+                            throw new InvalidOperationException(
+                                $"The vertical pass needs {required / (1024 * 1024)} MiB of scratch " +
+                                $"({ringRows} rows x {stride} floats), above the {MaxScratchBytes / (1024 * 1024)} MiB " +
+                                "working-set limit. Reduce the downsample ratio or resize in two steps.");
+
+                        for (var dy = bandStart; dy < bandEnd; dy++)
+                        {
+                            // Tap windows advance monotonically, so each source row is resized once per worker.
+                            var first = Math.Clamp(weightsY.Starts[dy], 0, source.Height - 1);
+                            var last = Math.Clamp(weightsY.Starts[dy] + weightsY.Taps - 1, 0, source.Height - 1);
+                            for (var sy = Math.Max(filledThrough + 1, first); sy <= last; sy++)
+                            {
+                                Pixels.ReadRowPremultiplied(source.Row(sy), source.Width, source.Format, row!);
+                                HorizontalRow(row!, source.Width, scratch!.AsSpan(sy % ringRows * stride, stride), width, weightsX);
+                                filledThrough = sy;
+                            }
+
+                            VerticalRow(scratch!, ringRows, source.Height, width, dy, weightsY, outputRow!,
+                                tapRows, tapWeights);
+                            Pixels.WriteRowUnpremultiplied(outputRow!, width, source.Format, view.Row(dy));
+                        }
                     }
                 }
-            }
-            finally
-            {
-                FloatScratch.Return(row);
-                FloatScratch.Return(outputRow);
-                FloatScratch.Return(scratch);
-            }
-        });
+                finally
+                {
+                    if (row is not null) FloatScratch.Return(row);
+                    if (outputRow is not null) FloatScratch.Return(outputRow);
+                    if (scratch is not null) FloatScratch.Return(scratch);
+                }
+            }, degree, options.CancellationToken);
 
-        return destination;
+            return destination;
+        }
+        catch
+        {
+            destination.Dispose();
+            throw;
+        }
     }
 
 
 /// <summary>The tap offset that carries the whole weight, or false when the table is not a single unit tap.</summary>
 /// <remarks>Shared with the streaming resize, which has to reproduce the nearest fast path byte for byte.</remarks>
+    /// <summary>Engine-owned output and active per-worker scratch for the in-memory resize.</summary>
+    internal static long EstimateWorkingBytes(PixelView source, int width, int height, int tapsY, bool nearest,
+        int degree)
+    {
+        var input = checked((long)source.Width * source.Height * source.Format.BytesPerPixel());
+        var output = checked((long)width * height * source.Format.BytesPerPixel());
+        if (nearest)
+            return checked(input + output);
+
+        var stride = checked(width * 4);
+        var budgetRows = Math.Max(tapsY + 2, (int)(ScratchBudgetBytes / Math.Max(1L, (long)stride * 4)));
+        var scaleY = (double)height / source.Height;
+        var bandHeight = Math.Max(1, (int)((budgetRows - tapsY) * Math.Max(scaleY, 1e-9)));
+        bandHeight = Math.Min(bandHeight, 512);
+        var coreBands = Math.Max(32, (height + Math.Max(1, degree) - 1) / Math.Max(1, degree));
+        bandHeight = Math.Min(bandHeight, coreBands);
+        var bandCount = (height + bandHeight - 1) / bandHeight;
+        var workers = Math.Max(1, Math.Min(Math.Max(1, degree), bandCount));
+        var ringRows = Math.Min(source.Height, tapsY + 2);
+        // VerticalRow uses fixed stack buffers up to the stack threshold, then one exact int/float array
+        // pair per worker, reused across that worker's output rows.
+        var tapScratch = tapsY <= VerticalStackTapLimit
+            ? (long)VerticalStackTapLimit * (sizeof(int) + sizeof(float))
+            : (long)tapsY * (sizeof(int) + sizeof(float));
+        var perWorker = checked(((long)source.Width * 4 + stride + (long)stride * ringRows) * sizeof(float)
+            + tapScratch);
+        return checked(input + output + workers * perWorker);
+    }
+
 internal static bool TryNearestTap(WeightTable table, out int offset)
 {
     offset = -1;
@@ -422,7 +494,8 @@ internal static bool TryNearestTap(WeightTable table, out int offset)
 
 
     /// <summary>One destination row: accumulate every tap in a register, write the row once.</summary>
-    internal static void VerticalRow(float[] scratch, int ringRows, int sourceHeight, int width, int dy, WeightTable weights, float[] destination)
+    internal static void VerticalRow(float[] scratch, int ringRows, int sourceHeight, int width, int dy,
+        WeightTable weights, float[] destination, int[]? tapRows, float[]? tapWeights)
     {
         var stride = width * 4;
         var start = weights.Starts[dy];
@@ -431,29 +504,23 @@ internal static bool TryNearestTap(WeightTable table, out int offset)
 
         // Tap count grows with the downsample ratio: 16384 -> 1 needs ~98 K taps, which as two stackalloc
         // arrays is ~786 KB and overflows a 1 MB worker stack. Small ratios keep the stack (cheapest thing
-        // there is); past StackTapLimit the arrays come from the shared pool instead.
-        const int StackTapLimit = 256;
-        if (weights.Taps <= StackTapLimit)
+        // there is); larger ratios reuse exact-sized per-worker arrays across all rows in that worker.
+        if (weights.Taps <= VerticalStackTapLimit)
         {
-            Span<int> rows = stackalloc int[StackTapLimit];
-            Span<float> tapWeights = stackalloc float[StackTapLimit];
+            Span<int> rows = stackalloc int[VerticalStackTapLimit];
+            Span<float> stackWeights = stackalloc float[VerticalStackTapLimit];
             Convolve(scratch, ringRows, sourceHeight, stride, interior, start, weights, tapBase,
-                rows, tapWeights, destination);
+                rows, stackWeights, destination);
             return;
         }
 
-        var rentedRows = ArrayPool<int>.Shared.Rent(weights.Taps);
-        var rentedWeights = ArrayPool<float>.Shared.Rent(weights.Taps);
-        try
-        {
-            Convolve(scratch, ringRows, sourceHeight, stride, interior, start, weights, tapBase,
-                rentedRows, rentedWeights, destination);
-        }
-        finally
-        {
-            ArrayPool<int>.Shared.Return(rentedRows);
-            ArrayPool<float>.Shared.Return(rentedWeights);
-        }
+        if (tapRows is null || tapWeights is null ||
+            tapRows.Length < weights.Taps || tapWeights.Length < weights.Taps)
+            throw new ArgumentException(
+                "Large vertical tap plans require per-worker row and weight scratch arrays.");
+
+        Convolve(scratch, ringRows, sourceHeight, stride, interior, start, weights, tapBase,
+            tapRows.AsSpan(0, weights.Taps), tapWeights.AsSpan(0, weights.Taps), destination);
     }
 
     /// <summary>
@@ -499,7 +566,7 @@ internal static bool TryNearestTap(WeightTable table, out int offset)
 
     /// <summary>
     /// Resize with an explicit sampling contract. <c>options == default</c> delegates to the frozen
-    /// <see cref="Resize"/> path (byte-identical); any option set switches to the unified per-pixel
+    /// <see cref="Resize(PixelView, int, int, Resampler, IPixelPool?)"/> path (byte-identical); any option set switches to the unified per-pixel
     /// core: scale-aware tap plans (downscaling widens the kernel exactly like <see cref="WeightTable"/>
     /// does), per-sample domain transform, alpha mode, edge policy — Background treats the source as
     /// surrounded by a constant field of <paramref name="background"/>, and tap weights are deliberately

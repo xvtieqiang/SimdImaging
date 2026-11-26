@@ -1,4 +1,6 @@
+using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing;
 using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
@@ -17,9 +19,15 @@ internal enum WorkspaceTermKind : byte
     ResizeStaging = 6,
     ResizeBatch = 7,
     ResizeWorkerRows = 8,
-    FormatStep = 9,
-    GeometryScratch = 10,
-    SectionTransition = 11,
+    ResizeSourceRow = 9,
+    FormatStep = 10,
+    GeometryScratch = 11,
+    SectionTransition = 12,
+    ResizeWorkerTapScratch = 13,
+    FormatScratch = 14,
+    OperatorScratchPeak = 15,
+    CopyBuffer = 16,
+    GeometryRowScratch = 17,
 }
 
 internal readonly record struct WorkspaceTerm(WorkspaceTermKind Kind, long Bytes, string Note);
@@ -35,21 +43,23 @@ internal readonly record struct UnmanagedTerm(string Name, string Note);
 internal sealed class WorkspacePlan
 {
     internal WorkspacePlan(IReadOnlyList<WorkspaceTerm> terms, IReadOnlyList<UnmanagedTerm> unmanaged,
-        int undeclaredSteps)
+        int undeclaredSteps, long? boundedBytes = null)
     {
         Terms = Array.AsReadOnly(terms.ToArray());
         Unmanaged = Array.AsReadOnly(unmanaged.ToArray());
         UndeclaredSteps = undeclaredSteps;
-        BoundedBytes = terms.Sum(term => term.Bytes);
+        BoundedBytes = boundedBytes ?? terms.Sum(term => term.Bytes);
     }
 
     internal IReadOnlyList<WorkspaceTerm> Terms { get; }
 
     internal IReadOnlyList<UnmanagedTerm> Unmanaged { get; }
 
-    /// <summary>Sum of the engine-managed terms. For a frame plan the sections run sequentially, so this is an upper
-    /// bound rather than a simultaneous peak; for a stream plan the pull chain keeps every stage's windows and
-    /// reservations alive at once, so the sum is the peak the workspace account sees.</summary>
+    /// <summary>
+    /// Backend-specific upper bound. Frame plans use the largest sequential section peak; Region and Tile include
+    /// their target, windows and one operator-scratch peak; Stream sums the simultaneously resident pull stages.
+    /// Terms remain a diagnostic breakdown and are not necessarily additive for Frame.
+    /// </summary>
     internal long BoundedBytes { get; }
 
     /// <summary>Steps whose operator declared no workspace: the figure is then a lower bound.</summary>
@@ -74,15 +84,14 @@ internal static class WorkspacePlanner
             new("codec buffers", "decoder and encoder rows are outside the engine's allocator"),
         };
 
-        if (backend == ExecutionBackend.Tile)
+        return backend switch
         {
-            unmanaged.Add(new UnmanagedTerm("tile dimensions",
-                "the caller's tile size sets the real window; this report uses the frame estimate, which is larger"));
-        }
-
-        return backend == ExecutionBackend.Stream
-            ? EstimateStream(recipe, steps, states, options, terms, unmanaged)
-            : EstimateFrame(recipe, steps, states, options, outputWidth, outputHeight, terms, unmanaged);
+            ExecutionBackend.Stream => EstimateStream(recipe, steps, states, options, outputWidth, outputHeight,
+                terms, unmanaged),
+            ExecutionBackend.Tile => EstimateTile(steps, options, terms, unmanaged),
+            ExecutionBackend.Region => EstimateRegion(steps, options, terms, unmanaged),
+            _ => EstimateFrame(recipe, steps, states, options, outputWidth, outputHeight, terms, unmanaged),
+        };
     }
 
     private static WorkspacePlan EstimateFrame(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
@@ -95,9 +104,14 @@ internal static class WorkspacePlanner
         var width = options.SourceWidth;
         var height = options.SourceHeight;
         var finalFormat = options.SourceFormat;
+        var sourceBytes = checked((long)options.SourceWidth * options.SourceHeight
+            * options.SourceFormat.BytesPerPixel());
         var formatTerms = new List<WorkspaceTerm>();
         var geometryUndeclared = 0;
         var geometryScratch = 0L;
+        var formatScratch = 0L;
+        var formatUndeclared = 0;
+        var framePeak = 0L;
         foreach (var step in recipe.Steps)
         {
             if (step is GeometryStep geometry)
@@ -107,24 +121,83 @@ internal static class WorkspacePlanner
                 // SectionTransition term. A declared content-derived step is therefore bounded, not a lower bound.
                 var (nextWidth, nextHeight) = geometry.Geometry.Map(width, height);
                 var declared = geometry.Descriptor.WorkspaceModel;
+                var scratchBytes = 0L;
                 if (!declared.IsDeclared)
                 {
                     geometryUndeclared++;
                 }
-                else if (declared.Estimate is { } estimateGeometry)
+                else
                 {
-                    geometryScratch += estimateGeometry(nextWidth, nextHeight, nextHeight, options.SourceFormat);
+                    var wholeImageInvocation = true; // Geometry.Reshape is one whole-frame call in the frame backend.
+                    if (declared.HasWholeImageEstimate ||
+                        (wholeImageInvocation && declared.PerCallEstimate is not null))
+                        scratchBytes = checked(scratchBytes
+                            + declared.EstimateWholeImage(nextWidth, nextHeight, finalFormat));
+
+                    if (declared.HasPerWorkerEstimate ||
+                        (!wholeImageInvocation && declared.PerCallEstimate is not null))
+                    {
+                        var workers = geometry.Descriptor.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : Math.Min(RowParallel.ResolveDegree(options.Execute.MaxDegreeOfParallelism), nextHeight);
+                        scratchBytes = checked(scratchBytes + checked(
+                            declared.EstimatePerWorkerScratch(nextWidth, nextHeight, nextHeight, finalFormat) * workers));
+                    }
+
+                    geometryScratch = Math.Max(geometryScratch, scratchBytes);
                 }
+
+                var transitionBytes = checked(
+                    checked((long)width * height * finalFormat.BytesPerPixel())
+                    + checked((long)nextWidth * nextHeight * finalFormat.BytesPerPixel()));
+                var retainedSourceBytes = geometry.Index > 0 ? sourceBytes : 0L;
+                framePeak = Math.Max(framePeak,
+                    checked(transitionBytes + scratchBytes + retainedSourceBytes));
 
                 width = nextWidth;
                 height = nextHeight;
                 continue;
             }
 
-            if (step is OperatorStep { Operator.Contract.Output.Format: { } outputFormat })
+            if (step is OperatorStep formatStep &&
+                formatStep.Operator.Contract.Output.Format is { } outputFormat)
             {
                 formatTerms.Add(new WorkspaceTerm(WorkspaceTermKind.FormatStep,
                     (long)width * height * outputFormat.BytesPerPixel(), $"{width}x{height} {outputFormat}"));
+
+                var workspace = formatStep.Operator.Contract.Workspace;
+                var scratchBytes = 0L;
+                if (!workspace.IsDeclared)
+                {
+                    formatUndeclared++;
+                }
+                else
+                {
+                    var wholeImageInvocation = true; // The compiled format kernel is invoked once for the frame.
+                    if (workspace.HasWholeImageEstimate ||
+                        (wholeImageInvocation && workspace.PerCallEstimate is not null))
+                        scratchBytes = checked(scratchBytes
+                            + workspace.EstimateWholeImage(width, height, finalFormat));
+
+                    if (workspace.HasPerWorkerEstimate ||
+                        (!wholeImageInvocation && workspace.PerCallEstimate is not null))
+                    {
+                        var workers = formatStep.Operator.Contract.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : Math.Min(RowParallel.ResolveDegree(options.Execute.MaxDegreeOfParallelism), height);
+                        scratchBytes = checked(scratchBytes + checked(
+                            workspace.EstimatePerWorkerScratch(width, height, height, finalFormat) * workers));
+                    }
+
+                    formatScratch = Math.Max(formatScratch, scratchBytes);
+                }
+
+                var oldBytes = checked((long)width * height * finalFormat.BytesPerPixel());
+                var newBytes = checked((long)width * height * outputFormat.BytesPerPixel());
+                var retainedSourceBytes = formatStep.Index > 0 ? sourceBytes : 0L;
+                framePeak = Math.Max(framePeak,
+                    checked(oldBytes + newBytes + scratchBytes + retainedSourceBytes));
+
                 finalFormat = outputFormat;
             }
         }
@@ -132,9 +205,7 @@ internal static class WorkspacePlanner
         // Each operator run is estimated at the size and format it actually sees. Taking the maximum of the
         // sections is the right peak: sections run one after another, so their windows are never alive together.
         long maxPlan = 0;
-        long maxPerWorker = 0;
-        var maxWorkers = 1;
-        long maxWholeImage = 0;
+        long maxOperatorScratchPeak = 0;
         var undeclared = 0;
         foreach (var state in states)
         {
@@ -148,9 +219,9 @@ internal static class WorkspacePlanner
             var estimate = MemoryEstimator.Estimate(state.InputWidth, state.InputHeight, state.InputFormat, slice,
                 bandRows, allowFusion: state.Fused, options.Execute.MaxDegreeOfParallelism);
             maxPlan = Math.Max(maxPlan, estimate.PlanScratchBytes);
-            maxPerWorker = Math.Max(maxPerWorker, estimate.PerWorkerBytes);
-            maxWorkers = Math.Max(maxWorkers, estimate.Workers);
-            maxWholeImage = Math.Max(maxWholeImage, estimate.WholeImageScratchBytes);
+            maxOperatorScratchPeak = Math.Max(maxOperatorScratchPeak, estimate.OperatorScratchPeakBytes);
+            var retainedSourceBytes = state.RecipeIndex > 0 ? sourceBytes : 0L;
+            framePeak = Math.Max(framePeak, checked(estimate.PeakBytes + retainedSourceBytes));
             undeclared += estimate.UndeclaredSteps;
         }
 
@@ -174,18 +245,11 @@ internal static class WorkspacePlanner
             (long)outputWidth * outputHeight * finalFormat.BytesPerPixel(), "result image"));
         terms.AddRange(formatTerms);
         if (maxPlan > 0)
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, maxPlan, "largest operator-run window set"));
-        if (maxPerWorker > 0)
-        {
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, maxPerWorker * maxWorkers,
-                $"{maxPerWorker} x {maxWorkers} workers"));
-        }
-
-        if (maxWholeImage > 0)
-        {
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.WholeImageScratch, maxWholeImage,
-                "whole-image operator scratch"));
-        }
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, maxPlan,
+                "largest operator-run structural buffers beyond its input"));
+        if (maxOperatorScratchPeak > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.OperatorScratchPeak, maxOperatorScratchPeak,
+                "maximum combined scratch peak of one operator invocation across sequential sections"));
 
         if (transition > 0)
         {
@@ -195,17 +259,154 @@ internal static class WorkspacePlanner
 
         if (geometryScratch > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.GeometryScratch, geometryScratch, "geometry scratch"));
+        if (formatScratch > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.FormatScratch, formatScratch,
+                "largest format operator scratch"));
 
-        return new WorkspacePlan(terms, unmanaged, undeclared + geometryUndeclared);
+        if (states.Count == 0)
+            framePeak = checked(sourceBytes
+                + (long)outputWidth * outputHeight * finalFormat.BytesPerPixel());
+
+        return new WorkspacePlan(terms, unmanaged, undeclared + geometryUndeclared + formatUndeclared,
+            framePeak);
+    }
+
+    /// <summary>
+    /// A region call owns one result rectangle and the RegionExecutor windows for its sequential bands. The full
+    /// source is random-access input, not a resident frame, so it must not be charged as a frame allocation.
+    /// </summary>
+    private static WorkspacePlan EstimateRegion(IReadOnlyList<PlanStep> steps, CompileOptions options,
+        List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
+    {
+        var region = options.Region ?? throw new InvalidOperationException("Region backend needs a requested rectangle.");
+        var haloX = 0;
+        var haloY = 0;
+        foreach (var step in steps)
+        {
+            haloX = checked(haloX + step.HaloX);
+            haloY = checked(haloY + step.HaloY);
+        }
+
+        var sourceWindow = MapSourceWindow(steps, region, options.SourceWidth, options.SourceHeight);
+        var windowWidth = sourceWindow.Width;
+        var degree = options.Execute.MaxDegreeOfParallelism;
+        var plan = ProcessingPlan.FromCompiled(steps,
+            options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows);
+        var bandRows = SequentialBands.For(plan, windowWidth, region.Height, options.SourceFormat, degree);
+        var windowHeight = (int)Math.Min(options.SourceHeight,
+            (long)Math.Min(bandRows, region.Height) + 2L * haloY);
+
+        var workers = RowParallel.ResolveWorkers(windowWidth, windowHeight, degree);
+        var operatorScratchPeak = 0L;
+        var undeclared = 0;
+        foreach (var step in steps)
+        {
+            if (step.Scratch is not { } scratch)
+            {
+                undeclared++;
+                continue;
+            }
+
+            var stepScratchPeak = EstimateStepScratchPeak(step, windowWidth, options.SourceHeight,
+                windowHeight, options.SourceFormat, workers);
+            operatorScratchPeak = Math.Max(operatorScratchPeak, stepScratchPeak);
+        }
+
+        var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
+        var targetBytes = TargetBuffer.Bytes(region.Width, region.Height, options.SourceFormat);
+        var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
+        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, targetBytes, "requested result rectangle"));
+        if (windowBytes > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
+                $"{windows} windows of {windowWidth}x{windowHeight}"));
+        if (operatorScratchPeak > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.OperatorScratchPeak, operatorScratchPeak,
+                "largest simultaneous scratch peak of one region operator call"));
+
+        unmanaged.Add(new UnmanagedTerm("region source",
+            "random-access source and codec segments are owned outside the processing executor"));
+        return new WorkspacePlan(terms, unmanaged, undeclared);
+    }
+
+    private static PixelRect MapSourceWindow(IReadOnlyList<PlanStep> steps, PixelRect destination,
+        int width, int height)
+    {
+        var current = destination;
+        for (var i = steps.Count - 1; i >= 0; i--)
+        {
+            current = steps[i].Definition.Contract.Footprint
+                .MapSourceRegions(current, width, height)
+                .Normalize()
+                .Clamp(width, height)
+                .BoundingBox;
+            if (current.Width == 0 || current.Height == 0)
+                return current;
+        }
+
+        return current;
+    }
+
+    /// <summary>
+    /// Tile execution owns one target tile and the RegionExecutor window set for that tile. It does not retain a
+    /// decoded source frame or a full-frame destination, so reusing EstimateFrame here defeats the tile memory knob.
+    /// </summary>
+    private static WorkspacePlan EstimateTile(IReadOnlyList<PlanStep> steps, CompileOptions options,
+        List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
+    {
+        var width = Math.Min(options.SourceWidth, options.TileWidth > 0 ? options.TileWidth : options.SourceWidth);
+        var height = Math.Min(options.SourceHeight, options.TileHeight > 0 ? options.TileHeight : options.SourceHeight);
+        var haloX = 0;
+        var haloY = 0;
+        var undeclared = 0;
+        foreach (var step in steps)
+        {
+            haloX = checked(haloX + step.HaloX);
+            haloY = checked(haloY + step.HaloY);
+        }
+
+        var windowWidth = (int)Math.Min(options.SourceWidth, (long)width + 2L * haloX);
+        var degree = options.Execute.MaxDegreeOfParallelism;
+        var plan = ProcessingPlan.FromCompiled(steps,
+            options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows);
+        var bandRows = SequentialBands.For(plan, windowWidth, height, options.SourceFormat, degree);
+        var windowHeight = (int)Math.Min(options.SourceHeight,
+            (long)Math.Min(bandRows, height) + 2L * haloY);
+        var workers = RowParallel.ResolveWorkers(windowWidth, windowHeight, degree);
+        var operatorScratchPeak = 0L;
+        foreach (var step in steps)
+        {
+            if (step.Scratch is not { } scratch)
+            {
+                undeclared++;
+                continue;
+            }
+
+            var stepScratchPeak = EstimateStepScratchPeak(step, windowWidth, options.SourceHeight,
+                windowHeight, options.SourceFormat, workers);
+            operatorScratchPeak = Math.Max(operatorScratchPeak, stepScratchPeak);
+        }
+        var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
+        var tileBytes = TargetBuffer.Bytes(width, height, options.SourceFormat);
+        var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
+        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, tileBytes, "one resident destination tile"));
+        if (windowBytes > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
+                $"{windows} windows of {windowWidth}x{windowHeight}"));
+        if (operatorScratchPeak > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.OperatorScratchPeak, operatorScratchPeak,
+                "largest simultaneous scratch peak of one tile operator call"));
+
+        unmanaged.Add(new UnmanagedTerm("region source",
+            "the caller or codec owns the source; no full decoded frame is retained by the tile executor"));
+        unmanaged.Add(new UnmanagedTerm("sink",
+            "the caller owns the sink; encoder band memory is reported by the tile-to-encoder facade"));
+        return new WorkspacePlan(terms, unmanaged, undeclared);
     }
 
     private static WorkspacePlan EstimateStream(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
-        IReadOnlyList<SectionState> states, CompileOptions options, List<WorkspaceTerm> terms,
-        List<UnmanagedTerm> unmanaged)
+        IReadOnlyList<SectionState> states, CompileOptions options, int outputWidth, int outputHeight,
+        List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
     {
-        var workers = Math.Max(1, options.Execute.MaxDegreeOfParallelism > 0
-            ? options.Execute.MaxDegreeOfParallelism
-            : Environment.ProcessorCount);
         var bandRowsOption = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
 
         // Every operator run has its own width, height and format; a plan after a resize must be estimated at the
@@ -214,8 +415,7 @@ internal static class WorkspacePlanner
         // not the largest one. Scratch is summed for the same reason — each PlanRowSource reserves its own figure in
         // the shared account and releases it only when disposed.
         long windowBytes = 0;
-        long perWorker = 0;
-        long wholeImage = 0;
+        long operatorScratchPeak = 0;
         var undeclared = 0;
         var sections = 0;
         var windowNote = string.Empty;
@@ -242,8 +442,7 @@ internal static class WorkspacePlanner
             windowNote = $"{sectionCount}, largest {windows} windows of {state.InputWidth}x{windowRows}";
             sections++;
 
-            var sectionPerWorker = 0L;
-            var sectionWholeImage = 0L;
+            var sectionScratchPeak = 0L;
             foreach (var step in slice)
             {
                 if (step.Scratch is not { } scratch)
@@ -255,47 +454,37 @@ internal static class WorkspacePlanner
                 // The same scope rule as MemoryEstimator and WorkingSetBudget: WholeImage is one copy, not one per
                 // worker. A streaming stage has no whole-image step today, but the accounting must not disagree with
                 // the other two executors about what a declaration means.
-                var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
-                    || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
-                if (isWholeImage)
-                {
-                    sectionWholeImage = Math.Max(sectionWholeImage,
-                        scratch(state.InputWidth, state.InputHeight, state.InputHeight, state.InputFormat));
-                    continue;
-                }
-
-                sectionPerWorker = Math.Max(sectionPerWorker,
-                    scratch(state.InputWidth, state.InputHeight, windowRows, state.InputFormat));
+                var stepScratchPeak = EstimateStepScratchPeak(step, state.InputWidth, state.InputHeight,
+                    windowRows, state.InputFormat, RowParallel.ResolveWorkers(state.InputWidth, windowRows,
+                        options.Execute.MaxDegreeOfParallelism));
+                sectionScratchPeak = Math.Max(sectionScratchPeak, stepScratchPeak);
             }
 
-            perWorker += sectionPerWorker;
-            wholeImage += sectionWholeImage;
+            // Each row-source stage has its own dimensions and its own persistent reservation. Its
+            // per-worker scratch is therefore multiplied by the workers that stage can actually run,
+            // not by one guessed worker count shared by every stage in the chain.
+            // Pull stages coexist, but the operators within one stage run sequentially.
+            operatorScratchPeak = checked(operatorScratchPeak + sectionScratchPeak);
         }
 
-        if (windowBytes == 0)
-        {
-            // A plan with no operator section still copies rows through one window pair.
-            var bandRows = bandRowsOption;
-            var windowRows = Math.Min(options.SourceHeight, bandRows);
-            windowBytes = 2L * options.SourceWidth * windowRows * options.SourceFormat.BytesPerPixel();
-            windowNote = $"2 windows of {options.SourceWidth}x{windowRows}";
-        }
+        // The row-copy driver has its own transfer buffer, separate from every row-source stage.
+        // It remains live while the entire pull chain (operator and geometry wrappers) is resident.
+        var copyRows = Math.Min(Pipeline.TransferRows, outputHeight);
+        var copyBytes = checked((long)outputWidth * copyRows * options.SourceFormat.BytesPerPixel());
+        terms.Add(new WorkspaceTerm(WorkspaceTermKind.CopyBuffer, copyBytes,
+            $"{outputWidth}x{copyRows} pipeline transfer buffer"));
 
-        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes, windowNote));
+        if (windowBytes > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes, windowNote));
 
-        if (perWorker > 0)
+        if (operatorScratchPeak > 0)
         {
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, perWorker * workers,
-                $"{perWorker} x {workers} workers across {sections} sections"));
-        }
-
-        if (wholeImage > 0)
-        {
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.WholeImageScratch, wholeImage,
-                "whole-image scratch across sections"));
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.OperatorScratchPeak, operatorScratchPeak,
+                $"summed per-stage operator scratch peaks across {sections} sections"));
         }
 
         AddResizeTerms(recipe, options, terms);
+        AddGeometryRowScratch(recipe, options, terms);
 
         foreach (var step in recipe.Steps)
         {
@@ -311,15 +500,76 @@ internal static class WorkspacePlanner
         return new WorkspacePlan(terms, unmanaged, undeclared);
     }
 
+
+
+    /// <summary>
+    /// Row wrappers are constructed up front and remain alive with the pull chain. Count their private buffers
+    /// alongside plan windows and resize stages; the wrapper classes use the same geometry arithmetic below.
+    /// </summary>
+    private static void AddGeometryRowScratch(PipelineRecipe recipe, CompileOptions options,
+        List<WorkspaceTerm> terms)
+    {
+        var width = options.SourceWidth;
+        var height = options.SourceHeight;
+        var bytesPerPixel = options.SourceFormat.BytesPerPixel();
+        long bytes = 0;
+
+        foreach (var step in recipe.Steps)
+        {
+            if (step is not GeometryStep geometry)
+                continue;
+
+            var (nextWidth, nextHeight) = geometry.Geometry.Map(width, height);
+            if (geometry.Wrap is not null)
+            {
+                var rowBytes = checked((long)width * bytesPerPixel);
+                var stepBytes = geometry.Kind switch
+                {
+                    GeometryKind.Crop => checked(rowBytes * Math.Min(256L, (long)nextHeight + 1)),
+                    GeometryKind.Pad or GeometryKind.FlipHorizontal => rowBytes,
+                    GeometryKind.Resize => 0L, // Counted by ResizeWorkspace in AddResizeTerms.
+                    _ => 0L,
+                };
+                bytes = checked(bytes + stepBytes);
+            }
+
+            width = nextWidth;
+            height = nextHeight;
+        }
+
+        if (bytes > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.GeometryRowScratch, bytes,
+                "resident crop bands and pad/flip source rows across geometry stages"));
+    }
+
+    private static long EstimateStepScratchPeak(PlanStep step, int width, int height, int rows,
+        WorkingFormat format, int workers)
+    {
+        var workspace = step.Definition.Contract.Workspace;
+        var wholeImageInvocation = step.Definition.Contract.Requirements.RequiresWholeImageInvocation;
+        var wholeImage = workspace.HasWholeImageEstimate ||
+                         (wholeImageInvocation && workspace.PerCallEstimate is not null)
+            ? workspace.EstimateWholeImage(width, height, format)
+            : 0L;
+        var perWorker = workspace.HasPerWorkerEstimate ||
+                        (!wholeImageInvocation && workspace.PerCallEstimate is not null)
+            ? wholeImageInvocation
+                ? workspace.EstimatePerWorkerScratch(width, height, rows, format)
+                : workspace.EstimatePerWorker(width, height, rows, format)
+            : 0L;
+        return checked(wholeImage + checked(perWorker * workers));
+    }
+
     private static void AddResizeTerms(PipelineRecipe recipe, CompileOptions options, List<WorkspaceTerm> terms)
     {
         var width = options.SourceWidth;
         var height = options.SourceHeight;
-        long ring = 0, staging = 0, batch = 0, worker = 0;
+        long ring = 0, staging = 0, batch = 0, worker = 0, sourceRow = 0, workerTap = 0;
         var ringNote = string.Empty;
         var stagingNote = string.Empty;
         var batchNote = string.Empty;
         var workerNote = string.Empty;
+        var sourceRowNote = string.Empty;
 
         foreach (var step in recipe.Steps)
         {
@@ -340,36 +590,27 @@ internal static class WorkspacePlanner
                 var workspace = ResizeWorkspace.Estimate(width, height, destWidth, destHeight, weightsY.Taps,
                     nearest, options.SourceFormat, options.Execute);
 
-                if (workspace.RingBytes > ring)
-                {
-                    ring = workspace.RingBytes;
-                    ringNote = $"{workspace.RingRows} rows of {destWidth}";
-                }
-
-                if (workspace.StagingBytes > staging)
-                {
-                    staging = workspace.StagingBytes;
-                    stagingNote = $"{workspace.ChunkRows} source rows";
-                }
-
-                if (workspace.ReadyBytes > batch)
-                {
-                    batch = workspace.ReadyBytes;
-                    batchNote = $"{workspace.ReadyRows} destination rows";
-                }
-
-                if (workspace.WorkerRowBytes > worker)
-                {
-                    worker = workspace.WorkerRowBytes;
-                    workerNote = $"{workspace.Workers} workers";
-                }
+                // CreateStreamChain constructs every geometry row source up front. Each resize keeps its ring,
+                // staging, ready batch and source row alive until the outer chain is disposed, so these are
+                // simultaneous resident allocations and must be summed rather than taking the largest stage.
+                ring = checked(ring + workspace.RingBytes);
+                staging = checked(staging + workspace.StagingBytes);
+                batch = checked(batch + workspace.ReadyBytes);
+                worker = checked(worker + workspace.WorkerRowBytes);
+                sourceRow = checked(sourceRow + workspace.SourceRowBytes);
+                workerTap = checked(workerTap + workspace.WorkerTapBytes);
+                ringNote = $"{ring / 1024} KiB across resize stages";
+                stagingNote = $"{staging / 1024} KiB across resize stages";
+                batchNote = $"{batch / 1024} KiB across resize stages";
+                workerNote = $"{worker / 1024} KiB across resize stages";
+                sourceRowNote = $"{sourceRow / 1024} KiB across resize stages";
             }
 
             width = destWidth;
             height = destHeight;
         }
 
-        // Resizes run one at a time, so the peak is the largest ring/staging/batch among them, not their sum.
+        // Every resize row source is constructed before pulling begins, so all of their resident buffers overlap.
         if (ring > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeRing, ring, ringNote));
         if (staging > 0)
@@ -378,5 +619,10 @@ internal static class WorkspacePlanner
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeBatch, batch, batchNote));
         if (worker > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeWorkerRows, worker, workerNote));
+        if (sourceRow > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeSourceRow, sourceRow, sourceRowNote));
+        if (workerTap > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeWorkerTapScratch, workerTap,
+                $"{workerTap / 1024} KiB across resize stages"));
     }
 }

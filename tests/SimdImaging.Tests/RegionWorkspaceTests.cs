@@ -48,6 +48,45 @@ public sealed class RegionWorkspaceTests
         }
     }
 
+
+    [Fact]
+    public void ARegionWhoseWindowsExceedTheWorkspaceLimit_IsRefusedBeforeTargetRent()
+    {
+        var source = Path.Combine(Path.GetTempPath(), $"simd-region-ws-{Guid.NewGuid():N}.tif");
+        var destination = Path.Combine(Path.GetTempPath(), $"simd-region-ws-{Guid.NewGuid():N}.png");
+        try
+        {
+            var pixels = new byte[64 * 48 * 3];
+            for (var i = 0; i < pixels.Length; i++)
+                pixels[i] = (byte)(i * 37);
+            File.WriteAllBytes(source, TiffFixture.Strips(64, 48, PixelFormat.Rgb24, pixels));
+
+            const long targetBytes = 32L * 24 * 4;
+            var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
+            var workspace = new WorkspaceManager(limitBytes: targetBytes + 1);
+            var options = TranscodeOptions.Default with
+            {
+                Execute = new ExecuteOptions { Workspace = workspace, MaxDegreeOfParallelism = 1 },
+                Region = new RegionOptions { Pool = pool },
+            };
+
+            Should.Throw<InvalidOperationException>(() => ImageTranscode.From(source)
+                .WithOptions(options)
+                .Region(new PixelRect(8, 6, 32, 24))
+                .Invert()
+                .Run(destination));
+
+            pool.Rents.ShouldBe(0,
+                "the complete target + window peak must be reserved before renting the target");
+            workspace.OutstandingBytes.ShouldBe(0);
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
     /// <summary>
     /// The rectangle is a buffer the facade rents, so the facade must reserve it before the rent. Before this the
     /// buffer was rented first and the workspace refusal arrived afterwards, naming the windows: a limit that could
@@ -80,7 +119,7 @@ public sealed class RegionWorkspaceTests
                 .Invert()
                 .Run(destination));
 
-            error.Message.ShouldContain("region destination");
+            error.Message.ShouldContain("complete region working set");
             pool.Rented.ShouldBe(0, "the target was refused before it was rented");
             workspace.OutstandingBytes.ShouldBe(0);
         }

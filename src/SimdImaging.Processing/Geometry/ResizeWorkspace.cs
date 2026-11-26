@@ -16,6 +16,7 @@ namespace SimdImaging.Processing.Geometry;
 /// <param name="StagingBytes">The staging chunk's bytes.</param>
 /// <param name="ReadyBytes">The output batch's bytes.</param>
 /// <param name="WorkerRowBytes">One float row per worker.</param>
+/// <param name="WorkerTapBytes">Vertical tap-index and weight scratch allocated once per worker.</param>
 /// <param name="BudgetBytes">The budget this estimate was fitted to.</param>
 internal readonly record struct ResizeWorkspace(
     int ChunkRows,
@@ -26,6 +27,8 @@ internal readonly record struct ResizeWorkspace(
     long StagingBytes,
     long ReadyBytes,
     long WorkerRowBytes,
+    long SourceRowBytes,
+    long WorkerTapBytes,
     long BudgetBytes)
 {
     /// <summary>Destination rows produced per batch.</summary>
@@ -40,7 +43,7 @@ internal readonly record struct ResizeWorkspace(
     internal bool IsNearest => ChunkRows == 0 && RingRows == 0;
 
     /// <summary>Everything this stage holds at once.</summary>
-    internal long TotalBytes => RingBytes + StagingBytes + ReadyBytes + WorkerRowBytes;
+    internal long TotalBytes => checked(RingBytes + StagingBytes + ReadyBytes + WorkerRowBytes + SourceRowBytes + WorkerTapBytes);
 
     /// <summary>Fits the stage to the budget, or throws with the parts named.</summary>
     /// <exception cref="InvalidOperationException">The minimum working set does not fit.</exception>
@@ -63,10 +66,15 @@ internal readonly record struct ResizeWorkspace(
         // one float row per worker. FloatScratch is thread-local, so the row is per worker; the horizontal and
         // vertical passes do not overlap, so one row covers both. Nearest samples on the calling thread.
         var readyRows = Math.Min(OutputBatchRows, destHeight);
-        var readyBytes = checked((long)readyRows * destStride * sizeof(float));
-        var workers = Math.Max(1, options.MaxDegreeOfParallelism > 0
-            ? options.MaxDegreeOfParallelism
-            : RowParallel.Degree);
+        var readyBytes = checked((long)readyRows * destWidth * format.BytesPerPixel());
+        // PullAndConvert uses RowParallel.For: even at MaxChunkRows it can use at most one worker per
+        // RowsPerWorker rows (and may use fewer because of the pixel threshold). Emit uses ForBands, capped by
+        // the ready batch. The passes are sequential, so row scratch uses the larger count; Tap arrays are only
+        // live during Emit and use its exact worker cap.
+        var degree = RowParallel.ResolveDegree(options.MaxDegreeOfParallelism);
+        var pullWorkers = RowParallel.ResolveWorkers(destWidth, MaxChunkRows, degree);
+        var emitWorkers = Math.Min(degree, readyRows);
+        var workers = Math.Max(pullWorkers, emitWorkers);
 
         if (nearest)
         {
@@ -79,11 +87,17 @@ internal readonly record struct ResizeWorkspace(
                     + "ExecuteOptions.MaxWorkingBytes.");
             }
 
-            return new ResizeWorkspace(0, 0, readyRows, workers, 0, 0, readyBytes, 0, budget);
+            return new ResizeWorkspace(0, 0, readyRows, workers, 0, 0, readyBytes, 0, sourceRowBytes, 0, budget);
         }
 
         var workerRowBytes = checked((long)workers * Math.Max(sourceWidth * 4, destStride) * sizeof(float));
-        var fixedBytes = checked(readyBytes + sourceRowBytes + workerRowBytes);
+        var tapBytesPerWorker = tapsY <= Resample.VerticalStackTapLimit
+            ? (long)Resample.VerticalStackTapLimit * (sizeof(int) + sizeof(float))
+            : (long)tapsY * (sizeof(int) + sizeof(float));
+        // Tap arrays are used only by Emit; no pull-worker scratch is simultaneously live.
+        var tapWorkers = emitWorkers;
+        var workerTapBytes = checked((long)tapWorkers * tapBytesPerWorker);
+        var fixedBytes = checked(readyBytes + sourceRowBytes + workerRowBytes + workerTapBytes);
         var rowFloats = (long)destStride * sizeof(float);
         var ringBase = (long)(tapsY + 2) * rowFloats;
         var perChunk = rowFloats + sourceRowBytes;
@@ -95,7 +109,8 @@ internal readonly record struct ResizeWorkspace(
                 $"Streaming this resize needs a {(ringBase + fixedBytes) / (1024 * 1024)} MiB working set "
                 + $"({ringBase / (1024 * 1024)} MiB ring of {destWidth}-pixel rows, "
                 + $"{readyBytes / (1024 * 1024)} MiB output batch, one source row, "
-                + $"{workers} worker rows), above the {budget / (1024 * 1024)} MiB this path allows. "
+                + $"{workers} worker rows and {workerTapBytes / (1024 * 1024)} MiB vertical tap scratch), "
+                    + $"above the {budget / (1024 * 1024)} MiB this path allows. "
                 + "Reduce the downsample ratio, resize in two steps, lower the degree, or raise "
                 + "ExecuteOptions.MaxWorkingBytes.");
         }
@@ -111,12 +126,13 @@ internal readonly record struct ResizeWorkspace(
                 $"Streaming this resize needs a {(ringBytes + stagingBytes + fixedBytes) / (1024 * 1024)} MiB "
                 + $"working set ({ringBytes / (1024 * 1024)} MiB ring, "
                 + $"{stagingBytes / (1024 * 1024)} MiB staging, {readyBytes / (1024 * 1024)} MiB output batch, "
-                + $"one source row, {workers} worker rows), above the {budget / (1024 * 1024)} MiB this path allows. "
+                + $"one source row, {workers} worker rows, {workerTapBytes / (1024 * 1024)} MiB vertical tap scratch), "
+                + $"above the {budget / (1024 * 1024)} MiB this path allows. "
                 + "Reduce the downsample ratio, resize in two steps, lower the degree, or raise "
                 + "ExecuteOptions.MaxWorkingBytes.");
         }
 
         return new ResizeWorkspace(chunkRows, ringRows, readyRows, workers, ringBytes, stagingBytes, readyBytes,
-            workerRowBytes, budget);
+            workerRowBytes, sourceRowBytes, workerTapBytes, budget);
     }
 }

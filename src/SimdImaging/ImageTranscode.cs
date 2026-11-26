@@ -388,19 +388,20 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         // Source first: a missing input must not truncate an existing destination.
         if (destinationPath is not null)
         {
-            if (_path is not null)
+            return WritePathAtomically(destinationPath, temporaryPath =>
             {
-                using var input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write,
+                using var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
                     FileShare.None);
-                return Image.ProcessChain(input, output, format, SizeOf, BuildChain, ProcessOptions(),
-                    cancellationToken);
-            }
+                if (_path is not null)
+                {
+                    using var input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    return Image.ProcessChain(input, output, format, SizeOf, BuildChain, ProcessOptions(),
+                        cancellationToken);
+                }
 
-            using var destinationFile = new FileStream(destinationPath, FileMode.Create, FileAccess.Write,
-                FileShare.None);
-            return Image.ProcessChain(_stream!, destinationFile, format, SizeOf, BuildChain, ProcessOptions(),
-                cancellationToken);
+                return Image.ProcessChain(_stream!, output, format, SizeOf, BuildChain, ProcessOptions(),
+                    cancellationToken);
+            });
         }
 
         if (_path is not null)
@@ -414,6 +415,31 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             cancellationToken);
     }
 
+
+    /// <summary>
+    /// Writes beside the destination and only replaces it after the complete operation succeeds. Budget refusal,
+    /// decode failure and encoder failure therefore leave an existing destination file untouched.
+    /// </summary>
+    private static T WritePathAtomically<T>(string destinationPath, Func<string, T> write)
+    {
+        var fullPath = Path.GetFullPath(destinationPath);
+        var directory = Path.GetDirectoryName(fullPath)!;
+        var extension = Path.GetExtension(fullPath);
+        var name = Path.GetFileNameWithoutExtension(fullPath);
+        var temporaryPath = Path.Combine(directory, $".{name}.{Guid.NewGuid():N}{extension}");
+        try
+        {
+            var result = write(temporaryPath);
+            File.Move(temporaryPath, fullPath, overwrite: true);
+            return result;
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+
     private IDisposable? ReserveImage(Image image) => _options.Execute.Workspace?.Reserve(
         (long)image.Width * image.Height * image.Format.BytesPerPixel(), "materialized image");
 
@@ -421,13 +447,16 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         StreamRefusal refusal, CancellationToken cancellationToken)
     {
         if (destinationPath is not null)
-            Image.Save(image, destinationPath, _options.Save, cancellationToken);
-        else
         {
-            var bytes = Image.Encode(image, format, _options.Save, cancellationToken);
-            destination!.Write(bytes, 0, bytes.Length);
+            return WritePathAtomically(destinationPath, temporaryPath =>
+            {
+                Image.Save(image, temporaryPath, _options.Save, cancellationToken);
+                return MaterializedReport(image, refusal);
+            });
         }
 
+        var bytes = Image.Encode(image, format, _options.Save, cancellationToken);
+        destination!.Write(bytes, 0, bytes.Length);
         return MaterializedReport(image, refusal);
     }
 

@@ -114,8 +114,15 @@ public static class MemoryEstimator
     public static MemoryEstimate Estimate(PixelView source, ProcessingPlan plan, int degree = 0)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        return Estimate(source.Width, source.Height, source.Format, plan.Steps, plan.BandRows,
-            allowFusion: true, degree);
+        ArgumentOutOfRangeException.ThrowIfNegative(degree);
+        var fusionAllowed = plan.Steps.All(step =>
+            !step.Definition.Contract.Requirements.RequiresWholeImageInvocation);
+        var fuse = fusionAllowed && FusionDecision.ShouldFuse(
+            plan.Steps, source.Width, source.Height, source.Format.BytesPerPixel());
+        var bandRows = plan.BandRowsFor(source.Width, source.Height);
+        var stepwiseRows = plan.StepwiseRowsFor(source.Height, bandRows, degree);
+        return EstimateCore(source.Width, source.Height, source.Format, plan.Steps, bandRows,
+            stepwiseRows, allowFusion: fuse, degree);
     }
 
     /// <summary>Estimates a plan from geometry alone, without an image in hand.</summary>
@@ -132,81 +139,213 @@ public static class MemoryEstimator
         IReadOnlyList<PlanStep> steps, int bandRows = ProcessingPlan.DefaultBandRows,
         bool allowFusion = true, int degree = 0)
     {
+        ValidateEstimateArguments(width, height, steps, bandRows, degree);
+        var stepwiseRows = ProcessingPlan.ResolveStepwiseRows(height, bandRows, degree,
+            useDefaultPolicy: bandRows == ProcessingPlan.DefaultBandRows);
+        return EstimateCore(width, height, format, steps, bandRows, stepwiseRows, allowFusion, degree);
+    }
+
+    internal static MemoryEstimate EstimateForExecution(int width, int height, WorkingFormat format,
+        IReadOnlyList<PlanStep> steps, int bandRows, int stepwiseRows, bool allowFusion, int degree)
+    {
+        ValidateEstimateArguments(width, height, steps, bandRows, degree);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(stepwiseRows);
+        return EstimateCore(width, height, format, steps, bandRows, stepwiseRows, allowFusion, degree);
+    }
+
+    private static void ValidateEstimateArguments(int width, int height, IReadOnlyList<PlanStep> steps,
+        int bandRows, int degree)
+    {
         ArgumentNullException.ThrowIfNull(steps);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
         ArgumentOutOfRangeException.ThrowIfNegative(degree);
+    }
 
+    private static MemoryEstimate EstimateCore(int width, int height, WorkingFormat format,
+        IReadOnlyList<PlanStep> steps, int bandRows, int stepwiseRows, bool allowFusion, int degree)
+    {
         var bytesPerPixel = format.BytesPerPixel();
         var full = checked((long)width * height * bytesPerPixel);
-        var workers = Workers(height, bandRows, degree);
+        var bandWorkers = Workers(height, bandRows, degree);
+        var stepwiseWorkers = Workers(height, stepwiseRows, degree);
+        var resolvedDegree = RowParallel.ResolveDegree(degree);
+        var workers = 1;
 
-        // What the executor rents: one destination buffer per step, or — when fused — the destination plus
-        // two band windows per worker. EstimateSegmentBytes already counts the destination in its answer.
+        // The previous segment's full-frame result remains alive while the next segment writes its output.
+        // Keep the segmentation for both structural buffers and per-step adapter scratch: in a fused run, step k
+        // receives the band widened by its own halo and every later step's halo (Point adapters consume the
+        // destination rows, so they only include later halos).
+        var fusedSegments = allowFusion && steps.Count > 1 ? FusionPlanner.Segment(steps) : null;
+        var segmentCount = fusedSegments?.Count ?? steps.Count;
+        var segmentRentedBytes = new long[segmentCount];
+        var segmentScratchPeaks = new long[segmentCount];
         var rented = full;
-        if (allowFusion && steps.Count > 1)
+        for (var index = 0; index < segmentCount; index++)
         {
-            var segments = FusionPlanner.Segment(steps);
-            foreach (var (first, count) in segments)
-            {
-                if (count <= 1)
-                    continue;
+            var (first, count) = fusedSegments is null ? (index, 1) : fusedSegments[index];
+            var segment = count > 1
+                ? FusedExecutor.EstimateSegmentBytes(width, height, format, steps, first, count,
+                    bandRows, degree)
+                : full;
 
-                var segment = FusedExecutor.EstimateSegmentBytes(width, height, format, steps, first, count,
-                    bandRows, degree);
-                rented = Math.Max(rented, segment);
-            }
+            // Every segment after the first reads the preceding owned full-frame result while producing its own.
+            if (index > 0)
+                segment = checked(segment + full);
+
+            segmentRentedBytes[index] = segment;
+            rented = Math.Max(rented, segment);
         }
 
-        // Scratch is counted by execution shape, not by a blanket multiplier:
-        //   banded       one copy per worker, over band + halo rows
-        //   whole-image  one copy, on the calling thread (ProcessingPlan runs Global steps exactly once)
-        // A single non-Global step is banded too - the executor does not care how long the plan is, it only
-        // looks at the category - so this no longer keys off steps.Count.
+        // Scratch is counted by the invocation shape, not by a blanket multiplier:
+        //   fused runs     one adapter window per worker, including downstream halo
+        //   stepwise runs  one adapter window per worker using the actual stepwise row split
+        //   whole-image    one kernel invocation; internal PerWorker scratch still follows its own workers.
         long perWorker = 0;
+        long perWorkerPeak = 0;
         long wholeImage = 0;
+        long operatorScratchPeak = 0;
         var undeclared = 0;
-        foreach (var step in steps)
+        for (var stepIndex = 0; stepIndex < steps.Count; stepIndex++)
         {
-            if (step.Scratch is not { } scratch)
+            var step = steps[stepIndex];
+            var requirements = step.Definition.Contract.Requirements;
+            var wholeImageInvocation =
+                step.Category is OpCategory.Global or OpCategory.Composite ||
+                requirements.RequiresWholeImageInvocation;
+            var fusedInvocation = IsFusedStep(fusedSegments, stepIndex);
+            var stepWorkers = wholeImageInvocation
+                ? requirements.Threading == ThreadSafety.SingleThread
+                    ? 1
+                    : Math.Min(resolvedDegree, height)
+                : fusedInvocation ? bandWorkers : stepwiseWorkers;
+
+            var workspace = step.Definition.Contract.Workspace;
+            if (!workspace.IsDeclared)
             {
                 undeclared++;
                 continue;
             }
+            var rows = wholeImageInvocation
+                ? height
+                : FusedInvocationRows(steps, stepIndex, fusedSegments, height, bandRows, stepwiseRows, step);
 
-            // The declared scope is part of the contract, not a hint: a step that says its scratch is held once
-            // for the whole image must not be multiplied by the worker count even if its category is Point.
-            var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
-                || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
-            if (isWholeImage)
+            // The partition contract says how often the kernel is called; WorkspaceModel says which of its
+            // allocations are per worker, whole-image, or per call. A Global kernel can still allocate per worker
+            // internally, so Category must not silently turn PerWorker into a single copy.
+            var stepWholeImage = 0L;
+            if (workspace.HasWholeImageEstimate ||
+                (wholeImageInvocation && workspace.PerCallEstimate is not null))
             {
-                wholeImage = Math.Max(wholeImage, scratch(width, height, height, format));
-                continue;
+                stepWholeImage = workspace.EstimateWholeImage(width, height, format);
+                wholeImage = Math.Max(wholeImage, stepWholeImage);
             }
 
-            var rows = steps.Count > 1 && !(allowFusion && FusionPlanner.IsBandable(step))
-                ? height
-                : Math.Min(height, bandRows + (2 * step.HaloY));
-            perWorker = Math.Max(perWorker, scratch(width, height, rows, format));
+            var stepPerWorker = 0L;
+            if (workspace.HasPerWorkerEstimate ||
+                (!wholeImageInvocation && workspace.PerCallEstimate is not null))
+            {
+                workers = Math.Max(workers, stepWorkers);
+
+                // Whole-image operators may run their own RowParallel loops. Their concurrency is independent
+                // of the stepwise band split; WholeImage scratch itself is still counted once.
+                stepPerWorker = wholeImageInvocation
+                    ? workspace.EstimatePerWorkerScratch(width, height, rows, format)
+                    : workspace.EstimatePerWorker(width, height, rows, format);
+                perWorker = Math.Max(perWorker, stepPerWorker);
+                perWorkerPeak = Math.Max(perWorkerPeak, checked(stepPerWorker * stepWorkers));
+            }
+
+            // Steps execute sequentially. Their scratch peaks are alternatives, not simultaneous allocations;
+            // combine both scopes only within the same step before comparing its peak with other steps.
+            var stepScratchPeak = checked(stepWholeImage + checked(stepPerWorker * stepWorkers));
+            operatorScratchPeak = Math.Max(operatorScratchPeak, stepScratchPeak);
+            var segmentIndex = SegmentIndex(fusedSegments, stepIndex);
+            segmentScratchPeaks[segmentIndex] = Math.Max(segmentScratchPeaks[segmentIndex], stepScratchPeak);
         }
 
         // The caller holds the source; the executor holds `rented`. Everything beyond the destination is
         // scratch, and the operator terms sit on top of both.
         var planScratch = Math.Max(0, rented - full);
-        var peak = checked(full + rented + (perWorker * workers) + wholeImage);
+        // The segment holding the largest intermediate/window set need not be the segment holding the largest
+        // operator scratch. Compare complete simultaneous peaks per segment instead of adding two unrelated maxima.
+        var peak = segmentCount == 0 ? checked(2L * full) : 0L;
+        for (var index = 0; index < segmentCount; index++)
+            peak = Math.Max(peak, checked(full + segmentRentedBytes[index] + segmentScratchPeaks[index]));
         return new MemoryEstimate(full, full, planScratch, perWorker, workers, peak)
         {
+            PerWorkerPeakBytes = perWorkerPeak,
             WholeImageScratchBytes = wholeImage,
+            OperatorScratchPeakBytes = operatorScratchPeak,
             UndeclaredSteps = undeclared,
         };
+    }
+
+    /// <summary>
+    /// Rows in the view actually passed to one operator adapter. A fused neighbourhood step receives its current
+    /// halo plus all downstream halos; a point adapter runs only over the output rectangle, which excludes its own
+    /// halo. Outside a multi-step fused segment, the existing band/window geometry applies.
+    /// </summary>
+    private static int FusedInvocationRows(IReadOnlyList<PlanStep> steps, int stepIndex,
+        IReadOnlyList<(int First, int Count)>? segments, int height, int bandRows, int stepwiseRows, PlanStep step)
+    {
+        if (segments is not null)
+        {
+            foreach (var (first, count) in segments)
+            {
+                if (count <= 1 || stepIndex < first || stepIndex >= first + count)
+                    continue;
+
+                var downstreamHalo = 0;
+                for (var i = stepIndex + 1; i < first + count; i++)
+                    downstreamHalo = checked(downstreamHalo + steps[i].HaloY);
+
+                var context = step.Category == OpCategory.Point
+                    ? downstreamHalo
+                    : checked(step.HaloY + downstreamHalo);
+                return (int)Math.Min(height, (long)bandRows + (2L * context));
+            }
+        }
+
+        return (int)Math.Min(height, (long)stepwiseRows + (2L * step.HaloY));
+    }
+
+    private static int SegmentIndex(IReadOnlyList<(int First, int Count)>? segments, int stepIndex)
+    {
+        if (segments is null)
+            return stepIndex;
+
+        for (var index = 0; index < segments.Count; index++)
+        {
+            var (first, count) = segments[index];
+            if (stepIndex >= first && stepIndex < first + count)
+                return index;
+        }
+
+        throw new ArgumentOutOfRangeException(nameof(stepIndex), stepIndex,
+            "The step is not part of the execution segmentation.");
+    }
+
+    private static bool IsFusedStep(IReadOnlyList<(int First, int Count)>? segments, int stepIndex)
+    {
+        if (segments is null)
+            return false;
+
+        foreach (var (first, count) in segments)
+        {
+            if (count > 1 && stepIndex >= first && stepIndex < first + count)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>Mirrors <see cref="RowParallel"/>'s rule: one worker per band, capped by the degree.</summary>
     private static int Workers(int height, int bandRows, int degree)
     {
         var bands = Math.Max(1, (height + bandRows - 1) / bandRows);
-        var cap = degree > 0 ? degree : Environment.ProcessorCount;
+        var cap = RowParallel.ResolveDegree(degree);
         return Math.Max(1, Math.Min(cap, bands));
     }
 }

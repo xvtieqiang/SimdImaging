@@ -131,6 +131,17 @@ internal readonly record struct ExecutionRequirements(
     /// Global, Composite, whole-source and block-aligned steps are not tileable.</summary>
     internal bool SupportsTiles { get; init; }
 
+    /// <summary>
+    /// Whether the frame executor must invoke this step once over the complete image rather than dispatching
+    /// row bands. Execution and workspace estimation must share this rule.
+    /// </summary>
+    internal bool RequiresWholeImageInvocation =>
+        Partition != Partitioning.RowBands ||
+        State != StateScope.None ||
+        Order != ExecutionOrder.Any ||
+        Threading != ThreadSafety.Concurrent ||
+        Determinism != Determinism.CoordinateDeterministic;
+
     /// <summary>The common case: independent rows, no state, order-free, deterministic by coordinates.</summary>
     internal static ExecutionRequirements RowBands { get; } = new(
         Partitioning.RowBands, StateScope.None, ExecutionOrder.Any, ThreadSafety.Concurrent,

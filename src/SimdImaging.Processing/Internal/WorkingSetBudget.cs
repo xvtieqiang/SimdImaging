@@ -10,41 +10,44 @@ namespace SimdImaging.Processing.Internal;
 /// </summary>
 internal static class WorkingSetBudget
 {
-    /// <summary>The bytes the executor holds: its windows plus the declared scratch for every worker. A target
-    /// buffer is not part of this measurement — it belongs to whoever rents it, and <see cref="TargetBuffer"/>
-    /// reserves it before the rent.</summary>
+    /// <summary>
+    /// The bytes the executor holds: its structural windows plus the largest simultaneously-live declared scratch
+    /// peak of one sequential operator call. A target buffer is not part of this measurement — it belongs to whoever
+    /// rents it, and <see cref="TargetBuffer"/> reserves it before the rent.
+    /// </summary>
     internal static long Measure(IReadOnlyList<PlanStep> steps, ExecuteOptions options, int width, int height,
         int windowCols, int windowRows, WorkingFormat format, int windows, out int undeclared)
     {
         var estimate = (long)windows * windowCols * windowRows * format.BytesPerPixel();
         undeclared = 0;
-        var perWorker = 0L;
-        var wholeImage = 0L;
+        var workers = RowParallel.ResolveWorkers(windowCols, windowRows, options.MaxDegreeOfParallelism);
+        var operatorScratchPeak = 0L;
         for (var i = 0; i < steps.Count; i++)
         {
-            if (steps[i].Scratch is not { } scratch)
+            var workspace = steps[i].Definition.Contract.Workspace;
+            if (!workspace.IsDeclared)
             {
                 undeclared++;
                 continue;
             }
 
-            // The declared scope is part of the contract, not a hint: the same rule MemoryEstimator applies to
-            // the frame path, so a ceiling means the same thing on all three executors.
-            var isWholeImage = steps[i].Category is OpCategory.Global or OpCategory.Composite
-                || steps[i].Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
-            if (isWholeImage)
-            {
-                wholeImage = Math.Max(wholeImage, scratch(width, height, height, format));
-                continue;
-            }
-
-            perWorker = Math.Max(perWorker, scratch(windowCols, height, windowRows, format));
+            var wholeImageInvocation =
+                steps[i].Definition.Contract.Requirements.RequiresWholeImageInvocation;
+            var wholeImage = workspace.HasWholeImageEstimate ||
+                             (wholeImageInvocation && workspace.PerCallEstimate is not null)
+                ? workspace.EstimateWholeImage(width, height, format)
+                : 0L;
+            var perWorker = workspace.HasPerWorkerEstimate ||
+                            (!wholeImageInvocation && workspace.PerCallEstimate is not null)
+                ? wholeImageInvocation
+                    ? workspace.EstimatePerWorkerScratch(windowCols, height, windowRows, format)
+                    : workspace.EstimatePerWorker(windowCols, height, windowRows, format)
+                : 0L;
+            var stepScratchPeak = checked(wholeImage + checked(perWorker * workers));
+            operatorScratchPeak = Math.Max(operatorScratchPeak, stepScratchPeak);
         }
 
-        var workers = Math.Max(1, options.MaxDegreeOfParallelism > 0
-            ? options.MaxDegreeOfParallelism
-            : Environment.ProcessorCount);
-        return estimate + (perWorker * workers) + wholeImage;
+        return checked(estimate + operatorScratchPeak);
     }
 
     /// <summary>Checks a measurement against <see cref="ExecuteOptions.MaxWorkingBytes"/>.</summary>

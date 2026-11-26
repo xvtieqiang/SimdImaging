@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Fusion;
+using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
 
@@ -516,7 +517,7 @@ public sealed class ProcessingPlan
         {
             // The steps ran at the source size; the resize is the last stage, so it sees their output whole. That is
             // the same thing a streamed run does band by band, byte for byte.
-            return Resample.Resize(buffer.View, _resizeWidth, _resizeHeight, _resizeResampler, pool);
+            return Resample.Resize(buffer.View, _resizeWidth, _resizeHeight, _resizeResampler, pool, options);
         }
         finally
         {
@@ -532,11 +533,21 @@ public sealed class ProcessingPlan
 
         report = null;
         if (_steps.Count == 0)
+        {
+            var bytes = (long)source.Width * source.Height * source.Format.BytesPerPixel();
+            if (options.MaxWorkingBytes > 0 && bytes > options.MaxWorkingBytes)
+                throw new InvalidOperationException(
+                    $"Copying an empty plan needs {bytes} bytes, above ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
+            using var copyLease = options.Workspace?.Reserve(bytes, "empty plan destination");
             return Geometry.Transforms.Copy(source, pool);
+        }
 
         var width = source.Width;
         var height = source.Height;
         var bandRows = BandRowsFor(width, height);
+        // Fusion runs row bands concurrently. A contract that requires a whole-image invocation or forbids
+        // concurrent calls is isolated by FusionPlanner (it is not bandable), so the rest of the chain can still
+        // fuse — one demanding step must not disable fusion for its neighbours.
         var fusionAllowed = options.AllowFusion && observe is null;
 
         // Decided before the shape is built, not per segment: the segments are cut for one execution mode, and a
@@ -557,8 +568,9 @@ public sealed class ProcessingPlan
             // One formula, shared with the public estimator: the previous private version counted only the buffers
             // the executor rents and never looked at PlanStep.Scratch, so a ceiling could pass a plan whose
             // operators were about to allocate several more full-size planes.
-            var estimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, execution,
-                bandRows, fused, options.MaxDegreeOfParallelism);
+            var stepwiseRows = StepwiseRowsFor(height, bandRows, options.MaxDegreeOfParallelism);
+            var estimate = MemoryEstimator.EstimateForExecution(source.Width, source.Height, source.Format,
+                execution, bandRows, stepwiseRows, fused, options.MaxDegreeOfParallelism);
 
             if (options.MaxWorkingBytes > 0)
             {
@@ -610,8 +622,16 @@ public sealed class ProcessingPlan
                     pending = destination;
                     var whole = new PixelRect(0, 0, width, height);
 
-                    if (step.Category is OpCategory.Global or OpCategory.Composite)
+                    var requirements = step.Definition.Contract.Requirements;
+                    if (step.Category is OpCategory.Global or OpCategory.Composite ||
+                        requirements.RequiresWholeImageInvocation)
                     {
+                        // Whole-image steps run once on the caller, but their kernels may use RowParallel internally.
+                        // Match the configured degree used by the workspace estimator.
+                        var degree = requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : options.MaxDegreeOfParallelism;
+                        using var topLevel = RowParallel.EnterTopLevel(degree);
                         step.Invoke(current, destination.View, whole, whole);
                     }
                     else
@@ -622,8 +642,13 @@ public sealed class ProcessingPlan
                         // (a 256-entry LUT, for one) 24 times per 1080p step. Measured: three point steps cost
                         // 14.5 ms that way against 5.1 ms for the same three operators called directly.
                         // Bands write disjoint rows, so the worker count cannot change a byte.
-                        if (options.MaxDegreeOfParallelism == 1)
+                        if (options.MaxDegreeOfParallelism == 1 ||
+                            step.Definition.Contract.Requirements.Threading == ThreadSafety.SingleThread)
                         {
+                            using var singleThread = RowParallel.EnterTopLevel(
+                                step.Definition.Contract.Requirements.Threading == ThreadSafety.SingleThread
+                                    ? 1
+                                    : options.MaxDegreeOfParallelism);
                             // One worker is a plain loop: RowParallel would wrap it in a delegate, and that
                             // closure is a per-call allocation for a path that is meant to be allocation-free.
                             var bands = BandCountFor(height, bandRows);
@@ -641,7 +666,7 @@ public sealed class ProcessingPlan
                             // thread count rather than for the fusion window: at 360 rows and 128-row bands the old
                             // split gave three workers on a sixteen-core machine and lost 40-80% to the stepwise
                             // chain it was supposed to match (`fusion` mode, "点算子 ×3" at 640×360).
-                            var stepwiseBands = StepwiseBandCount(height, bandRows);
+                            var stepwiseBands = StepwiseBandCount(height, bandRows, options.MaxDegreeOfParallelism);
                             var stepwiseRows = (height + stepwiseBands - 1) / stepwiseBands;
 
                             RowParallel.ForBands(stepwiseBands, (start, end) =>
@@ -720,16 +745,33 @@ public sealed class ProcessingPlan
     /// <summary>
     /// Bands for an unfused segment: enough to keep every worker busy, no finer than a few rows each.
     /// </summary>
-    private int StepwiseBandCount(int height, int bandRows)
+    internal int StepwiseRowsFor(int height, int bandRows, int degree) =>
+        ResolveStepwiseRows(height, bandRows, degree, BandRows == DefaultBandRows);
+
+    internal static int ResolveStepwiseRows(int height, int bandRows, int degree, bool useDefaultPolicy)
+    {
+        // The explicit degree-one path emits the configured band height directly. Degree zero is different:
+        // it uses the current default degree and follows the normal worker-sized split.
+        if (degree == 1)
+            return bandRows;
+
+        var bands = StepwiseBandCountFor(height, bandRows, degree, useDefaultPolicy);
+        return (height + bands - 1) / bands;
+    }
+
+    internal static int StepwiseBandCountFor(int height, int bandRows, int degree, bool useDefaultPolicy)
     {
         // An explicit BandRows is a request about the band geometry and is honoured as given; only the default is
         // reinterpreted, because it was chosen as a fusion window and is too coarse to fill the threads.
-        if (BandRows != DefaultBandRows)
-            return BandCountFor(height, bandRows);
+        if (!useDefaultPolicy)
+            return (height + bandRows - 1) / bandRows;
 
         var byRows = Math.Max(1, height / 32);
-        return Math.Max(1, Math.Min(RowParallel.Degree, byRows));
+        return Math.Max(1, Math.Min(RowParallel.ResolveDegree(degree), byRows));
     }
+
+    private int StepwiseBandCount(int height, int bandRows, int degree) =>
+        StepwiseBandCountFor(height, bandRows, degree, BandRows == DefaultBandRows);
 
     /// <summary>Everything about one folding mode that does not change between executions.</summary>
     private sealed class ExecutionShape

@@ -99,20 +99,33 @@ public static class NonLocalMeansOps
             // one worker (see AGENTS.md / benchmarks/README.md NLM ablation).
             RowParallel.For(width, height, (start, end) =>
             {
-                var ring = ArrayPool<byte>.Shared.Rent(ringBytes);
-                var output = ArrayPool<float>.Shared.Rent(width * 4);
-                // Rolling patch SSD needs a per-offset column-difference row and five per-column double
-                // accumulators; both are worker-private and reused for every row of the band. Rgba32F keeps
-                // the exact per-tap double/NaN path and needs none of this.
+                // Begin cleanup before the first rent: an OOM (or pool failure) on any later rent must return
+                // every earlier worker buffer instead of leaking it out of this callback.
+                byte[]? ring = null;
+                float[]? output = null;
+                long[]? col = null;
+                double[]? accR = null;
+                double[]? accG = null;
+                double[]? accB = null;
+                double[]? accA = null;
+                double[]? accW = null;
                 var useRolling = format != WorkingFormat.Rgba32F;
-                var col = useRolling ? ArrayPool<long>.Shared.Rent(width) : null;
-                var accR = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
-                var accG = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
-                var accB = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
-                var accA = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
-                var accW = useRolling ? ArrayPool<double>.Shared.Rent(width) : null;
                 try
                 {
+                    ring = ArrayPool<byte>.Shared.Rent(ringBytes);
+                    output = ArrayPool<float>.Shared.Rent(width * 4);
+                    // Rolling patch SSD needs a per-offset column-difference row and five per-column double
+                    // accumulators; both are worker-private and reused for every row of the band. Rgba32F keeps
+                    // the exact per-tap double/NaN path and needs none of this.
+                    if (useRolling)
+                    {
+                        col = ArrayPool<long>.Shared.Rent(width);
+                        accR = ArrayPool<double>.Shared.Rent(width);
+                        accG = ArrayPool<double>.Shared.Rent(width);
+                        accB = ArrayPool<double>.Shared.Rent(width);
+                        accA = ArrayPool<double>.Shared.Rent(width);
+                        accW = ArrayPool<double>.Shared.Rent(width);
+                    }
                     // Seed at start - support, NOT at start: the first output row reads rows the band
                     // itself never writes, and uninitialised ring rows are silently wrong on small images.
                     var computed = Math.Max(0, start - support) - 1;
@@ -147,14 +160,14 @@ public static class NonLocalMeansOps
                 }
                 finally
                 {
-                    if (col is not null) ArrayPool<long>.Shared.Return(col);
                     if (accW is not null) ArrayPool<double>.Shared.Return(accW);
                     if (accA is not null) ArrayPool<double>.Shared.Return(accA);
                     if (accB is not null) ArrayPool<double>.Shared.Return(accB);
                     if (accG is not null) ArrayPool<double>.Shared.Return(accG);
                     if (accR is not null) ArrayPool<double>.Shared.Return(accR);
-                    ArrayPool<float>.Shared.Return(output);
-                    ArrayPool<byte>.Shared.Return(ring);
+                    if (col is not null) ArrayPool<long>.Shared.Return(col);
+                    if (output is not null) ArrayPool<float>.Shared.Return(output);
+                    if (ring is not null) ArrayPool<byte>.Shared.Return(ring);
                 }
             });
         }

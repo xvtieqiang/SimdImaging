@@ -10,9 +10,11 @@ namespace SimdImaging.Processing.Fusion;
 /// </summary>
 internal static class FusionPlanner
 {
-    /// <summary>Whether a step may be executed in row bands and joined with its neighbours.</summary>
+    /// <summary>Whether a step may be executed in row bands and joined with its neighbours. A bandable category
+    /// is not enough: a step whose contract requires one whole-image invocation cannot share a fused window.</summary>
     public static bool IsBandable(PlanStep step) =>
-        step.Category is OpCategory.Point or OpCategory.Neighborhood or OpCategory.Separable;
+        step.Category is OpCategory.Point or OpCategory.Neighborhood or OpCategory.Separable &&
+        !step.Definition.Contract.Requirements.RequiresWholeImageInvocation;
 
     /// <summary>Segments the chain into (firstStep, stepCount) runs, in execution order.</summary>
     public static List<(int First, int Count)> Segment(IReadOnlyList<PlanStep> steps)

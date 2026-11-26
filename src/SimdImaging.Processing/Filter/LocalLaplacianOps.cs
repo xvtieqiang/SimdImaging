@@ -78,7 +78,7 @@ public static class LocalLaplacianOps
             heights[l] = Pyramid.DownsampledLength(heights[l - 1]);
         }
 
-        var estimate = EstimateBytes(widths, heights, levelCount, samples);
+        var estimate = EstimateBytes(widths, heights, levelCount, samples, source.Format);
         if (estimate > MaxScratchBytes)
             throw new InvalidOperationException(
                 $"Local Laplacian would need an estimated {estimate} bytes, above the {MaxScratchBytes}-byte limit.");
@@ -86,6 +86,11 @@ public static class LocalLaplacianOps
         var byteCount = (long)width * height;
         if (byteCount > int.MaxValue / 4)
             throw new InvalidOperationException("The image is too large for the pyramid's float planes.");
+
+        // A single level has no Laplacian band to remap; return before allocating pyramid arrays that would
+        // immediately become unreachable.
+        if (effectiveLevels == 1)
+            return Geometry.Transforms.Copy(source, pool);
 
         var gaussian = new float[3][][];
         var laplacian = new float[3][][];
@@ -98,10 +103,6 @@ public static class LocalLaplacianOps
             for (var l = 0; l < effectiveLevels; l++)
                 laplacian[c][l] = new float[widths[l] * heights[l]];
         }
-
-        // A single level has no Laplacian band to remap; the operator is the identity by definition.
-        if (effectiveLevels == 1)
-            return Geometry.Transforms.Copy(source, pool);
 
         var destination = WorkingBuffer.Rent(width, height, source.Format, pool);
         try
@@ -222,7 +223,13 @@ public static class LocalLaplacianOps
     /// <param name="height">Source height.</param>
     /// <param name="levels">Levels requested; the operator clamps this, and so does the estimate.</param>
     /// <param name="samples">Sample count, which decides whether a per-pixel assignment is built.</param>
-    public static long ScratchBytes(int width, int height, int levels = 5, int samples = 32)
+    public static long ScratchBytes(int width, int height, int levels = 5, int samples = 32) =>
+        ScratchBytes(width, height, WorkingFormat.Rgba8, levels, samples);
+
+    /// <summary>Full temporary working set for a Local Laplacian call, including the returned working buffer.
+    /// The format matters because the code-value remap table is 256 entries for Rgba8 and 65536 for Rgba16.</summary>
+    internal static long ScratchBytes(int width, int height, WorkingFormat format, int levels = 5,
+        int samples = 32)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
@@ -245,22 +252,83 @@ public static class LocalLaplacianOps
             heights[l] = Pyramid.DownsampledLength(heights[l - 1]);
         }
 
-        return EstimateBytes(widths, heights, levelCount, samples);
+        return EstimateBytes(widths, heights, levelCount, samples, format);
     }
 
-    private static long EstimateBytes(int[] widths, int[] heights, int levelCount, int samples)
+    private static long EstimateBytes(int[] widths, int[] heights, int levelCount, int samples,
+        WorkingFormat format)
     {
-        long bytes = 0;
-        for (var l = 0; l < levelCount; l++)
-            bytes += 4L * widths[l] * heights[l];
+        var effectiveLevels = levelCount - 1;
+        var basePixels = checked((long)widths[0] * heights[0]);
+        var allLevelPixels = 0L;
+        var laplacianPixels = 0L;
+        var sampleScratchPixels = 0L;
+        var collapseScratchPixels = 0L;
+        var collapseOutputPixels = 0L;
 
-        bytes += 12L * widths[0] * heights[0];
+        for (var level = 0; level < levelCount; level++)
+        {
+            var pixels = checked((long)widths[level] * heights[level]);
+            allLevelPixels = checked(allLevelPixels + pixels);
+            if (level < effectiveLevels)
+                laplacianPixels = checked(laplacianPixels + pixels);
 
-        // The per-pixel sample assignment, when one is built. Reporting less than the truth here would let a
-        // call through the ceiling and then allocate above it anyway.
+            if (level < effectiveLevels)
+            {
+                var downsampleScratch = Math.Max(
+                    checked((long)widths[level] * heights[level + 1]),
+                    checked((long)widths[level + 1] * heights[level]));
+                sampleScratchPixels = Math.Max(sampleScratchPixels, downsampleScratch);
+            }
+
+            if (level < effectiveLevels - 1)
+            {
+                collapseScratchPixels = Math.Max(collapseScratchPixels,
+                    checked((long)widths[level] * heights[level + 1]));
+                collapseOutputPixels = Math.Max(collapseOutputPixels, pixels);
+            }
+        }
+
+        if (effectiveLevels <= 1)
+            return checked(basePixels * format.BytesPerPixel());
+
+        // Gaussian pyramid (3 channels) + Laplacian pyramid (3 channels; the coarsest Gaussian level
+        // is the residual and is copied into the final Laplacian slot) + current/next/upsampled sample planes.
+        var persistentFloatPixels = checked(
+            (3L * allLevelPixels)
+            + (3L * laplacianPixels)
+            + (6L * basePixels)
+            + (3L * checked((long)widths[1] * heights[1]))
+            + sampleScratchPixels);
+
+        // Collapse allocates a fresh scratch and upsampled plane while every persistent pyramid/sample array,
+        // the remap LUT and the assignments are still alive.
+        persistentFloatPixels = checked(persistentFloatPixels + collapseScratchPixels + collapseOutputPixels);
+
+        // WriteOut keeps two RGBA float rows. These are live at the end of the call, alongside the pyramids.
+        persistentFloatPixels = checked(persistentFloatPixels + (8L * widths[0]));
+
+        var bytes = checked(persistentFloatPixels * sizeof(float));
+
+        // The output WorkingBuffer returned to PlanSteps.Global is an additional live frame while the
+        // executor's own destination is being filled.
+        bytes = checked(bytes + checked(basePixels * format.BytesPerPixel()));
+
+        // The remap LUT is float[samples * codeValueCount] for integer formats.
+        var codeValues = format switch
+        {
+            WorkingFormat.Rgba8 => 256L,
+            WorkingFormat.Rgba16 => 65536L,
+            _ => 0L,
+        };
+        bytes = checked(bytes + checked((long)samples * codeValues * sizeof(float)));
+
+        // A byte assignment per channel/level/pixel, plus the small level-offset table.
         if (samples <= MaxByteIndex)
-            for (var l = 0; l < levelCount; l++)
-                bytes += 3L * widths[l] * heights[l];
+        {
+            bytes = checked(bytes + (3L * allLevelPixels));
+            bytes = checked(bytes + (3L * levelCount * sizeof(int)));
+        }
 
         return bytes;
     }

@@ -220,17 +220,25 @@ public sealed partial class Image
                 $"This plan cannot run over a region: {compiled.RegionRefusal}. Run it over a whole image with " +
                 "Load + Apply instead.");
 
+        var execute = options.Execute ?? new ExecuteOptions();
+        var targetBytes = TargetBuffer.Bytes(region.Width, region.Height, source.Format);
+        var regionOptions = execute with
+        {
+            MaxWorkingBytes = execute.MaxWorkingBytes > 0
+                ? execute.MaxWorkingBytes - targetBytes
+                : 0,
+            // The facade reserves the complete compiled peak before renting the target. RegionExecutor must not
+            // reserve its window subset a second time; the shared lease already covers target + windows + scratch.
+            Workspace = null,
+        };
         var layout = source.Layout;
-        // The target is this method's allocation, so this method reserves it — before the rent, never after:
-        // RegionExecutor is handed the view and reserves only the windows it rents, so the rectangle is charged
-        // exactly once, and a reservation above the account's limit leaves no buffer behind.
-        using var targetLease = TargetBuffer.Reserve(options.Execute, region.Width, region.Height, source.Format,
-            "region destination");
+        using var regionLease = execute.Workspace?.Reserve(compiled.Workspace.BoundedBytes,
+            "complete region working set");
         var buffer = WorkingBuffer.Rent(region.Width, region.Height, source.Format, options.Region?.Pool);
         try
         {
             var result = CompiledPlanExecutor.ExecuteRegion(compiled, source, region, buffer.View,
-                options.Execute, options.Region?.Pool);
+                regionOptions, options.Region?.Pool);
             if (!result.Succeeded)
                 throw new NotSupportedException(
                     $"The plan refused the region at step '{result.RefusingStep}' ({result.Refusal}); the compiled " +
