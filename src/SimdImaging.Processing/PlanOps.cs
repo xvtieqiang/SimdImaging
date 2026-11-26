@@ -629,7 +629,8 @@ public static class PlanOps
         ArgumentNullException.ThrowIfNull(palette);
         Func<PixelView, WorkingBuffer> op = v => PaletteQuantizer.Apply(v, palette);
         return Create("map-to-palette", OpCategory.Point, IdentityFootprint.Instance,
-            WorkspaceModel.Of((width, _, _, _) => 32768L + (16L * width)),
+            WorkspaceModel.Of((width, _, rows, format) =>
+                32768L + (16L * width) + ((long)width * rows * format.BytesPerPixel())),
             new KernelImplementations(PlanSteps.Point(op), op));
     }
 
