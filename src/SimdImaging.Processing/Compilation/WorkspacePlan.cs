@@ -263,7 +263,8 @@ internal static class WorkspacePlanner
                 "largest format operator scratch"));
 
         if (states.Count == 0)
-            framePeak = checked((long)outputWidth * outputHeight * finalFormat.BytesPerPixel());
+            framePeak = checked(sourceBytes
+                + (long)outputWidth * outputHeight * finalFormat.BytesPerPixel());
 
         return new WorkspacePlan(terms, unmanaged, undeclared + geometryUndeclared + formatUndeclared,
             framePeak);
