@@ -1967,6 +1967,54 @@ public static class FilterOps
         }
     }
 
+    /// <summary>Per-worker scratch for the oil-paint ring and its histogram state. The result band is
+    /// accounted separately by the Neighborhood adapter.</summary>
+    internal static long OilPaintPlanScratchBytes(int width, int radius, int levels)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(levels);
+        var window = checked(2 * radius + 1);
+        var windowPixels = checked((long)window * width);
+        var rgbaFloats = checked(windowPixels * 4 * sizeof(float));
+        var packedFloats = checked(windowPixels * sizeof(float));
+        var bins = windowPixels;
+        var output = checked((long)width * 4 * sizeof(float));
+        var histogram = checked(4L * levels * sizeof(int));
+        var bases = checked((long)window * sizeof(int));
+        return checked(rgbaFloats + packedFloats + bins + output + histogram + bases);
+    }
+
+    /// <summary>Per-worker row ring and lookup tables used by bilateral filtering. The result band is accounted
+    /// separately by the Neighborhood adapter.</summary>
+    internal static long BilateralPlanScratchBytes(int width, int radius)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        var window = checked(2 * radius + 1);
+        var stride = checked((long)width * 4);
+        var rowRing = checked((long)window * stride * sizeof(float));
+        var output = checked(stride * sizeof(float));
+        var spatial = checked((long)window * window * sizeof(float));
+        const long rangeTableBytes = 512L * sizeof(float);
+        return checked(rowRing + output + spatial + rangeTableBytes);
+    }
+
+    /// <summary>Internal live set of Glow: the highlight frame, the separable blur result and its per-worker
+    /// scratch, plus the final combine's table or three row buffers. The Global adapter adds the returned output.</summary>
+    internal static long GlowPlanWorkspaceBytes(int width, int height, WorkingFormat format, float sigma)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        var radius = Math.Max(1, (int)MathF.Ceiling(3f * sigma));
+        var highlightBytes = checked((long)width * height * format.BytesPerPixel());
+        var blurBytes = SeparablePlanWorkspaceBytes(width, height, radius, format);
+        var combineBytes = format == WorkingFormat.Rgba8 && (long)width * height >= TwoInputLutFloor
+            ? 256L * 256
+            : (long)width * 3 * 4 * sizeof(float);
+        return checked(highlightBytes + blurBytes + combineBytes);
+    }
+
     /// <summary>Per-worker scratch for the plan adapter's median result. The returned band buffer is
     /// accounted separately by <see cref="PlanOps.Neighborhood"/>.</summary>
     internal static long MedianPlanScratchBytes(int width, WorkingFormat format, int radius)
