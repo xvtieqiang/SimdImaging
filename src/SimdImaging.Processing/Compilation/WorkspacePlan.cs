@@ -342,42 +342,26 @@ internal static class WorkspacePlanner
                 var workspace = ResizeWorkspace.Estimate(width, height, destWidth, destHeight, weightsY.Taps,
                     nearest, options.SourceFormat, options.Execute);
 
-                if (workspace.RingBytes > ring)
-                {
-                    ring = workspace.RingBytes;
-                    ringNote = $"{workspace.RingRows} rows of {destWidth}";
-                }
-
-                if (workspace.StagingBytes > staging)
-                {
-                    staging = workspace.StagingBytes;
-                    stagingNote = $"{workspace.ChunkRows} source rows";
-                }
-
-                if (workspace.ReadyBytes > batch)
-                {
-                    batch = workspace.ReadyBytes;
-                    batchNote = $"{workspace.ReadyRows} destination rows";
-                }
-
-                if (workspace.WorkerRowBytes > worker)
-                {
-                    worker = workspace.WorkerRowBytes;
-                    workerNote = $"{workspace.Workers} workers";
-                }
-
-                if (workspace.SourceRowBytes > sourceRow)
-                {
-                    sourceRow = workspace.SourceRowBytes;
-                    sourceRowNote = $"{width}-pixel source row";
-                }
+                // CreateStreamChain constructs every geometry row source up front. Each resize keeps its ring,
+                // staging, ready batch and source row alive until the outer chain is disposed, so these are
+                // simultaneous resident allocations and must be summed rather than taking the largest stage.
+                ring = checked(ring + workspace.RingBytes);
+                staging = checked(staging + workspace.StagingBytes);
+                batch = checked(batch + workspace.ReadyBytes);
+                worker = checked(worker + workspace.WorkerRowBytes);
+                sourceRow = checked(sourceRow + workspace.SourceRowBytes);
+                ringNote = $"{ring / 1024} KiB across resize stages";
+                stagingNote = $"{staging / 1024} KiB across resize stages";
+                batchNote = $"{batch / 1024} KiB across resize stages";
+                workerNote = $"{worker / 1024} KiB across resize stages";
+                sourceRowNote = $"{sourceRow / 1024} KiB across resize stages";
             }
 
             width = destWidth;
             height = destHeight;
         }
 
-        // Resizes run one at a time, so the peak is the largest ring/staging/batch among them, not their sum.
+        // Every resize row source is constructed before pulling begins, so all of their resident buffers overlap.
         if (ring > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeRing, ring, ringNote));
         if (staging > 0)
