@@ -103,6 +103,8 @@ internal static class WorkspacePlanner
         var width = options.SourceWidth;
         var height = options.SourceHeight;
         var finalFormat = options.SourceFormat;
+        var sourceBytes = checked((long)options.SourceWidth * options.SourceHeight
+            * options.SourceFormat.BytesPerPixel());
         var formatTerms = new List<WorkspaceTerm>();
         var geometryUndeclared = 0;
         var geometryScratch = 0L;
@@ -147,7 +149,9 @@ internal static class WorkspacePlanner
                 var transitionBytes = checked(
                     checked((long)width * height * finalFormat.BytesPerPixel())
                     + checked((long)nextWidth * nextHeight * finalFormat.BytesPerPixel()));
-                framePeak = Math.Max(framePeak, checked(transitionBytes + scratchBytes));
+                var retainedSourceBytes = geometry.Index > 0 ? sourceBytes : 0L;
+                framePeak = Math.Max(framePeak,
+                    checked(transitionBytes + scratchBytes + retainedSourceBytes));
 
                 width = nextWidth;
                 height = nextHeight;
@@ -189,7 +193,9 @@ internal static class WorkspacePlanner
 
                 var oldBytes = checked((long)width * height * finalFormat.BytesPerPixel());
                 var newBytes = checked((long)width * height * outputFormat.BytesPerPixel());
-                framePeak = Math.Max(framePeak, checked(oldBytes + newBytes + scratchBytes));
+                var retainedSourceBytes = formatStep.Index > 0 ? sourceBytes : 0L;
+                framePeak = Math.Max(framePeak,
+                    checked(oldBytes + newBytes + scratchBytes + retainedSourceBytes));
 
                 finalFormat = outputFormat;
             }
@@ -213,7 +219,8 @@ internal static class WorkspacePlanner
                 bandRows, allowFusion: state.Fused, options.Execute.MaxDegreeOfParallelism);
             maxPlan = Math.Max(maxPlan, estimate.PlanScratchBytes);
             maxOperatorScratchPeak = Math.Max(maxOperatorScratchPeak, estimate.OperatorScratchPeakBytes);
-            framePeak = Math.Max(framePeak, estimate.PeakBytes);
+            var retainedSourceBytes = state.RecipeIndex > 0 ? sourceBytes : 0L;
+            framePeak = Math.Max(framePeak, checked(estimate.PeakBytes + retainedSourceBytes));
             undeclared += estimate.UndeclaredSteps;
         }
 
