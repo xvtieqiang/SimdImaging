@@ -250,7 +250,9 @@ public static class MemoryEstimator
 
                 // Whole-image operators may run their own RowParallel loops. Their concurrency is independent
                 // of the stepwise band split; WholeImage scratch itself is still counted once.
-                stepPerWorker = workspace.EstimatePerWorker(width, height, rows, format);
+                stepPerWorker = wholeImageInvocation
+                    ? workspace.EstimatePerWorkerScratch(width, height, rows, format)
+                    : workspace.EstimatePerWorker(width, height, rows, format);
                 perWorker = Math.Max(perWorker, stepPerWorker);
                 perWorkerPeak = Math.Max(perWorkerPeak, checked(stepPerWorker * stepWorkers));
             }
