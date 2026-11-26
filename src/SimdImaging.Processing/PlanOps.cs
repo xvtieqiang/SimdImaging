@@ -81,8 +81,7 @@ public static class PlanOps
                         op,
                         TablePixelFloor),
                     op),
-                formats, semantics: semantics,
-                ); // point-table workspace is supplied by the factory below
+                formats, semantics: semantics);
 
     /// <summary>
     /// Pixels below which the table is not worth building. Measured at 27 us per table against a 4K step's 5 ms and a
@@ -169,7 +168,7 @@ public static class PlanOps
         // Large Rgba8 table-backed steps write directly into the executor destination. Other formats and
         // small images fall back to the ordinary operator, which materialises one band result.
         if (format == WorkingFormat.Rgba8 && (long)width * height >= TablePixelFloor)
-            return 0L;
+            return 2L * 4 * 256; // one cached table plus the 256-pixel probe result
 
         var resultBytes = checked((long)width * rows * format.BytesPerPixel());
         var workerBytes = format == WorkingFormat.Rgba16 &&
@@ -287,13 +286,13 @@ public static class PlanOps
             v => FilterOps.GaussianBlur(v, sigma),
             (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows,
                 Math.Max(1, (int)MathF.Ceiling(sigma * 3f)), format),
-            pass: PassModel.SeparableRows);
+            pass: PassModel.SeparableRows, scratchIncludesResult: true);
 
     /// <summary>Box blur of the given radius; support is the radius.</summary>
     public static ImageOp BoxBlur(int radius) =>
         Neighborhood(nameof(FilterOps.BoxBlur), radius, v => FilterOps.BoxBlur(v, radius),
             (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows, radius, format),
-            pass: PassModel.SeparableRows);
+            pass: PassModel.SeparableRows, scratchIncludesResult: true);
 
     /// <summary>
     /// Unsharp mask. It blurs internally, so its support follows the Gaussian (<c>ceil(3σ)</c>), not the single
@@ -304,7 +303,7 @@ public static class PlanOps
             v => FilterOps.Sharpen(v, amount, sigma),
             (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows,
                 Math.Max(1, (int)MathF.Ceiling(sigma * 3f)), format, sharpen: true),
-            pass: PassModel.SeparableRows);
+            pass: PassModel.SeparableRows, scratchIncludesResult: true);
 
     /// <summary>3x3 emboss; one row and one column.</summary>
     public static ImageOp Emboss(float strength = 1f) =>
@@ -416,11 +415,13 @@ public static class PlanOps
         return combination
             ? Neighborhood(nameof(FilterOps.MorphCombine), radius, v => FilterOps.MorphCombine(v, radius, kind),
                 (width, _, rows, format) =>
-                    FilterOps.MorphPlanWorkspaceBytes(width, rows, format, radius, kind))
+                    FilterOps.MorphPlanWorkspaceBytes(width, rows, format, radius, kind),
+                scratchIncludesResult: true)
             : Neighborhood(nameof(FilterOps.Morph), radius,
                 v => FilterOps.Morph(v, radius, kind == Abstractions.Morphology.Erode),
                 (width, _, rows, format) =>
-                    FilterOps.MorphPlanWorkspaceBytes(width, rows, format, radius, kind));
+                    FilterOps.MorphPlanWorkspaceBytes(width, rows, format, radius, kind),
+                scratchIncludesResult: true);
     }
 
     /// <summary>
@@ -813,8 +814,10 @@ public static class PlanOps
             // Five float planes over bandRows + 4·radius rows (the operator widens the band by 2·radius on each
             // side, so its row count is the estimator's `rows` plus another 2·radius), plus the full-image copy
             // it makes up front. Both terms are read off GuidedFilterOps, not assumed.
-            (width, height, rows, format) =>
-                ((long)(rows + (2 * radius)) * width * 20) + ((long)width * height * format.BytesPerPixel()));
+            (width, _, rows, format) =>
+                ((long)(rows + (2 * radius)) * width * 20)
+                    + ((long)width * rows * format.BytesPerPixel()),
+            scratchIncludesResult: true);
 
     /// <summary>Guided filter whose guide is supplied at <c>Add</c> time. The port reports the whole guide until the
     /// view is known, which is the safe direction.</summary>
@@ -876,7 +879,7 @@ public static class PlanOps
             v => LocalLaplacianOps.LocalLaplacian(v, levels, samples, alpha, beta, sigmaR),
             (width, height, _, format) =>
                 LocalLaplacianOps.ScratchBytes(width, height, format, levels, samples),
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage, scratchIncludesResult: true);
 
     /// <summary>Per-channel histogram stretch; whole-image statistics.</summary>
     public static ImageOp Normalize() =>
@@ -921,7 +924,7 @@ public static class PlanOps
                     + (2L * width * 4 * sizeof(float))
                     + ((long)width * height * format.BytesPerPixel());
             },
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage);
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage, scratchIncludesResult: true);
 
     /// <summary>Histogram equalisation needs the whole image to build its transfer curve.</summary>
     public static ImageOp Equalize() =>
