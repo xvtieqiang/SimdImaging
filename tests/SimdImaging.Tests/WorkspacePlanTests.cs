@@ -73,7 +73,8 @@ public sealed class WorkspacePlanTests
 
         var reported = plan.Workspace.Terms
             .Where(term => term.Kind is WorkspaceTermKind.ResizeRing or WorkspaceTermKind.ResizeStaging
-                or WorkspaceTermKind.ResizeBatch or WorkspaceTermKind.ResizeWorkerRows)
+                or WorkspaceTermKind.ResizeBatch or WorkspaceTermKind.ResizeWorkerRows
+                or WorkspaceTermKind.ResizeSourceRow or WorkspaceTermKind.ResizeWorkerTapScratch)
             .Sum(term => term.Bytes);
 
         var source = new EmptySource(128, 96);
