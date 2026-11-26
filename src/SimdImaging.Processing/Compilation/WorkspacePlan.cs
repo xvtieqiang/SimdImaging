@@ -1,4 +1,5 @@
 using SimdImaging.Abstractions;
+using SimdImaging.Processing;
 using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
@@ -79,6 +80,7 @@ internal static class WorkspacePlanner
         {
             ExecutionBackend.Stream => EstimateStream(recipe, steps, states, options, terms, unmanaged),
             ExecutionBackend.Tile => EstimateTile(steps, options, terms, unmanaged),
+            ExecutionBackend.Region => EstimateRegion(steps, options, terms, unmanaged),
             _ => EstimateFrame(recipe, steps, states, options, outputWidth, outputHeight, terms, unmanaged),
         };
     }
@@ -195,6 +197,71 @@ internal static class WorkspacePlanner
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.GeometryScratch, geometryScratch, "geometry scratch"));
 
         return new WorkspacePlan(terms, unmanaged, undeclared + geometryUndeclared);
+    }
+
+    /// <summary>
+    /// A region call owns one result rectangle and the RegionExecutor windows for its sequential bands. The full
+    /// source is random-access input, not a resident frame, so it must not be charged as a frame allocation.
+    /// </summary>
+    private static WorkspacePlan EstimateRegion(IReadOnlyList<PlanStep> steps, CompileOptions options,
+        List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
+    {
+        var region = options.Region ?? throw new InvalidOperationException("Region backend needs a requested rectangle.");
+        var haloX = 0;
+        var haloY = 0;
+        foreach (var step in steps)
+        {
+            haloX = checked(haloX + step.HaloX);
+            haloY = checked(haloY + step.HaloY);
+        }
+
+        var windowWidth = (int)Math.Min(options.SourceWidth, (long)region.Width + 2L * haloX);
+        var degree = options.Execute.MaxDegreeOfParallelism;
+        var plan = ProcessingPlan.FromCompiled(steps,
+            options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows);
+        var bandRows = SequentialBands.For(plan, windowWidth, region.Height, options.SourceFormat, degree);
+        var windowHeight = (int)Math.Min(options.SourceHeight,
+            (long)Math.Min(bandRows, region.Height) + 2L * haloY);
+
+        var perWorker = 0L;
+        var wholeImage = 0L;
+        var undeclared = 0;
+        foreach (var step in steps)
+        {
+            if (step.Scratch is not { } scratch)
+            {
+                undeclared++;
+                continue;
+            }
+
+            var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
+                || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
+            if (isWholeImage)
+                wholeImage = Math.Max(wholeImage,
+                    scratch(options.SourceWidth, options.SourceHeight, options.SourceHeight, options.SourceFormat));
+            else
+                perWorker = Math.Max(perWorker,
+                    scratch(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat));
+        }
+
+        var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
+        var targetBytes = TargetBuffer.Bytes(region.Width, region.Height, options.SourceFormat);
+        var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
+        var workers = Math.Max(1, degree > 0 ? degree : Environment.ProcessorCount);
+        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, targetBytes, "requested result rectangle"));
+        if (windowBytes > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
+                $"{windows} windows of {windowWidth}x{windowHeight}"));
+        if (perWorker > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, perWorker * workers,
+                $"{perWorker} x {workers} region workers"));
+        if (wholeImage > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.WholeImageScratch, wholeImage,
+                "whole-image scratch declared by a region step"));
+
+        unmanaged.Add(new UnmanagedTerm("region source",
+            "random-access source and codec segments are owned outside the processing executor"));
+        return new WorkspacePlan(terms, unmanaged, undeclared);
     }
 
     /// <summary>
