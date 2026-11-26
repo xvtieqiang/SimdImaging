@@ -548,6 +548,29 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
+    public void FusedWorkspaceCountsDownstreamHaloInEarlierOperatorAdapterWindows()
+    {
+        const int width = 64;
+        const int height = 256;
+        const int bandRows = 32;
+        const int radius = 1;
+        var first = PlanOps.GaussianBlur(1f);
+        var second = PlanOps.GaussianBlur(1f);
+        var third = PlanOps.GaussianBlur(1f);
+        var plan = new ProcessingPlan { BandRows = bandRows }.Add(first).Add(second).Add(third);
+        var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
+            bandRows, allowFusion: true, degree: 1);
+        var firstWindowRows = bandRows + (2 * radius * 3);
+        var secondWindowRows = bandRows + (2 * radius * 2);
+        var thirdWindowRows = bandRows + (2 * radius);
+        var expectedPerWorker = Math.Max(
+            first.Scratch!(width, height, firstWindowRows, WorkingFormat.Rgba8),
+            Math.Max(second.Scratch!(width, height, secondWindowRows, WorkingFormat.Rgba8),
+                third.Scratch!(width, height, thirdWindowRows, WorkingFormat.Rgba8)));
+
+        estimate.PerWorkerBytes.ShouldBe(expectedPerWorker);
+    }
+    [Fact]
     public void Estimate_LocksTheFusedArithmeticForATwoPointPlan()
     {
         // Stepwise execution keeps the prior full-frame result alive while the next destination is being written.
