@@ -26,6 +26,7 @@ internal readonly record struct ResizeWorkspace(
     long StagingBytes,
     long ReadyBytes,
     long WorkerRowBytes,
+    long SourceRowBytes,
     long BudgetBytes)
 {
     /// <summary>Destination rows produced per batch.</summary>
@@ -40,7 +41,7 @@ internal readonly record struct ResizeWorkspace(
     internal bool IsNearest => ChunkRows == 0 && RingRows == 0;
 
     /// <summary>Everything this stage holds at once.</summary>
-    internal long TotalBytes => RingBytes + StagingBytes + ReadyBytes + WorkerRowBytes;
+    internal long TotalBytes => checked(RingBytes + StagingBytes + ReadyBytes + WorkerRowBytes + SourceRowBytes);
 
     /// <summary>Fits the stage to the budget, or throws with the parts named.</summary>
     /// <exception cref="InvalidOperationException">The minimum working set does not fit.</exception>
@@ -63,7 +64,7 @@ internal readonly record struct ResizeWorkspace(
         // one float row per worker. FloatScratch is thread-local, so the row is per worker; the horizontal and
         // vertical passes do not overlap, so one row covers both. Nearest samples on the calling thread.
         var readyRows = Math.Min(OutputBatchRows, destHeight);
-        var readyBytes = checked((long)readyRows * destStride * sizeof(float));
+        var readyBytes = checked((long)readyRows * destWidth * format.BytesPerPixel());
         var workers = Math.Max(1, options.MaxDegreeOfParallelism > 0
             ? options.MaxDegreeOfParallelism
             : RowParallel.Degree);
@@ -79,7 +80,7 @@ internal readonly record struct ResizeWorkspace(
                     + "ExecuteOptions.MaxWorkingBytes.");
             }
 
-            return new ResizeWorkspace(0, 0, readyRows, workers, 0, 0, readyBytes, 0, budget);
+            return new ResizeWorkspace(0, 0, readyRows, workers, 0, 0, readyBytes, 0, sourceRowBytes, budget);
         }
 
         var workerRowBytes = checked((long)workers * Math.Max(sourceWidth * 4, destStride) * sizeof(float));
@@ -117,6 +118,6 @@ internal readonly record struct ResizeWorkspace(
         }
 
         return new ResizeWorkspace(chunkRows, ringRows, readyRows, workers, ringBytes, stagingBytes, readyBytes,
-            workerRowBytes, budget);
+            workerRowBytes, sourceRowBytes, budget);
     }
 }
