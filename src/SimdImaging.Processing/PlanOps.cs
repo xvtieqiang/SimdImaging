@@ -228,7 +228,8 @@ public static class PlanOps
         PassModel pass = PassModel.Single, StateScope state = StateScope.None,
         ExecutionOrder order = ExecutionOrder.Any, Determinism determinism = Determinism.CoordinateDeterministic,
         PixelSemantics? semantics = null, WorkingFormat? outputFormat = null, bool scratchIncludesResult = false,
-        WorkspaceScope scratchScope = WorkspaceScope.PerWorker)
+        WorkspaceScope scratchScope = WorkspaceScope.PerWorker,
+        Func<int, int, int, WorkingFormat, long>? wholeImageScratch = null)
     {
         var requirements = ExecutionRequirements.WholeImage with
         {
@@ -238,9 +239,23 @@ public static class PlanOps
         };
 
         WorkspaceModel workspace;
-        if (scratch is null)
+        if (scratch is null && wholeImageScratch is null)
         {
             workspace = WorkspaceModel.Undeclared;
+        }
+        else if (wholeImageScratch is not null)
+        {
+            if (scratchScope != WorkspaceScope.PerWorker)
+                throw new ArgumentException("A mixed global workspace requires per-worker scratch.", nameof(scratchScope));
+
+            workspace = WorkspaceModel.OfMixed(scratch,
+                (width, height, rows, format) =>
+                {
+                    var bytes = wholeImageScratch(width, height, rows, format);
+                    return scratchIncludesResult
+                        ? bytes
+                        : checked(bytes + ((long)width * height * format.BytesPerPixel()));
+                });
         }
         else if (scratchScope == WorkspaceScope.WholeImage)
         {
@@ -549,7 +564,9 @@ public static class PlanOps
     public static ImageOp Glow(float threshold = 0.7f, float sigma = 8f, float amount = 0.6f) =>
         Global(nameof(FilterOps.Glow), v => FilterOps.Glow(v, threshold, sigma, amount),
             (width, height, _, format) =>
-                FilterOps.GlowPlanWorkspaceBytes(width, height, format, sigma));
+                FilterOps.GlowPlanWorkerScratchBytes(width, height, format, sigma),
+            wholeImageScratch: (width, height, _, format) =>
+                FilterOps.GlowPlanWholeImageScratchBytes(width, height, format));
 
     /// <summary>Warm or cool shift.</summary>
     /// <param name="amount">Positive warms, negative cools.</param>
@@ -694,9 +711,10 @@ public static class PlanOps
     public static ImageOp DistanceTransform(float threshold = 0.5f) =>
         FormatStep("distance-transform", v => DistanceTransformOps.SquaredEuclidean(v, threshold),
             (width, height, _, _) =>
-                (4L * width * height) + (256L * height) + (16L * Math.Max(width, height)) + (16L * width),
+                (4L * width * height) + (256L * height) + (16L * Math.Max(width, height)) + (32L * width),
             WholeSourceFootprint.Instance, WorkingFormat.Rgba32F, PassModel.GatherThenApply,
-            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
+            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded },
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>
     /// Converts to a colour model (XYZ, Lab, YCbCr, ...) in Rgba32F. The output format differs from the input, so
@@ -929,7 +947,8 @@ public static class PlanOps
             v => LocalLaplacianOps.LocalLaplacian(v, levels, samples, alpha, beta, sigmaR),
             (width, height, _, format) =>
                 LocalLaplacianOps.ScratchBytes(width, height, format, levels, samples),
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage, scratchIncludesResult: true);
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage, scratchIncludesResult: true,
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>Per-channel histogram stretch; whole-image statistics.</summary>
     public static ImageOp Normalize() =>
@@ -974,7 +993,8 @@ public static class PlanOps
                     + (2L * width * 4 * sizeof(float))
                     + ((long)width * height * format.BytesPerPixel());
             },
-            pass: PassModel.GatherThenApply, state: StateScope.PerImage, scratchIncludesResult: true);
+            pass: PassModel.GatherThenApply, state: StateScope.PerImage, scratchIncludesResult: true,
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>Histogram equalisation needs the whole image to build its transfer curve.</summary>
     public static ImageOp Equalize() =>
