@@ -844,12 +844,7 @@ public static class PlanOps
     /// <summary>Guided filter; its window is the radius.</summary>
     public static ImageOp GuidedFilter(int radius, float epsilon = 1e-4f) =>
         Neighborhood("guided", radius, v => GuidedFilterOps.GuidedFilter(v, radius, epsilon),
-            // Five float planes over the operator's widened window, plus the result window returned by the
-            // adapter. The row count includes the caller's halo and the guided filter's own two-radius context.
-            (width, _, rows, format) =>
-                ((long)(rows + (2 * radius)) * width * 20)
-                    + ((long)width * rows * format.BytesPerPixel()),
-            scratchIncludesResult: true);
+            (width, _, rows, _) => GuidedFilterOps.GuidedFilterPlanScratchBytes(width, rows, radius));
 
     /// <summary>Guided filter whose guide is supplied at <c>Add</c> time. The port reports the whole guide until the
     /// view is known, which is the safe direction.</summary>
