@@ -333,8 +333,7 @@ public static class PlanOps
     /// <param name="radius">Window radius; 1 is 3×3, up to 8.</param>
     public static ImageOp Median(int radius) =>
         Neighborhood(nameof(FilterOps.Median), radius, v => FilterOps.Median(v, radius),
-            // Four channels are medianed, read from a band of rows widened by the radius on each side.
-            (width, _, rows, _) => (long)rows * width * 4,
+            (width, _, _, format) => FilterOps.MedianPlanScratchBytes(width, format, radius),
             semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     /// <summary>
