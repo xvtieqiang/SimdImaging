@@ -330,6 +330,21 @@ public class ProcessingPlanLeakTests
 
     /// <summary>Deterministic, thread-safe pool: fused segments rent from band workers, so every counter
     /// transition happens under one gate and disposal is recorded centrally.</summary>
+    [Fact]
+    public void WholeImageOperator_UsesExecuteOptionsMaxDegreeOfParallelism()
+    {
+        using var image = Image.Create(256, 256, WorkingFormat.Rgba8);
+        var plan = new ProcessingPlan { BandRows = 256 }.Add(PlanOps.Clahe(tilesX: 4, tilesY: 8));
+
+        using var serial = plan.ExecuteWithOptions(image[0].Pixels.View,
+            new ExecuteOptions { MaxDegreeOfParallelism = 1 });
+        RowParallel.LastWorkerCount.ShouldBe(1);
+
+        using var parallel = plan.ExecuteWithOptions(image[0].Pixels.View,
+            new ExecuteOptions { MaxDegreeOfParallelism = 2 });
+        RowParallel.LastWorkerCount.ShouldBe(2);
+        parallel.View.Span.ToArray().ShouldBe(serial.View.Span.ToArray());
+    }
     private sealed class CountingPool : IPixelPool
     {
         private readonly List<CountingOwner> _owners = [];
