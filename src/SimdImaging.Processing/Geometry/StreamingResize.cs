@@ -356,8 +356,25 @@ internal static class StreamingResize
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sink);
         options ??= new ExecuteOptions();
+        options = options.Workspace is not null
+            ? options
+            : options with { Workspace = new WorkspaceManager(options.MaxWorkingBytes) };
+
+        var weightsX = WeightTable.Build(source.Width, width, resampler);
+        var weightsY = WeightTable.Build(source.Height, height, resampler);
+        var tapX = 0;
+        var tapY = 0;
+        var nearest = resampler == Resampler.Nearest && source.Format == WorkingFormat.Rgba8
+                      && Resample.TryNearestTap(weightsX, out tapX)
+                      && Resample.TryNearestTap(weightsY, out tapY);
+        var workspace = ResizeWorkspace.Estimate(source.Width, source.Height, width, height, weightsY.Taps,
+            nearest, source.Format, options);
+        var copyBytes = checked((long)width * Math.Min(Pipeline.TransferRows, height)
+            * source.Format.BytesPerPixel());
+        WorkingSetBudget.Ensure(checked(workspace.TotalBytes + copyBytes), 0, 1, options,
+            "The streaming resize and transfer pipeline");
 
         using var rows = new ResizeRowSource(source, width, height, resampler, options);
-        return Pipeline.Copy(rows, sink, options.CancellationToken);
+        return Pipeline.Copy(rows, sink, options.CancellationToken, options);
     }
 }
