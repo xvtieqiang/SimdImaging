@@ -117,7 +117,7 @@ internal static class WorkspacePlanner
                 }
                 else if (declared.Estimate is { } estimateGeometry)
                 {
-                    geometryScratch += estimateGeometry(nextWidth, nextHeight, nextHeight, options.SourceFormat);
+                    geometryScratch += estimateGeometry(nextWidth, nextHeight, nextHeight, finalFormat);
                 }
 
                 width = nextWidth;
@@ -139,7 +139,7 @@ internal static class WorkspacePlanner
                 else if (workspace.Estimate is { } estimateFormat)
                 {
                     formatScratch = Math.Max(formatScratch,
-                        estimateFormat(width, height, height, options.SourceFormat));
+                        estimateFormat(width, height, height, finalFormat));
                 }
 
                 finalFormat = outputFormat;
