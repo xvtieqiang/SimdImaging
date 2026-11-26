@@ -907,9 +907,11 @@ public static class PlanOps
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
         return Create("guided-by", OpCategory.Composite, new HaloFootprint(radius, radius),
-            WorkspaceModel.Of((width, height, _, format) =>
-                GuidedFilterOps.CrossGuidedPlanWorkspaceBytes(width, height, format, radius, bandRows),
-                WorkspaceScope.WholeImage),
+            WorkspaceModel.OfMixed(
+                (width, height, _, _) =>
+                    GuidedFilterOps.CrossGuidedPlanPerWorkerScratchBytes(width, height, radius, bandRows),
+                (width, height, _, format) =>
+                    GuidedFilterOps.CrossGuidedPlanReturnedBufferBytes(width, height, format)),
             new KernelImplementations(
                 (_, _, _, _) => throw new InvalidOperationException(
                     "'guided-by' needs its guide injected; add it with ProcessingPlan.Add(operator, second)."),
