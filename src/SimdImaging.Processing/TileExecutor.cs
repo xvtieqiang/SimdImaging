@@ -39,6 +39,9 @@ internal static class TileExecutor
         if (source.Format != sink.Format)
             throw new ArgumentException($"The sink is {sink.Format}, the source is {source.Format}.");
 
+        // The edge tiles are clipped; budget the largest tile that can actually be rented.
+        tileWidth = Math.Min(tileWidth, source.Width);
+        tileHeight = Math.Min(tileHeight, source.Height);
         var tileBytes = TargetBuffer.Bytes(tileWidth, tileHeight, source.Format);
         if (options.MaxWorkingBytes > 0 && tileBytes > options.MaxWorkingBytes)
             throw new InvalidOperationException(
