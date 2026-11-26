@@ -112,28 +112,38 @@ public sealed partial class Image
             ? execute with { MaxWorkingBytes = execute.MaxWorkingBytes - encoderBandBytes }
             : execute;
 
-        var encodeOptions = BuildEncodeOptions(format, save);
-        using var session = ImageCodecs.CreateEncoder(format, destination, encodeOptions, leaveOpen: true);
-        var metadata = save.Metadata ?? ImageMetadata.Empty;
-        var frame = session.AddFrame(source.Width, source.Height, source.Format.ToPixelFormat(),
-            ColorEncoding.AssumedSrgb, metadata, null);
+        var predictedTotalBytes = checked(compiled.Workspace.BoundedBytes + encoderBandBytes);
+        if (workspace.LimitBytes > 0 &&
+            checked(workspace.OutstandingBytes + predictedTotalBytes) > workspace.LimitBytes)
+            throw new InvalidOperationException(
+                $"The tiled pipeline needs {predictedTotalBytes} bytes in addition to " +
+                $"{workspace.OutstandingBytes} already reserved, above the WorkspaceManager limit of " +
+                $"{workspace.LimitBytes} bytes.");
 
-        using (var sink = new TileEncoderSink(source.Width, source.Height, source.Format, frame,
+        // Allocate and reserve the encoder band before opening the destination encoder. This catches both an
+        // account-limit refusal and a band allocation failure without leaving a partial output header.
+        using (var sink = new TileEncoderSink(source.Width, source.Height, source.Format,
                    Math.Min(tileHeight, source.Height), pool, execute, cancellationToken))
         {
+            var encodeOptions = BuildEncodeOptions(format, save);
+            using var session = ImageCodecs.CreateEncoder(format, destination, encodeOptions, leaveOpen: true);
+            var metadata = save.Metadata ?? ImageMetadata.Empty;
+            var frame = session.AddFrame(source.Width, source.Height, source.Format.ToPixelFormat(),
+                ColorEncoding.AssumedSrgb, metadata, null);
+            sink.Attach(frame);
+
             CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, tileOptions, pool);
             sink.Complete();
+            session.Commit(cancellationToken);
+
+            return new ProcessReport(ProcessMode.Tiled, StreamRefusal.None, ReaderIsStreaming: false,
+                EncoderIsStreaming: session.IsStreaming, source.Width, source.Height, source.Height,
+                MetadataCarried: save.Metadata is not null)
+            {
+                PeakWorkingBytes = workspace.PeakBytes,
+                PredictedWorkingBytes = predictedTotalBytes,
+            };
         }
-
-        session.Commit(cancellationToken);
-
-        return new ProcessReport(ProcessMode.Tiled, StreamRefusal.None, ReaderIsStreaming: false,
-            EncoderIsStreaming: session.IsStreaming, source.Width, source.Height, source.Height,
-            MetadataCarried: save.Metadata is not null)
-        {
-            PeakWorkingBytes = workspace.PeakBytes,
-            PredictedWorkingBytes = compiled.Workspace.BoundedBytes + encoderBandBytes,
-        };
     }
 
     /// <summary>
@@ -220,7 +230,7 @@ public sealed partial class Image
     /// </summary>
     private sealed class TileEncoderSink : IRegionSink, IDisposable
     {
-        private readonly StreamFrameEncoder _frame;
+        private StreamFrameEncoder? _frame;
         private readonly WorkingBuffer _band;
         private readonly int[] _filled;
         private readonly CancellationToken _cancellation;
@@ -230,13 +240,12 @@ public sealed partial class Image
         private int _bandRows;
         private bool _disposed;
 
-        internal TileEncoderSink(int width, int height, WorkingFormat format, StreamFrameEncoder frame,
-            int bandRows, IPixelPool? pool, ExecuteOptions options, CancellationToken cancellationToken)
+        internal TileEncoderSink(int width, int height, WorkingFormat format, int bandRows, IPixelPool? pool,
+            ExecuteOptions options, CancellationToken cancellationToken)
         {
             Width = width;
             Height = height;
             Format = format;
-            _frame = frame;
             _bandCapacity = bandRows;
             _bandRows = Math.Min(bandRows, height);
             _cancellation = cancellationToken;
@@ -262,6 +271,15 @@ public sealed partial class Image
         public int Width { get; }
         public int Height { get; }
         public WorkingFormat Format { get; }
+
+        internal void Attach(StreamFrameEncoder frame)
+        {
+            ArgumentNullException.ThrowIfNull(frame);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_frame is not null)
+                throw new InvalidOperationException("The tile encoder sink already has a frame.");
+            _frame = frame;
+        }
 
         public void WriteRegion(PixelRect region, PixelView source)
         {
@@ -310,7 +328,8 @@ public sealed partial class Image
 
         private void FlushBand()
         {
-            _frame.WriteRows(_band.View.Span, _bandRows, Width * Format.BytesPerPixel(), _cancellation);
+            (_frame ?? throw new InvalidOperationException("The tile encoder sink has no attached frame."))
+                .WriteRows(_band.View.Span, _bandRows, Width * Format.BytesPerPixel(), _cancellation);
             _bandTop += _bandRows;
             _bandRows = Math.Min(_bandCapacity, Height - _bandTop);
             Array.Clear(_filled);
