@@ -67,9 +67,9 @@ internal readonly record struct ResizeWorkspace(
         // vertical passes do not overlap, so one row covers both. Nearest samples on the calling thread.
         var readyRows = Math.Min(OutputBatchRows, destHeight);
         var readyBytes = checked((long)readyRows * destWidth * format.BytesPerPixel());
-        var workers = Math.Max(1, options.MaxDegreeOfParallelism > 0
-            ? options.MaxDegreeOfParallelism
-            : RowParallel.Degree);
+        // Horizontal pulls are capped at MaxChunkRows and vertical batches at OutputBatchRows. No
+        // resize pass can have more active per-worker scratch owners than the larger of those row counts.
+        var workers = Math.Max(1, Math.Min(RowParallel.ResolveDegree(options.MaxDegreeOfParallelism), MaxChunkRows));
 
         if (nearest)
         {
