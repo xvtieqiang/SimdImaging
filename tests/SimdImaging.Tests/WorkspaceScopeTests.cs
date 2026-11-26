@@ -46,8 +46,9 @@ public sealed class WorkspaceScopeTests
         CompiledExecutionPlan Compile(ImageOp op) => PipelineCompiler.Compile(
             new PipelineRecipeBuilder().Append(op).Build(), new CompileOptions
             {
-                SourceWidth = 64,
+                SourceWidth = 1024,
                 SourceHeight = 256,
+                BandRows = 64,
                 SourceFormat = WorkingFormat.Rgba8,
                 Source = SourceCapabilities.ForwardOnly,
                 Sink = SinkCapabilities.RowWritable,
