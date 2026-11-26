@@ -127,29 +127,38 @@ internal static class CompiledPlanExecutor
 
         var owned = new List<IDisposable>();
         IRowSource current = source;
-        foreach (var section in plan.Sections)
+        try
         {
-            if (section.Kind == CompiledSectionKind.Format)
-                throw new InvalidOperationException(
-                    "A format-changing section has no row form; the compiler must not choose Stream for it.");
-
-            if (section.Kind == CompiledSectionKind.OperatorRun)
+            foreach (var section in plan.Sections)
             {
-                var steps = Slice(plan.Steps, section.FirstStep, section.StepCount);
-                var stage = new PlanRowSource(ProcessingPlan.FromCompiled(steps, plan.BandRows), current, options);
-                owned.Add(stage);
-                current = stage;
-                continue;
+                if (section.Kind == CompiledSectionKind.Format)
+                    throw new InvalidOperationException(
+                        "A format-changing section has no row form; the compiler must not choose Stream for it.");
+
+                if (section.Kind == CompiledSectionKind.OperatorRun)
+                {
+                    var steps = Slice(plan.Steps, section.FirstStep, section.StepCount);
+                    var stage = new PlanRowSource(ProcessingPlan.FromCompiled(steps, plan.BandRows), current, options);
+                    owned.Add(stage);
+                    current = stage;
+                    continue;
+                }
+
+                var geometry = (GeometryStep)plan.Recipe.Steps[section.RecipeIndex];
+                var next = geometry.Wrap!(current, pool, options);
+                if (next is IDisposable disposable)
+                    owned.Add(disposable);
+                current = next;
             }
 
-            var geometry = (GeometryStep)plan.Recipe.Steps[section.RecipeIndex];
-            var next = geometry.Wrap!(current, pool, options);
-            if (next is IDisposable disposable)
-                owned.Add(disposable);
-            current = next;
+            return owned.Count == 0 ? current : new OwnedRowChain(current, owned);
         }
-
-        return owned.Count == 0 ? current : new OwnedRowChain(current, owned);
+        catch
+        {
+            for (var i = owned.Count - 1; i >= 0; i--)
+                owned[i].Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -192,10 +201,15 @@ internal static class CompiledPlanExecutor
         public int ReadRows(Span<byte> destination, int stride, int maxRows) =>
             inner.ReadRows(destination, stride, maxRows);
 
+        private bool _disposed;
+
         public void Dispose()
         {
-            foreach (var disposable in owned)
-                disposable.Dispose();
+            if (_disposed)
+                return;
+            _disposed = true;
+            for (var i = owned.Count - 1; i >= 0; i--)
+                owned[i].Dispose();
         }
     }
 }
