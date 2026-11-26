@@ -23,6 +23,7 @@ internal enum WorkspaceTermKind : byte
     GeometryScratch = 11,
     SectionTransition = 12,
     ResizeWorkerTapScratch = 13,
+    FormatScratch = 14,
 }
 
 internal readonly record struct WorkspaceTerm(WorkspaceTermKind Kind, long Bytes, string Note);
@@ -99,6 +100,8 @@ internal static class WorkspacePlanner
         var formatTerms = new List<WorkspaceTerm>();
         var geometryUndeclared = 0;
         var geometryScratch = 0L;
+        var formatScratch = 0L;
+        var formatUndeclared = 0;
         foreach (var step in recipe.Steps)
         {
             if (step is GeometryStep geometry)
@@ -122,10 +125,23 @@ internal static class WorkspacePlanner
                 continue;
             }
 
-            if (step is OperatorStep { Operator.Contract.Output.Format: { } outputFormat })
+            if (step is OperatorStep formatStep &&
+                formatStep.Operator.Contract.Output.Format is { } outputFormat)
             {
                 formatTerms.Add(new WorkspaceTerm(WorkspaceTermKind.FormatStep,
                     (long)width * height * outputFormat.BytesPerPixel(), $"{width}x{height} {outputFormat}"));
+
+                var workspace = formatStep.Operator.Contract.Workspace;
+                if (!workspace.IsDeclared)
+                {
+                    formatUndeclared++;
+                }
+                else if (workspace.Estimate is { } estimateFormat)
+                {
+                    formatScratch = Math.Max(formatScratch,
+                        estimateFormat(width, height, height, options.SourceFormat));
+                }
+
                 finalFormat = outputFormat;
             }
         }
@@ -196,8 +212,11 @@ internal static class WorkspacePlanner
 
         if (geometryScratch > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.GeometryScratch, geometryScratch, "geometry scratch"));
+        if (formatScratch > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.FormatScratch, formatScratch,
+                "largest format operator scratch"));
 
-        return new WorkspacePlan(terms, unmanaged, undeclared + geometryUndeclared);
+        return new WorkspacePlan(terms, unmanaged, undeclared + geometryUndeclared + formatUndeclared);
     }
 
     /// <summary>
