@@ -395,8 +395,7 @@ public static class GuidedFilterOps
     /// one band-sized set of 12 float planes, a ring and its row/prefix buffers alive. It uses one worker because
     /// the plan adapter enters the nested-execution scope before calling this kernel.
     /// </summary>
-    internal static long CrossGuidedPlanWorkspaceBytes(int width, int height, WorkingFormat format, int radius,
-        int bandRows)
+    internal static long CrossGuidedPlanPerWorkerScratchBytes(int width, int height, int radius, int bandRows)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
@@ -406,12 +405,21 @@ public static class GuidedFilterOps
         var capacityRows = Math.Min(height, checked(bandRows + (4 * radius)));
         var capacity = checked((long)capacityRows * width);
         var fixedFloats = checked(((19L + (2L * radius)) * width) + 1);
-        var planesAndRows = checked((12L * capacity) + fixedFloats);
-        var scratchBytes = checked(planesAndRows * sizeof(float));
-        var returnedBufferBytes = checked((long)width * height * format.BytesPerPixel());
-        return checked(scratchBytes + returnedBufferBytes);
+        return checked(((12L * capacity) + fixedFloats) * sizeof(float));
     }
 
+    internal static long CrossGuidedPlanReturnedBufferBytes(int width, int height, WorkingFormat format)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        return checked((long)width * height * format.BytesPerPixel());
+    }
+
+    /// <summary>Combined scratch plus returned image for standalone callers/tests.</summary>
+    internal static long CrossGuidedPlanWorkspaceBytes(int width, int height, WorkingFormat format, int radius,
+        int bandRows) =>
+        checked(CrossGuidedPlanPerWorkerScratchBytes(width, height, radius, bandRows)
+            + CrossGuidedPlanReturnedBufferBytes(width, height, format));
     /// <summary>Bytes of working set the parallel band path may hold across all its workers.</summary>
     private const long ParallelScratchBytes = 96L << 20;
 
