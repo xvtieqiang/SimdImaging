@@ -1,6 +1,7 @@
 using SimdImaging.Processing;
 using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
+using SimdImaging.Processing.Contracts;
 
 namespace SimdImaging.Tests;
 
@@ -390,6 +391,44 @@ public class MemoryEstimateTests : IDisposable
         estimate.PerWorkerBytes.ShouldBe(perWorker);
         estimate.WholeImageScratchBytes.ShouldBe(wholeImage);
         estimate.PeakBytes.ShouldBe((2 * fullBytes) + (perWorker * degree) + wholeImage);
+    }
+    [Fact]
+    public void WholeImageWorkerScratchUsesExecuteDegreeNotPlanBandHeight()
+    {
+        const int width = 256;
+        const int height = 256;
+        const int degree = 2;
+        var op = PlanOps.Clahe(tilesX: 4, tilesY: 8);
+        var plan = new ProcessingPlan { BandRows = height }.Add(op);
+        var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
+            bandRows: height, allowFusion: false, degree: degree);
+        var fullBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
+        var perWorker = op.Contract.Workspace.EstimatePerWorker(width, height, height, WorkingFormat.Rgba8);
+        var wholeImage = op.Contract.Workspace.EstimateWholeImage(width, height, WorkingFormat.Rgba8);
+
+        estimate.Workers.ShouldBe(degree);
+        estimate.PerWorkerBytes.ShouldBe(perWorker);
+        estimate.WholeImageScratchBytes.ShouldBe(wholeImage);
+        estimate.PeakBytes.ShouldBe((2 * fullBytes) + (perWorker * degree) + wholeImage);
+    }
+    [Fact]
+    public void SingleThreadContract_EstimatesFullImageScratchOnce()
+    {
+        const int width = 32;
+        const int height = 64;
+        var contract = OperatorContract.Create("single-thread-estimate", OpCategory.Neighborhood,
+            WorkingFormatMask.All, IdentityFootprint.Instance,
+            WorkspaceModel.Of((w, h, rows, format) => (long)w * rows * format.BytesPerPixel()),
+            requirements: ExecutionRequirements.RowBands with { Threading = ThreadSafety.SingleThread });
+        var op = new ImageOp(contract, new KernelImplementations((_, _, _, _) => { }));
+        var plan = new ProcessingPlan { BandRows = 8 }.Add(op);
+        var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
+            bandRows: 8, allowFusion: false, degree: 4);
+        var fullBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
+
+        estimate.Workers.ShouldBe(1);
+        estimate.PerWorkerBytes.ShouldBe(fullBytes);
+        estimate.PeakBytes.ShouldBe((2 * fullBytes) + fullBytes);
     }
     [Fact]
     public void Estimate_CountsDeclaredOperatorScratch()
