@@ -228,6 +228,28 @@ public sealed class CompilerTests
     }
 
     [Fact]
+    public void CompilerDoesNotForceFusionWhenAContractRequiresWholeImage()
+    {
+        var contract = OperatorContract.Create("whole-image", OpCategory.Neighborhood,
+            WorkingFormatMask.All, IdentityFootprint.Instance, WorkspaceModel.None,
+            requirements: ExecutionRequirements.WholeImage);
+        var op = new ImageOp(contract, new KernelImplementations((source, destination, rect, _) =>
+        {
+            for (var y = rect.Y; y < rect.Y + rect.Height; y++)
+                source.Row(y).CopyTo(destination.Row(y));
+        }));
+        var recipe = Recipe(op, PlanOps.Invert());
+
+        var plan = PipelineCompiler.Compile(recipe, Streamable() with
+        {
+            Execute = new ExecuteOptions { ForceFusion = true },
+        });
+
+        plan.Sections[0].Fused.ShouldBeFalse();
+        plan.Explanation.ShouldContain("execution requirements incompatible with fusion");
+    }
+
+    [Fact]
     public void TileIsRefused_WithTheFirstRealBlocker()
     {
         var noSink = PipelineCompiler.Compile(Recipe(PlanOps.Invert()), Streamable() with { TileRequested = true });
