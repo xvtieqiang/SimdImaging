@@ -97,6 +97,7 @@
   SimdImaging.Abstractions.MemoryEstimate.ToString() -> System.String
   SimdImaging.Abstractions.MemoryEstimate.UndeclaredSteps : System.Int32 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.WholeImageScratchBytes : System.Int64 { get; set; }
+  SimdImaging.Abstractions.MemoryEstimate.OperatorScratchPeakBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.Workers : System.Int32 { get; set; }
   SimdImaging.Abstractions.MemoryEstimate.op_Equality(SimdImaging.Abstractions.MemoryEstimate left, SimdImaging.Abstractions.MemoryEstimate right) -> System.Boolean
   SimdImaging.Abstractions.MemoryEstimate.op_Inequality(SimdImaging.Abstractions.MemoryEstimate left, SimdImaging.Abstractions.MemoryEstimate right) -> System.Boolean
