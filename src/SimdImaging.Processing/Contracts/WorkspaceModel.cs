@@ -70,16 +70,18 @@ internal sealed class WorkspaceModel
     /// </summary>
     internal static WorkspaceModel OfMixed(
         Func<int, int, int, WorkingFormat, long>? perWorker,
-        Func<int, int, int, WorkingFormat, long>? wholeImage)
+        Func<int, int, int, WorkingFormat, long>? wholeImage,
+        Func<int, int, int, WorkingFormat, long>? perCall = null)
     {
-        if (perWorker is null && wholeImage is null)
+        if (perWorker is null && wholeImage is null && perCall is null)
             throw new ArgumentException("A mixed workspace model must declare at least one allocation.");
 
         long Combined(int width, int height, int rows, WorkingFormat format) =>
             checked((perWorker?.Invoke(width, height, rows, format) ?? 0L)
-                + (wholeImage?.Invoke(width, height, height, format) ?? 0L));
+                + (wholeImage?.Invoke(width, height, height, format) ?? 0L)
+                + (perCall?.Invoke(width, height, rows, format) ?? 0L));
 
-        return new WorkspaceModel(Combined, WorkspaceScope.PerWorker, perWorker, wholeImage, null);
+        return new WorkspaceModel(Combined, WorkspaceScope.PerWorker, perWorker, wholeImage, perCall);
     }
 
     /// <summary>
