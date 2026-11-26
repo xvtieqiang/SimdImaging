@@ -215,7 +215,8 @@ internal static class WorkspacePlanner
             haloY = checked(haloY + step.HaloY);
         }
 
-        var windowWidth = (int)Math.Min(options.SourceWidth, (long)region.Width + 2L * haloX);
+        var sourceWindow = MapSourceWindow(steps, region, options.SourceWidth, options.SourceHeight);
+        var windowWidth = sourceWindow.Width;
         var degree = options.Execute.MaxDegreeOfParallelism;
         var plan = ProcessingPlan.FromCompiled(steps,
             options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows);
@@ -262,6 +263,24 @@ internal static class WorkspacePlanner
         unmanaged.Add(new UnmanagedTerm("region source",
             "random-access source and codec segments are owned outside the processing executor"));
         return new WorkspacePlan(terms, unmanaged, undeclared);
+    }
+
+    private static PixelRect MapSourceWindow(IReadOnlyList<PlanStep> steps, PixelRect destination,
+        int width, int height)
+    {
+        var current = destination;
+        for (var i = steps.Count - 1; i >= 0; i--)
+        {
+            current = steps[i].Definition.Contract.Footprint
+                .MapSourceRegions(current, width, height)
+                .Normalize()
+                .Clamp(width, height)
+                .BoundingBox;
+            if (current.Width == 0 || current.Height == 0)
+                return current;
+        }
+
+        return current;
     }
 
     /// <summary>
