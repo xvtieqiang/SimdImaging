@@ -160,10 +160,10 @@ public sealed partial class Image
         ArgumentNullException.ThrowIfNull(plan);
 
         options ??= TranscodeOptions.Default;
-        using var source = TiffRegionSource.Open(sourcePath, options.Region?.PageIndex ?? 0,
-            options.Region?.Format, options.Region?.MaxSegmentBytes ?? (64L << 20));
         return WriteTileOutputAtomically(destinationPath, temporaryPath =>
         {
+            using var source = TiffRegionSource.Open(sourcePath, options.Region?.PageIndex ?? 0,
+                options.Region?.Format, options.Region?.MaxSegmentBytes ?? (64L << 20));
             using var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
                 FileShare.None);
             return ProcessTilesTo(source, destination, FormatFromExtension(Path.GetExtension(destinationPath)),
