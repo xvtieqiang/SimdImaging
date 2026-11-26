@@ -209,8 +209,15 @@ public static class Resample
     /// the point at which the working set would break the documented limit, so it throws instead of growing.</summary>
     private const long MaxScratchBytes = 512L << 20;
 
-    public static WorkingBuffer Resize(PixelView source, int width, int height, Resampler resampler, IPixelPool? pool)
+    public static WorkingBuffer Resize(PixelView source, int width, int height, Resampler resampler, IPixelPool? pool) =>
+        Resize(source, width, height, resampler, pool, options: null);
+
+    /// <summary>Resize with the execution degree and cancellation policy supplied by the owning plan.</summary>
+    public static WorkingBuffer Resize(PixelView source, int width, int height, Resampler resampler, IPixelPool? pool,
+        ExecuteOptions? options)
     {
+        options ??= new ExecuteOptions();
+        var degree = options.MaxDegreeOfParallelism > 0 ? options.MaxDegreeOfParallelism : RowParallel.Degree;
         if (width <= 0)
             throw new ArgumentOutOfRangeException(nameof(width), width, "Width must be positive.");
         if (height <= 0)
@@ -239,7 +246,6 @@ public static class Resample
             // ForBands, not For: `For` refuses to parallelise below 64 K pixels, and a 640x360 source
             // resized to 320x180 is 57.6 K — so the fast path silently ran on one core and reported
             // LastWorkerCount = 1. Bands have no such gate; the split is explicit and rows are disjoint.
-            var degree = RowParallel.Degree;
             var bandRows = Math.Max(16, (height + Math.Max(1, degree) - 1) / Math.Max(1, degree));
             var bands = Math.Max(1, (height + bandRows - 1) / bandRows);
 
@@ -267,7 +273,7 @@ public static class Resample
                         }
                     }
                 }
-            });
+            }, degree, options.CancellationToken);
 
             return nearest;
         }
@@ -284,7 +290,7 @@ public static class Resample
         bandHeight = Math.Min(bandHeight, 512);
         // Also split by core count so a 1080p resize uses all cores, not just the 5 bands that
         // the scratch budget alone would produce. Floor at 32 rows so tap overlap stays cheap.
-        var coreBands = Math.Max(32, (height + RowParallel.Degree - 1) / RowParallel.Degree);
+        var coreBands = Math.Max(32, (height + degree - 1) / degree);
         bandHeight = Math.Min(bandHeight, coreBands);
         var bandCount = (height + bandHeight - 1) / bandHeight;
 
@@ -338,7 +344,7 @@ public static class Resample
                 FloatScratch.Return(outputRow);
                 FloatScratch.Return(scratch);
             }
-        });
+        }, degree, options.CancellationToken);
 
         return destination;
     }
