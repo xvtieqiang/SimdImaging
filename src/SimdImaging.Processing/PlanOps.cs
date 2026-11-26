@@ -269,7 +269,14 @@ public static class PlanOps
         }
         else if (scratchScope == WorkspaceScope.PerCall)
         {
-            workspace = WorkspaceModel.Of(scratch, WorkspaceScope.PerCall);
+            // The algorithm's temporary state lives for one whole-image call, and the returned frame is also
+            // resident while the executor copies it into its destination.
+            workspace = WorkspaceModel.OfMixed(null,
+                scratchIncludesResult
+                    ? null
+                    : (width, height, _, format) =>
+                        (long)width * height * format.BytesPerPixel(),
+                scratch);
         }
         else
         {
@@ -726,7 +733,8 @@ public static class PlanOps
         FormatStep("convert-color-space",
             v => ColorConversionOps.Convert(v, target, ycbcr, limitedRange, white, adaptation),
             (width, _, _, _) => 16L * width, IdentityFootprint.Instance, WorkingFormat.Rgba32F, PassModel.Single,
-            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded });
+            PixelSemantics.EncodedFloat with { Domain = PixelDomain.Unbounded },
+            scratchScope: WorkspaceScope.WholeImage);
 
     /// <summary>
     /// ICC profile conversion. The profiles are parsed once for the whole image, so this is a Global step; its
@@ -737,8 +745,9 @@ public static class PlanOps
         var from = sourceProfile.ToArray();
         var to = destinationProfile.ToArray();
         return Global("icc-transform", v => IccTransformOps.Transform(v, from, to),
-            (width, _, _, _) => (8L << 20) + (16L * width),
-            footprint: IdentityFootprint.Instance);
+            (width, _, _, _) => 16L * width,
+            footprint: IdentityFootprint.Instance,
+            wholeImageScratch: (_, _, _, _) => 8L << 20);
     }
 
     /// <summary>
@@ -757,7 +766,7 @@ public static class PlanOps
                 var capacity = ((bandRows / 2) + 2) * chromaWidth;
                 return (2L * capacity * sizeof(float)) + (2L * chromaWidth * sizeof(double))
                     + (chromaWidth * sizeof(int)) + (16L * width);
-            });
+            }, scratchScope: WorkspaceScope.WholeImage);
     }
 
     /// <summary>HDR tone mapping. Auto-exposure needs the whole image's geometric mean first.</summary>
