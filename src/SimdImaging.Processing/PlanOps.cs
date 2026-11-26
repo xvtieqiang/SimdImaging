@@ -363,10 +363,9 @@ public static class PlanOps
         var weights = kernel.ToArray();
         return Create("convolve", OpCategory.Neighborhood, WholeSourceFootprint.Instance,
             // One float RGBA copy of the window, which is a band plus the halo on both sides.
-            WorkspaceModel.Of((width, height, rows, format) =>
-                ((long)rows * width * 16)
-                    + ((long)width * rows * format.BytesPerPixel())
-                    + (3L * width * 4 * sizeof(float))),
+            WorkspaceModel.Of((width, _, rows, format) =>
+                FilterOps.ConvolveBandedPlanScratchBytes(width, rows, weights.Length)
+                    + ((long)width * rows * format.BytesPerPixel())),
             new KernelImplementations(PlanSteps.Neighborhood(
                 (window, context, full) =>
                     FilterOps.ConvolveBanded(window, context, full, weights, radius, border, bias, constantValue),
