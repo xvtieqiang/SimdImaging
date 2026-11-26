@@ -332,13 +332,19 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
         if (_disposed)
             return;
         _disposed = true;
-        _workspaceLease?.Dispose();
-        _workspaceLease = null;
-        _ready.Dispose();
-        if (_ring is not null)
-            FloatScratch.Return(_ring);
-        if (_staging is not null)
-            ArrayPool<byte>.Shared.Return(_staging);
+        try
+        {
+            _ready.Dispose();
+            if (_ring is not null)
+                FloatScratch.Return(_ring);
+            if (_staging is not null)
+                ArrayPool<byte>.Shared.Return(_staging);
+        }
+        finally
+        {
+            _workspaceLease?.Dispose();
+            _workspaceLease = null;
+        }
     }
 }
 
