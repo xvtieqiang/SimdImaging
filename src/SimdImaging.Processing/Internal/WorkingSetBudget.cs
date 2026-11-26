@@ -30,8 +30,8 @@ internal static class WorkingSetBudget
 
             // The declared scope is part of the contract, not a hint: the same rule MemoryEstimator applies to
             // the frame path, so a ceiling means the same thing on all three executors.
-            var isWholeImage = steps[i].Category is OpCategory.Global or OpCategory.Composite
-                || steps[i].Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
+            var isWholeImage = steps[i].Definition.Contract.Workspace.IsSingleCopy(
+                steps[i].Definition.Contract.Requirements.Partition == Partitioning.WholeImage);
             if (isWholeImage)
             {
                 wholeImage = Math.Max(wholeImage, scratch(width, height, height, format));
