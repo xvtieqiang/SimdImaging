@@ -201,7 +201,6 @@ public static class MemoryEstimator
                     ? 1
                     : Math.Min(resolvedDegree, height)
                 : bandWorkers;
-            workers = Math.Max(workers, stepWorkers);
 
             var workspace = step.Definition.Contract.Workspace;
             if (!workspace.IsDeclared)
@@ -226,6 +225,8 @@ public static class MemoryEstimator
             if (workspace.HasPerWorkerEstimate ||
                 (!wholeImageInvocation && workspace.PerCallEstimate is not null))
             {
+                workers = Math.Max(workers, stepWorkers);
+
                 // Whole-image operators may run their own RowParallel loops. Their concurrency is independent
                 // of ProcessingPlan.BandRows, which only configures the outer row-band executor.
                 var stepScratch = workspace.EstimatePerWorker(width, height, rows, format);
