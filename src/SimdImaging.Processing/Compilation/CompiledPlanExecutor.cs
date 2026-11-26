@@ -57,7 +57,7 @@ internal static class CompiledPlanExecutor
                         var workers = formatStep.Operator.Contract.Requirements.Threading == ThreadSafety.SingleThread
                             ? 1
                             : Math.Min(RowParallel.ResolveDegree(options.MaxDegreeOfParallelism), current.Height);
-                        formatScratch = checked(formatScratch + checked(formatWorkspace.EstimatePerWorker(
+                        formatScratch = checked(formatScratch + checked(formatWorkspace.EstimatePerWorkerScratch(
                             current.Width, current.Height, current.Height, current.Format) * workers));
                     }
                     var formatWorkingSet = checked(formatOld + formatNew + formatScratch);
@@ -95,7 +95,7 @@ internal static class CompiledPlanExecutor
                         var workers = geometry.Descriptor.Requirements.Threading == ThreadSafety.SingleThread
                             ? 1
                             : Math.Min(RowParallel.ResolveDegree(options.MaxDegreeOfParallelism), height);
-                        scratch = checked(scratch + checked(geometryWorkspace.EstimatePerWorker(
+                        scratch = checked(scratch + checked(geometryWorkspace.EstimatePerWorkerScratch(
                             width, height, height, current.Format) * workers));
                     }
                     var bytes = oldBytes + ((long)width * height * current.Format.BytesPerPixel()) + scratch;
