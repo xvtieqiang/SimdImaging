@@ -99,6 +99,76 @@ public sealed class WorkspaceScopeTests
         (workingSet - (2L * 1024 * 256 * 4)).ShouldBe((1024 * 4) + 2048);
     }
 
+    [Fact]
+    public void GlobalPerCallScratch_IsCountedOnceAndKeepsItsReturnedFrame()
+    {
+        const int width = 80;
+        const int height = 40;
+        var op = PlanOps.Dither(4);
+        var workspace = op.Contract.Workspace;
+
+        workspace.PerCallEstimate.ShouldNotBeNull();
+        workspace.HasWholeImageEstimate.ShouldBeTrue();
+        workspace.HasPerWorkerEstimate.ShouldBeFalse();
+
+        var wholeImageBytes = ((long)width * height * WorkingFormat.Rgba8.BytesPerPixel())
+            + (64L * width);
+        workspace.EstimateWholeImage(width, height, WorkingFormat.Rgba8).ShouldBe(wholeImageBytes);
+
+        var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8,
+            [new PlanStep(op)], bandRows: 16, allowFusion: false, degree: 4);
+        estimate.PerWorkerBytes.ShouldBe(0);
+        estimate.WholeImageScratchBytes.ShouldBe(wholeImageBytes);
+    }
+
+    [Fact]
+    public void GlowWorkspace_SeparatesWholeFramesFromWorkerPrivateRows()
+    {
+        const int width = 320;
+        const int height = 240;
+        const float sigma = 2f;
+        var workspace = PlanOps.Glow(sigma: sigma).Contract.Workspace;
+        var format = WorkingFormat.Rgba8;
+        var frameBytes = (long)width * height * format.BytesPerPixel();
+
+        workspace.HasPerWorkerEstimate.ShouldBeTrue();
+        workspace.HasWholeImageEstimate.ShouldBeTrue();
+        workspace.EstimateWholeImage(width, height, format)
+            .ShouldBeGreaterThanOrEqualTo(3L * frameBytes);
+        workspace.EstimatePerWorker(width, height, height, format)
+            .ShouldBeGreaterThan(0);
+    }
+
+    [Fact]
+    public void GlobalOperatorScopes_MatchMeasuredAlgorithmLifetimes()
+    {
+        const int width = 128;
+        const int height = 96;
+        const long rgba8LocalHistogramBytes = 3L * 256 * sizeof(int);
+
+        var equalize = PlanOps.Equalize().Contract.Workspace;
+        equalize.HasPerWorkerEstimate.ShouldBeTrue();
+        equalize.EstimatePerWorker(width, height, height, WorkingFormat.Rgba8)
+            .ShouldBe(rgba8LocalHistogramBytes);
+        equalize.EstimateWholeImage(width, height, WorkingFormat.Rgba8)
+            .ShouldBeGreaterThan((long)width * height * WorkingFormat.Rgba8.BytesPerPixel());
+
+        var adaptive = PlanOps.AdaptiveThreshold(radius: 4).Contract.Workspace;
+        adaptive.HasPerWorkerEstimate.ShouldBeFalse();
+        adaptive.HasWholeImageEstimate.ShouldBeTrue();
+        var windowRows = 9L;
+        var expectedAdaptiveScratch = windowRows * width * sizeof(float)
+            + (52L * width) + (2L * sizeof(double))
+            + ((long)width * height * WorkingFormat.Rgba8.BytesPerPixel());
+        adaptive.EstimateWholeImage(width, height, WorkingFormat.Rgba8).ShouldBe(expectedAdaptiveScratch);
+
+        var clahe = PlanOps.Clahe(tilesX: 4, tilesY: 3).Contract.Workspace;
+        clahe.EstimatePerWorker(width, height, height, WorkingFormat.Rgba8).ShouldBe(16L * width);
+        clahe.EstimateWholeImage(width, height, WorkingFormat.Rgba8)
+            .ShouldBe(2L * 4 * 3 * 3 * 256 * sizeof(float)
+                + ((long)width * height * WorkingFormat.Rgba8.BytesPerPixel()));
+    }
+
     private static ImageOp MixedGlobalOp()
     {
         var workspace = WorkspaceModel.OfMixed(
