@@ -308,16 +308,19 @@ public static class PlanOps
     /// <summary>3x3 emboss; one row and one column.</summary>
     public static ImageOp Emboss(float strength = 1f) =>
         Neighborhood(nameof(FilterOps.Emboss), 1, v => FilterOps.Emboss(v, strength),
+            (width, _, _, _) => FilterOps.Convolve3x3PlanScratchBytes(width),
             into: (window, destination, destinationY, rows, offset) =>
                 FilterOps.EmbossInto(window, destination, destinationY, rows, offset, strength));
 
     /// <summary>3x3 Sobel magnitude; one row and one column.</summary>
     public static ImageOp Sobel() => Neighborhood(nameof(FilterOps.Sobel), 1, v => FilterOps.Sobel(v),
+        (width, _, _, _) => FilterOps.GradientPlanScratchBytes(width),
         into: (window, destination, destinationY, rows, offset) =>
             FilterOps.SobelInto(window, destination, destinationY, rows, offset));
 
     /// <summary>3x3 median; one row and one column of context. Alpha is filtered like the colour channels.</summary>
     public static ImageOp Median3x3() => Neighborhood(nameof(FilterOps.Median3x3), 1, v => FilterOps.Median3x3(v),
+        (width, _, _, format) => FilterOps.Median3x3PlanScratchBytes(width, format),
         into: (window, destination, destinationY, rows, offset) =>
             FilterOps.Median3x3Into(window, destination, destinationY, rows, offset),
         semantics: PixelSemantics.EncodedFloatAlphaComputed);
@@ -639,15 +642,18 @@ public static class PlanOps
 
     /// <summary>Prewitt gradient magnitude; one row and one column.</summary>
     public static ImageOp Prewitt(bool bt709 = false) =>
-        Neighborhood(nameof(FilterOps.Prewitt), 1, v => FilterOps.Prewitt(v, bt709));
+        Neighborhood(nameof(FilterOps.Prewitt), 1, v => FilterOps.Prewitt(v, bt709),
+            (width, _, _, _) => FilterOps.GradientPlanScratchBytes(width));
 
     /// <summary>Scharr gradient magnitude; one row and one column.</summary>
     public static ImageOp Scharr(bool bt709 = false) =>
-        Neighborhood(nameof(FilterOps.Scharr), 1, v => FilterOps.Scharr(v, bt709));
+        Neighborhood(nameof(FilterOps.Scharr), 1, v => FilterOps.Scharr(v, bt709),
+            (width, _, _, _) => FilterOps.GradientPlanScratchBytes(width));
 
     /// <summary>Laplacian; one row and one column.</summary>
     public static ImageOp Laplacian(bool bt709 = false) =>
-        Neighborhood(nameof(FilterOps.Laplacian), 1, v => FilterOps.Laplacian(v, bt709));
+        Neighborhood(nameof(FilterOps.Laplacian), 1, v => FilterOps.Laplacian(v, bt709),
+            (width, _, _, _) => FilterOps.LaplacianPlanScratchBytes(width));
 
     /// <summary>A 3x3 convolution; one row and one column.</summary>
     public static ImageOp Convolve3x3(ReadOnlySpan<float> kernel, float bias = 0f)
@@ -655,7 +661,8 @@ public static class PlanOps
         if (kernel.Length != 9)
             throw new ArgumentException("A 3x3 kernel needs 9 weights.", nameof(kernel));
         var weights = kernel.ToArray();
-        return Neighborhood(nameof(FilterOps.Convolve3x3), 1, v => FilterOps.Convolve3x3(v, weights, bias));
+        return Neighborhood(nameof(FilterOps.Convolve3x3), 1, v => FilterOps.Convolve3x3(v, weights, bias),
+            (width, _, _, _) => FilterOps.Convolve3x3PlanScratchBytes(width));
     }
 
     /// <summary>
@@ -776,23 +783,34 @@ public static class PlanOps
     /// <param name="sigma">Gaussian sigma; the halo follows it.</param>
     public static ImageOp GaussianSharpen(float amount = 0.5f, float sigma = 1f) =>
         Neighborhood(nameof(FilterOps.GaussianSharpen), (int)Math.Ceiling(3 * sigma),
-            v => FilterOps.GaussianSharpen(v, amount, sigma), pass: PassModel.SeparableRows);
+            v => FilterOps.GaussianSharpen(v, amount, sigma),
+            (width, _, rows, format) =>
+                FilterOps.SeparablePlanWorkspaceBytes(width, rows, (int)Math.Ceiling(3 * sigma), format, sharpen: true),
+            pass: PassModel.SeparableRows, scratchIncludesResult: true);
 
     /// <summary>3x3 erosion; one row and one column.</summary>
     public static ImageOp Erode3x3() => Neighborhood(nameof(FilterOps.Erode3x3), 1, v => FilterOps.Erode3x3(v),
+        (width, _, _, _) => FilterOps.Morph3x3PlanScratchBytes(width),
         into: (window, destination, destinationY, rows, offset) =>
             FilterOps.Erode3x3Into(window, destination, destinationY, rows, offset));
 
     /// <summary>3x3 dilation; one row and one column.</summary>
     public static ImageOp Dilate3x3() => Neighborhood(nameof(FilterOps.Dilate3x3), 1, v => FilterOps.Dilate3x3(v),
+        (width, _, _, _) => FilterOps.Morph3x3PlanScratchBytes(width),
         into: (window, destination, destinationY, rows, offset) =>
             FilterOps.Dilate3x3Into(window, destination, destinationY, rows, offset));
 
     /// <summary>Erosion then dilation, so two rows and two columns.</summary>
-    public static ImageOp Open3x3() => Neighborhood(nameof(FilterOps.Open3x3), 2, v => FilterOps.Open3x3(v));
+    public static ImageOp Open3x3() => Neighborhood(nameof(FilterOps.Open3x3), 2, v => FilterOps.Open3x3(v),
+        (width, _, rows, format) =>
+            FilterOps.MorphPlanWorkspaceBytes(width, rows, format, 1, Morphology.Open),
+        scratchIncludesResult: true);
 
     /// <summary>Dilation then erosion, so two rows and two columns.</summary>
-    public static ImageOp Close3x3() => Neighborhood(nameof(FilterOps.Close3x3), 2, v => FilterOps.Close3x3(v));
+    public static ImageOp Close3x3() => Neighborhood(nameof(FilterOps.Close3x3), 2, v => FilterOps.Close3x3(v),
+        (width, _, rows, format) =>
+            FilterOps.MorphPlanWorkspaceBytes(width, rows, format, 1, Morphology.Close),
+        scratchIncludesResult: true);
 
     /// <summary>Edge-preserving bilateral filter; its window is the radius.</summary>
     public static ImageOp Bilateral(int radius, float sigmaRange = 0.1f) =>
@@ -806,10 +824,22 @@ public static class PlanOps
 
     /// <summary>Directional blur; its taps span half the length either side.</summary>
     public static ImageOp MotionBlur(int length, float angleDegrees = 0f) =>
-        Neighborhood(nameof(FilterOps.MotionBlur), Math.Max(1, (length + 1) / 2), v => FilterOps.MotionBlur(v, length, angleDegrees));
+        Neighborhood(nameof(FilterOps.MotionBlur), Math.Max(1, (length + 1) / 2),
+            v => FilterOps.MotionBlur(v, length, angleDegrees),
+            (width, _, _, _) => FilterOps.AverageOffsetsPlanScratchBytes(width, length / 2, length));
 
     /// <summary>Disc-shaped bokeh; its offsets stay inside the radius.</summary>
-    public static ImageOp BokehBlur(int radius) => Neighborhood(nameof(FilterOps.BokehBlur), radius, v => FilterOps.BokehBlur(v, radius));
+    public static ImageOp BokehBlur(int radius)
+    {
+        var offsets = 0;
+        for (var y = -radius; y <= radius; y++)
+        for (var x = -radius; x <= radius; x++)
+            if ((x * x) + (y * y) <= radius * radius)
+                offsets++;
+
+        return Neighborhood(nameof(FilterOps.BokehBlur), radius, v => FilterOps.BokehBlur(v, radius),
+            (width, _, _, _) => FilterOps.AverageOffsetsPlanScratchBytes(width, radius, offsets));
+    }
 
     /// <summary>Guided filter; its window is the radius.</summary>
     public static ImageOp GuidedFilter(int radius, float epsilon = 1e-4f) =>
