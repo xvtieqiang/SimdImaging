@@ -203,6 +203,36 @@ public class ImageTranscodeTests
         }
     }
 
+
+    [Fact]
+    public void StreamWorkspaceRefusal_DoesNotWriteToTheDestination()
+    {
+        var sourcePath = Temp(".png");
+        try
+        {
+            using (var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8))
+                Image.Save(image, sourcePath);
+
+            using var source = File.OpenRead(sourcePath);
+            using var destination = new MemoryStream();
+            var error = Should.Throw<InvalidOperationException>(() =>
+                ImageTranscode.From(source).Invert()
+                    .WithOptions(new TranscodeOptions
+                    {
+                        Execute = new ExecuteOptions { MaxWorkingBytes = 1 },
+                    })
+                    .Run(destination, ImageFormat.Png));
+
+            error.Message.ShouldContain("working set");
+            destination.Length.ShouldBe(0,
+                "the compiled chain and its reservations must be ready before the encoder writes a header");
+        }
+        finally
+        {
+            File.Delete(sourcePath);
+        }
+    }
+
     [Fact]
     public void StreamSourceAndDestination_MatchThePathForm()
     {
