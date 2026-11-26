@@ -225,6 +225,13 @@ public static class Resample
 
         var weightsX = WeightTable.Build(source.Width, width, resampler);
         var weightsY = WeightTable.Build(source.Height, height, resampler);
+        var nearestPath = resampler == Resampler.Nearest && source.Format == WorkingFormat.Rgba8
+            && TryNearestTap(weightsX, out _) && TryNearestTap(weightsY, out _);
+        var estimatedBytes = EstimateWorkingBytes(source, width, height, weightsY.Taps, nearestPath, degree);
+        if (options.MaxWorkingBytes > 0 && estimatedBytes > options.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"Resize needs an estimated {estimatedBytes} bytes, above ExecuteOptions.MaxWorkingBytes = " +
+                $"{options.MaxWorkingBytes}.");
 
         // Nearest is point sampling. Sending it through the separable path expands the entire source to float,
         // runs two convolution passes and contracts again — measured 2.170 ms at 1080p -> 960x540 against
@@ -368,6 +375,28 @@ public static class Resample
 
 /// <summary>The tap offset that carries the whole weight, or false when the table is not a single unit tap.</summary>
 /// <remarks>Shared with the streaming resize, which has to reproduce the nearest fast path byte for byte.</remarks>
+    /// <summary>Engine-owned output and active per-worker scratch for the in-memory resize.</summary>
+    internal static long EstimateWorkingBytes(PixelView source, int width, int height, int tapsY, bool nearest,
+        int degree)
+    {
+        var output = checked((long)width * height * source.Format.BytesPerPixel());
+        if (nearest)
+            return output;
+
+        var stride = checked(width * 4);
+        var budgetRows = Math.Max(tapsY + 2, (int)(ScratchBudgetBytes / Math.Max(1L, (long)stride * 4)));
+        var scaleY = (double)height / source.Height;
+        var bandHeight = Math.Max(1, (int)((budgetRows - tapsY) * Math.Max(scaleY, 1e-9)));
+        bandHeight = Math.Min(bandHeight, 512);
+        var coreBands = Math.Max(32, (height + Math.Max(1, degree) - 1) / Math.Max(1, degree));
+        bandHeight = Math.Min(bandHeight, coreBands);
+        var bandCount = (height + bandHeight - 1) / bandHeight;
+        var workers = Math.Max(1, Math.Min(Math.Max(1, degree), bandCount));
+        var ringRows = Math.Min(source.Height, tapsY + 2);
+        var perWorker = checked(((long)source.Width * 4 + stride + (long)stride * ringRows) * sizeof(float));
+        return checked(output + workers * perWorker);
+    }
+
 internal static bool TryNearestTap(WeightTable table, out int offset)
 {
     offset = -1;
