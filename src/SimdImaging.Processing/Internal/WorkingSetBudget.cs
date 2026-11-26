@@ -22,23 +22,28 @@ internal static class WorkingSetBudget
         var wholeImage = 0L;
         for (var i = 0; i < steps.Count; i++)
         {
-            if (steps[i].Scratch is not { } scratch)
+            var workspace = steps[i].Definition.Contract.Workspace;
+            if (!workspace.IsDeclared)
             {
                 undeclared++;
                 continue;
             }
 
-            // The declared scope is part of the contract, not a hint: the same rule MemoryEstimator applies to
-            // the frame path, so a ceiling means the same thing on all three executors.
-            var isWholeImage = steps[i].Definition.Contract.Workspace.IsSingleCopy(
-                steps[i].Definition.Contract.Requirements.Partition == Partitioning.WholeImage);
-            if (isWholeImage)
+            var wholeImageInvocation =
+                steps[i].Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+            if (workspace.HasWholeImageEstimate ||
+                (wholeImageInvocation && workspace.PerCallEstimate is not null))
             {
-                wholeImage = Math.Max(wholeImage, scratch(width, height, height, format));
-                continue;
+                wholeImage = Math.Max(wholeImage,
+                    workspace.EstimateWholeImage(width, height, format));
             }
 
-            perWorker = Math.Max(perWorker, scratch(windowCols, height, windowRows, format));
+            if (workspace.HasPerWorkerEstimate ||
+                (!wholeImageInvocation && workspace.PerCallEstimate is not null))
+            {
+                perWorker = Math.Max(perWorker,
+                    workspace.EstimatePerWorker(windowCols, height, windowRows, format));
+            }
         }
 
         var workers = RowParallel.ResolveWorkers(windowCols, windowRows, options.MaxDegreeOfParallelism);
