@@ -118,6 +118,26 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
+    public void MorphTopHat_DifferencePeakCountsThreeWorkerRowsNotTwelve()
+    {
+        const int width = 8;
+        const int rows = 1;
+        const int radius = 2;
+        const long frameBytes = (long)width * rows * WorkingFormat.Rgba16.BytesPerPixel();
+        const int window = (radius * 2) + 1;
+        const int paddedWidth = width + (radius * 2);
+        const int blocks = ((paddedWidth + window - 1) / window) * window;
+        var slideScratch = ((8L * width) + (12L * blocks)) * sizeof(float);
+        var expectedOpeningPeak = (5L * frameBytes) + slideScratch;
+        var expectedDifferencePeak = (2L * frameBytes) + (3L * width * 4 * sizeof(float));
+
+        var declared = FilterOps.MorphPlanWorkspaceBytes(width, rows, WorkingFormat.Rgba16, radius,
+            SimdImaging.Abstractions.Morphology.TopHat);
+
+        declared.ShouldBe(Math.Max(expectedOpeningPeak, expectedDifferencePeak));
+    }
+
+    [Fact]
     public void MorphRadiusOne_AccountsForTheThreeRowFloatRing()
     {
         const int width = 48;
