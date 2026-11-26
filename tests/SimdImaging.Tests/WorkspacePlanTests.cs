@@ -71,6 +71,39 @@ public sealed class WorkspacePlanTests
             $"reported {plan.Workspace.BoundedBytes}, rented {pool.PeakBytes}");
     }
 
+
+    [Fact]
+    public void FrameSections_KeepTheOriginalSourceInLaterPeakAndRuntimeBudget()
+    {
+        const int width = 64;
+        const int height = 48;
+        var crop = new PixelRect(8, 6, 32, 24);
+        var recipe = Recipe(PlanOps.Invert(), GeometrySteps.Crop(crop), PlanOps.Invert());
+        var plan = PipelineCompiler.Compile(recipe, FrameOptions(width, height));
+        plan.Backend.ShouldBe(ExecutionBackend.Frame);
+
+        var sourceBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
+        var croppedBytes = (long)crop.Width * crop.Height * WorkingFormat.Rgba8.BytesPerPixel();
+        var expectedPeak = sourceBytes + sourceBytes + croppedBytes;
+        plan.Workspace.BoundedBytes.ShouldBe(expectedPeak);
+
+        using var source = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
+        var manager = new WorkspaceManager(expectedPeak);
+        using var result = CompiledPlanExecutor.ExecuteFrame(plan, source[0].Pixels.View,
+            options: new ExecuteOptions { MaxWorkingBytes = expectedPeak, Workspace = manager });
+
+        result.View.Width.ShouldBe(crop.Width);
+        result.View.Height.ShouldBe(crop.Height);
+        manager.PeakBytes.ShouldBe(expectedPeak);
+        manager.OutstandingBytes.ShouldBe(0);
+
+        var refusedManager = new WorkspaceManager();
+        Should.Throw<InvalidOperationException>(() => CompiledPlanExecutor.ExecuteFrame(plan,
+            source[0].Pixels.View,
+            options: new ExecuteOptions { MaxWorkingBytes = expectedPeak - 1, Workspace = refusedManager }));
+        refusedManager.OutstandingBytes.ShouldBe(0);
+    }
+
     [Fact]
     public void FormatStepScratch_IsIncludedInTheCompiledWorkspaceReport()
     {
