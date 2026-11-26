@@ -132,7 +132,7 @@ internal static class WorkspacePlanner
                             ? 1
                             : Math.Min(RowParallel.ResolveDegree(options.Execute.MaxDegreeOfParallelism), nextHeight);
                         scratchBytes = checked(scratchBytes + checked(
-                            declared.EstimatePerWorker(nextWidth, nextHeight, nextHeight, finalFormat) * workers));
+                            declared.EstimatePerWorkerScratch(nextWidth, nextHeight, nextHeight, finalFormat) * workers));
                     }
 
                     geometryScratch = Math.Max(geometryScratch, scratchBytes);
@@ -170,7 +170,7 @@ internal static class WorkspacePlanner
                             ? 1
                             : Math.Min(RowParallel.ResolveDegree(options.Execute.MaxDegreeOfParallelism), height);
                         scratchBytes = checked(scratchBytes + checked(
-                            workspace.EstimatePerWorker(width, height, height, finalFormat) * workers));
+                            workspace.EstimatePerWorkerScratch(width, height, height, finalFormat) * workers));
                     }
 
                     formatScratch = Math.Max(formatScratch, scratchBytes);
@@ -287,8 +287,10 @@ internal static class WorkspacePlanner
 
             if (workspace.HasPerWorkerEstimate ||
                 (!wholeImageInvocation && workspace.PerCallEstimate is not null))
-                perWorker = Math.Max(perWorker,
-                    workspace.EstimatePerWorker(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat));
+                var stepScratch = wholeImageInvocation
+                    ? workspace.EstimatePerWorkerScratch(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat)
+                    : workspace.EstimatePerWorker(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat);
+                perWorker = Math.Max(perWorker, stepScratch);
         }
 
         var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
@@ -374,8 +376,10 @@ internal static class WorkspacePlanner
 
             if (workspace.HasPerWorkerEstimate ||
                 (!wholeImageInvocation && workspace.PerCallEstimate is not null))
-                perWorker = Math.Max(perWorker,
-                    workspace.EstimatePerWorker(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat));
+                var stepScratch = wholeImageInvocation
+                    ? workspace.EstimatePerWorkerScratch(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat)
+                    : workspace.EstimatePerWorker(windowWidth, options.SourceHeight, windowHeight, options.SourceFormat);
+                perWorker = Math.Max(perWorker, stepScratch);
         }
         var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
         var tileBytes = TargetBuffer.Bytes(width, height, options.SourceFormat);
@@ -462,8 +466,10 @@ internal static class WorkspacePlanner
 
                 if (workspace.HasPerWorkerEstimate ||
                     (!wholeImageInvocation && workspace.PerCallEstimate is not null))
-                    sectionPerWorker = Math.Max(sectionPerWorker,
-                        workspace.EstimatePerWorker(state.InputWidth, state.InputHeight, windowRows, state.InputFormat));
+                    var stepScratch = wholeImageInvocation
+                        ? workspace.EstimatePerWorkerScratch(state.InputWidth, state.InputHeight, windowRows, state.InputFormat)
+                        : workspace.EstimatePerWorker(state.InputWidth, state.InputHeight, windowRows, state.InputFormat);
+                    sectionPerWorker = Math.Max(sectionPerWorker, stepScratch);
             }
 
             // Each row-source stage has its own dimensions and its own persistent reservation. Its
