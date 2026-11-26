@@ -114,6 +114,7 @@ public static class MemoryEstimator
     public static MemoryEstimate Estimate(PixelView source, ProcessingPlan plan, int degree = 0)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentOutOfRangeException.ThrowIfNegative(degree);
         var fusionAllowed = plan.Steps.All(step =>
             !step.Definition.Contract.Requirements.RequiresWholeImageInvocation);
         var fuse = fusionAllowed && FusionDecision.ShouldFuse(
@@ -203,11 +204,10 @@ public static class MemoryEstimator
             }
         }
 
-        // Scratch is counted by execution shape, not by a blanket multiplier:
-        //   banded       one copy per worker, over band + halo rows
-        //   whole-image  one copy, on the calling thread (ProcessingPlan runs Global steps exactly once)
-        // A single non-Global step is banded too - the executor does not care how long the plan is, it only
-        // looks at the category - so this no longer keys off steps.Count.
+        // Scratch is counted by the invocation shape, not by a blanket multiplier:
+        //   fused runs     one adapter window per worker, including downstream halo
+        //   stepwise runs  one adapter window per worker using the actual stepwise row split
+        //   whole-image    one kernel invocation; internal PerWorker scratch still follows its own workers.
         long perWorker = 0;
         long perWorkerPeak = 0;
         long wholeImage = 0;
