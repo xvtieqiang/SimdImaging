@@ -49,7 +49,6 @@ internal static class CompiledPlanExecutor
                     var formatWorkspace = formatStep.Operator.Contract.Workspace;
                     var formatScratch = 0L;
                     if (formatWorkspace.HasWholeImageEstimate ||
-                        formatStep.Operator.Contract.Requirements.RequiresWholeImageInvocation &&
                         formatWorkspace.PerCallEstimate is not null)
                         formatScratch = checked(formatScratch
                             + formatWorkspace.EstimateWholeImage(current.Width, current.Height, current.Format));
@@ -88,7 +87,6 @@ internal static class CompiledPlanExecutor
                     var geometryWorkspace = geometry.Descriptor.WorkspaceModel;
                     var scratch = 0L;
                     if (geometryWorkspace.HasWholeImageEstimate ||
-                        geometry.Descriptor.Requirements.RequiresWholeImageInvocation &&
                         geometryWorkspace.PerCallEstimate is not null)
                         scratch = checked(scratch
                             + geometryWorkspace.EstimateWholeImage(width, height, current.Format));
