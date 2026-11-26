@@ -295,6 +295,38 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
+    public void OperatorScratchPeakDoesNotAddMaximaFromDifferentSteps()
+    {
+        var singleThread = new ImageOp(
+            OperatorContract.Create("single-worker-scratch", OpCategory.Neighborhood, WorkingFormatMask.All,
+                IdentityFootprint.Instance, WorkspaceModel.Of((_, _, _, _) => 2000),
+                requirements: ExecutionRequirements.RowBands with { Threading = ThreadSafety.SingleThread }),
+            new KernelImplementations((source, destination, rect, _) =>
+            {
+                for (var y = 0; y < rect.Height; y++)
+                    source.Row(rect.Y + y).Slice(rect.X * 4, rect.Width * 4)
+                        .CopyTo(destination.Row(rect.Y + y).Slice(rect.X * 4));
+            }));
+        var wholeImage = new ImageOp(
+            OperatorContract.Create("whole-image-scratch", OpCategory.Global, WorkingFormatMask.All,
+                WholeSourceFootprint.Instance, WorkspaceModel.Of((_, _, _, _) => 4000, WorkspaceScope.WholeImage),
+                requirements: ExecutionRequirements.WholeImage),
+            new KernelImplementations((source, destination, rect, _) =>
+            {
+                for (var y = 0; y < rect.Height; y++)
+                    source.Row(rect.Y + y).Slice(rect.X * 4, rect.Width * 4)
+                        .CopyTo(destination.Row(rect.Y + y).Slice(rect.X * 4));
+            }));
+        var plan = new ProcessingPlan { BandRows = 64 }.Add(singleThread).Add(wholeImage);
+        var estimate = MemoryEstimator.Estimate(32, 64, WorkingFormat.Rgba8, plan.Steps,
+            bandRows: 64, allowFusion: false, degree: 4);
+
+        estimate.PerWorkerPeakBytes.ShouldBe(2000);
+        estimate.WholeImageScratchBytes.ShouldBe(4000);
+        estimate.OperatorScratchPeakBytes.ShouldBe(4000);
+        estimate.OperatorScratchBytes.ShouldBe(4000);
+    }
+    [Fact]
     public void PointAdapterWorkspace_IncludesItsMaterialisedBandResult()
     {
         const int width = 80;
