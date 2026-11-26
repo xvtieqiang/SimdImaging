@@ -218,11 +218,17 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
         if (_disposed)
             return;
         _disposed = true;
-        _workspaceLease?.Dispose();
-        _workspaceLease = null;
-        _cache?.Dispose();
-        _output?.Dispose();
-        _scratchA?.Dispose();
-        _scratchB?.Dispose();
+        try
+        {
+            _cache?.Dispose();
+            _output?.Dispose();
+            _scratchA?.Dispose();
+            _scratchB?.Dispose();
+        }
+        finally
+        {
+            _workspaceLease?.Dispose();
+            _workspaceLease = null;
+        }
     }
 }
