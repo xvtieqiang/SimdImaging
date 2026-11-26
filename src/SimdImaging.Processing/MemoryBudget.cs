@@ -142,7 +142,7 @@ public static class MemoryEstimator
         var full = checked((long)width * height * bytesPerPixel);
         var bandWorkers = Workers(height, bandRows, degree);
         var resolvedDegree = RowParallel.ResolveDegree(degree);
-        var workers = bandWorkers;
+        var workers = 1;
 
         // What the executor rents: one destination buffer per step, or — when fused — the destination plus
         // two band windows per worker. EstimateSegmentBytes already counts the destination in its answer.
@@ -172,17 +172,23 @@ public static class MemoryEstimator
         var undeclared = 0;
         foreach (var step in steps)
         {
+            var requirements = step.Definition.Contract.Requirements;
+            var wholeImageInvocation =
+                step.Category is OpCategory.Global or OpCategory.Composite ||
+                requirements.RequiresWholeImageInvocation;
+            var stepWorkers = wholeImageInvocation
+                ? requirements.Threading == ThreadSafety.SingleThread
+                    ? 1
+                    : Math.Min(resolvedDegree, height)
+                : bandWorkers;
+            workers = Math.Max(workers, stepWorkers);
+
             var workspace = step.Definition.Contract.Workspace;
             if (!workspace.IsDeclared)
             {
                 undeclared++;
                 continue;
             }
-
-            var requirements = step.Definition.Contract.Requirements;
-            var wholeImageInvocation =
-                step.Category is OpCategory.Global or OpCategory.Composite ||
-                requirements.RequiresWholeImageInvocation;
             var rows = wholeImageInvocation
                 ? height
                 : steps.Count > 1 && !(allowFusion && FusionPlanner.IsBandable(step))
@@ -204,15 +210,9 @@ public static class MemoryEstimator
             {
                 // Whole-image operators may run their own RowParallel loops. Their concurrency is independent
                 // of ProcessingPlan.BandRows, which only configures the outer row-band executor.
-                var stepWorkers = wholeImageInvocation
-                    ? step.Definition.Contract.Requirements.Threading == ThreadSafety.SingleThread
-                        ? 1
-                        : Math.Min(resolvedDegree, height)
-                    : bandWorkers;
                 var stepScratch = workspace.EstimatePerWorker(width, height, rows, format);
                 perWorker = Math.Max(perWorker, stepScratch);
                 perWorkerPeak = Math.Max(perWorkerPeak, checked(stepScratch * stepWorkers));
-                workers = Math.Max(workers, stepWorkers);
             }
         }
 
