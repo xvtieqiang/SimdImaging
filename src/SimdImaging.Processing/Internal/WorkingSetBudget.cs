@@ -30,7 +30,7 @@ internal static class WorkingSetBudget
             }
 
             var wholeImageInvocation =
-                steps[i].Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+                steps[i].Definition.Contract.Requirements.RequiresWholeImageInvocation;
             if (workspace.HasWholeImageEstimate ||
                 (wholeImageInvocation && workspace.PerCallEstimate is not null))
             {
