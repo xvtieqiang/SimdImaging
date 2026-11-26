@@ -234,7 +234,8 @@ internal static class WorkspacePlanner
             (long)outputWidth * outputHeight * finalFormat.BytesPerPixel(), "result image"));
         terms.AddRange(formatTerms);
         if (maxPlan > 0)
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, maxPlan, "largest operator-run window set"));
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, maxPlan,
+                "largest operator-run structural buffers beyond its input"));
         if (maxOperatorScratchPeak > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.OperatorScratchPeak, maxOperatorScratchPeak,
                 "maximum combined scratch peak of one operator invocation across sequential sections"));
