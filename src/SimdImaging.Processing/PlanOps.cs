@@ -351,14 +351,20 @@ public static class PlanOps
     /// </summary>
     /// <param name="radius">Window radius; 1 is 3×3.</param>
     /// <param name="kind">Erode or dilate.</param>
-    public static ImageOp Morph(int radius, Abstractions.Morphology kind = Abstractions.Morphology.Erode) =>
-        kind is Abstractions.Morphology.Open or Abstractions.Morphology.Close
-            or Abstractions.Morphology.TopHat or Abstractions.Morphology.BlackHat
-            ? Neighborhood(nameof(FilterOps.MorphCombine), radius, v => FilterOps.MorphCombine(v, radius, kind), 
-                (width, height, _, _) => 4L * width * height * 4)
-            : Neighborhood(nameof(FilterOps.Morph), radius, v => FilterOps.Morph(v, radius, kind == Abstractions.Morphology.Erode),
-            // The separable passes hold the horizontal result plus its transpose: two extra frames.
-            (width, height, _, _) => 2L * width * height * 4);
+    public static ImageOp Morph(int radius, Abstractions.Morphology kind = Abstractions.Morphology.Erode)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        var combination = kind is Abstractions.Morphology.Open or Abstractions.Morphology.Close
+            or Abstractions.Morphology.TopHat or Abstractions.Morphology.BlackHat;
+        return combination
+            ? Neighborhood(nameof(FilterOps.MorphCombine), radius, v => FilterOps.MorphCombine(v, radius, kind),
+                (width, _, rows, format) =>
+                    FilterOps.MorphPlanWorkspaceBytes(width, rows, format, radius, kind))
+            : Neighborhood(nameof(FilterOps.Morph), radius,
+                v => FilterOps.Morph(v, radius, kind == Abstractions.Morphology.Erode),
+                (width, _, rows, format) =>
+                    FilterOps.MorphPlanWorkspaceBytes(width, rows, format, radius, kind));
+    }
 
     /// <summary>
     /// Porter-Duff composition whose overlay is supplied to <see cref="ProcessingPlan.Add(ImageOp, PixelView)"/>
@@ -760,8 +766,8 @@ public static class PlanOps
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
         return Create("guided-by", OpCategory.Composite, new HaloFootprint(radius, radius),
-            WorkspaceModel.Of((width, height, rows, format) =>
-                ((long)(rows + (2 * radius)) * width * 20) + ((long)width * height * format.BytesPerPixel()),
+            WorkspaceModel.Of((width, height, _, format) =>
+                GuidedFilterOps.CrossGuidedPlanWorkspaceBytes(width, height, format, radius, bandRows),
                 WorkspaceScope.WholeImage),
             new KernelImplementations(
                 (_, _, _, _) => throw new InvalidOperationException(
@@ -811,7 +817,8 @@ public static class PlanOps
         float sigmaR = 0.15f) =>
         Global(nameof(LocalLaplacianOps.LocalLaplacian),
             v => LocalLaplacianOps.LocalLaplacian(v, levels, samples, alpha, beta, sigmaR),
-            (width, height, _, _) => LocalLaplacianOps.ScratchBytes(width, height, levels, samples),
+            (width, height, _, format) =>
+                LocalLaplacianOps.ScratchBytes(width, height, format, levels, samples),
             pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 
     /// <summary>Per-channel histogram stretch; whole-image statistics.</summary>
@@ -845,14 +852,17 @@ public static class PlanOps
             // when the transmission is refined — the luma guide, the guided filter's six planes and the box
             // mean's temporary, all alive at once. Ten planes, not three: the earlier declaration charged the
             // whole refinement as "one more plane" and under-reported the 1080p peak by 58 MiB.
-            (width, _, rows, _) =>
+            (width, height, rows, format) =>
             {
                 var planes = refineRadius > 0 ? 10 : 2;
                 var ringRows = Math.Min(rows, (2 * patchRadius) + 1);
+                // Dehaze returns its own full-size WorkingBuffer; PlanSteps.Global copies that into the
+                // executor's destination, so this frame is additional operator workspace.
                 return (planes * (long)width * rows * sizeof(float))
                     + ((long)ringRows * width * sizeof(float))
                     + ((long)width * sizeof(float))
-                    + (2L * width * 4 * sizeof(float));
+                    + (2L * width * 4 * sizeof(float))
+                    + ((long)width * height * format.BytesPerPixel());
             },
             pass: PassModel.GatherThenApply, state: StateScope.PerImage);
 
