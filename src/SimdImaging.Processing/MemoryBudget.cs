@@ -179,8 +179,10 @@ public static class MemoryEstimator
                 continue;
             }
 
+            var requirements = step.Definition.Contract.Requirements;
             var wholeImageInvocation =
-                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+                step.Category is OpCategory.Global or OpCategory.Composite ||
+                requirements.RequiresWholeImageInvocation;
             var rows = wholeImageInvocation
                 ? height
                 : steps.Count > 1 && !(allowFusion && FusionPlanner.IsBandable(step))
