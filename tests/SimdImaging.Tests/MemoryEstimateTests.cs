@@ -427,6 +427,32 @@ public class MemoryEstimateTests : IDisposable
         publicEstimate.PeakBytes.ShouldBe(stepwiseEstimate.PeakBytes);
     }
     [Fact]
+    public void PixelViewEstimatorUsesTheActualDynamicBandHeight()
+    {
+        var previous = RowParallel.DegreeOverride;
+        try
+        {
+            RowParallel.DegreeOverride = 4;
+            using var source = WorkingBuffer.Rent(1280, 4096, WorkingFormat.Rgba8);
+            var plan = new ProcessingPlan()
+                .Add(PlanOps.Invert())
+                .Add(PlanOps.Contrast(1.1f));
+            var actualBandRows = plan.BandRowsFor(source.Width, source.Height);
+            actualBandRows.ShouldBe(192);
+
+            var publicEstimate = MemoryEstimator.Estimate(source.View, plan, degree: 1);
+            var geometryEstimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, plan.Steps,
+                bandRows: actualBandRows, allowFusion: true, degree: 1);
+
+            publicEstimate.PeakBytes.ShouldBe(geometryEstimate.PeakBytes);
+            publicEstimate.PlanScratchBytes.ShouldBe(geometryEstimate.PlanScratchBytes);
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previous;
+        }
+    }
+    [Fact]
     public void Estimate_CountsDeclaredOperatorScratch()
     {
         var plan = new ProcessingPlan()
