@@ -138,7 +138,7 @@ public sealed record PlanSectionExplanation(PlanSectionKind Kind, int RecipeInde
 
 /// <summary>The execution requirements a step declared, exposed so a caller can see why a backend was chosen.</summary>
 public sealed record PlanStepRequirements(Partitioning Partitioning, PassModel Pass, StateScope State,
-    ExecutionOrder Order, Determinism Determinism, AlphaPolicy Alpha);
+    ExecutionOrder Order, Determinism Determinism, PixelSemantics Semantics);
 
 /// <summary>
 /// What the compiler derived for one step: its output geometry, the source rectangles each input port reads, and
@@ -216,7 +216,7 @@ public sealed record PlanExplanation(PlanBackend Backend, PlanRefusals Refusals,
                 info.SourceArea, info.OutputArea,
                 new PlanStepRequirements(info.Requirements.Partitioning, info.Requirements.Pass,
                     info.Requirements.State, info.Requirements.Order, info.Requirements.Determinism,
-                    info.Requirements.Alpha)))
+                    info.Requirements.Semantics)))
             .ToArray(),
         compiled.Explanation.ToArray());
 }

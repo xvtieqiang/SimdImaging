@@ -550,9 +550,8 @@
   SimdImaging.PlanStepExplanation.Width : System.Int32 { get; set; }
   SimdImaging.PlanStepExplanation.op_Equality(SimdImaging.PlanStepExplanation? left, SimdImaging.PlanStepExplanation? right) -> System.Boolean
   SimdImaging.PlanStepExplanation.op_Inequality(SimdImaging.PlanStepExplanation? left, SimdImaging.PlanStepExplanation? right) -> System.Boolean
-  SimdImaging.PlanStepRequirements.#ctor(SimdImaging.Processing.Contracts.Partitioning Partitioning, SimdImaging.Processing.Contracts.PassModel Pass, SimdImaging.Processing.Contracts.StateScope State, SimdImaging.Processing.Contracts.ExecutionOrder Order, SimdImaging.Processing.Contracts.Determinism Determinism, SimdImaging.Processing.Contracts.AlphaPolicy Alpha)
-  SimdImaging.PlanStepRequirements.Alpha : SimdImaging.Processing.Contracts.AlphaPolicy { get; set; }
-  SimdImaging.PlanStepRequirements.Deconstruct(SimdImaging.Processing.Contracts.Partitioning& Partitioning, SimdImaging.Processing.Contracts.PassModel& Pass, SimdImaging.Processing.Contracts.StateScope& State, SimdImaging.Processing.Contracts.ExecutionOrder& Order, SimdImaging.Processing.Contracts.Determinism& Determinism, SimdImaging.Processing.Contracts.AlphaPolicy& Alpha) -> System.Void
+  SimdImaging.PlanStepRequirements.#ctor(SimdImaging.Processing.Contracts.Partitioning Partitioning, SimdImaging.Processing.Contracts.PassModel Pass, SimdImaging.Processing.Contracts.StateScope State, SimdImaging.Processing.Contracts.ExecutionOrder Order, SimdImaging.Processing.Contracts.Determinism Determinism, SimdImaging.Processing.Contracts.PixelSemantics Semantics)
+  SimdImaging.PlanStepRequirements.Deconstruct(SimdImaging.Processing.Contracts.Partitioning& Partitioning, SimdImaging.Processing.Contracts.PassModel& Pass, SimdImaging.Processing.Contracts.StateScope& State, SimdImaging.Processing.Contracts.ExecutionOrder& Order, SimdImaging.Processing.Contracts.Determinism& Determinism, SimdImaging.Processing.Contracts.PixelSemantics& Semantics) -> System.Void
   SimdImaging.PlanStepRequirements.Determinism : SimdImaging.Processing.Contracts.Determinism { get; set; }
   SimdImaging.PlanStepRequirements.Equals(SimdImaging.PlanStepRequirements? other) -> System.Boolean
   SimdImaging.PlanStepRequirements.Equals(System.Object? obj) -> System.Boolean
@@ -560,6 +559,7 @@
   SimdImaging.PlanStepRequirements.Order : SimdImaging.Processing.Contracts.ExecutionOrder { get; set; }
   SimdImaging.PlanStepRequirements.Partitioning : SimdImaging.Processing.Contracts.Partitioning { get; set; }
   SimdImaging.PlanStepRequirements.Pass : SimdImaging.Processing.Contracts.PassModel { get; set; }
+  SimdImaging.PlanStepRequirements.Semantics : SimdImaging.Processing.Contracts.PixelSemantics { get; set; }
   SimdImaging.PlanStepRequirements.State : SimdImaging.Processing.Contracts.StateScope { get; set; }
   SimdImaging.PlanStepRequirements.ToString() -> System.String
   SimdImaging.PlanStepRequirements.op_Equality(SimdImaging.PlanStepRequirements? left, SimdImaging.PlanStepRequirements? right) -> System.Boolean
@@ -800,6 +800,23 @@
   SimdImaging.Processing.Contracts.PassModel.SeparableRows = 1
   SimdImaging.Processing.Contracts.PassModel.Single = 0
   SimdImaging.Processing.Contracts.PassModel.WholeFrameAlgorithm = 4
+  SimdImaging.Processing.Contracts.PixelDomain.Encoded = 0
+  SimdImaging.Processing.Contracts.PixelDomain.Linear = 1
+  SimdImaging.Processing.Contracts.PixelDomain.Unbounded = 2
+  SimdImaging.Processing.Contracts.PixelSemantics.#ctor(SimdImaging.Processing.Contracts.PixelDomain Domain, SimdImaging.Processing.Contracts.AlphaPolicy Alpha, SimdImaging.Processing.Contracts.Precision Precision)
+  SimdImaging.Processing.Contracts.PixelSemantics.Alpha : SimdImaging.Processing.Contracts.AlphaPolicy { get; set; }
+  SimdImaging.Processing.Contracts.PixelSemantics.Border : SimdImaging.Abstractions.BorderMode { get; set; }
+  SimdImaging.Processing.Contracts.PixelSemantics.Deconstruct(SimdImaging.Processing.Contracts.PixelDomain& Domain, SimdImaging.Processing.Contracts.AlphaPolicy& Alpha, SimdImaging.Processing.Contracts.Precision& Precision) -> System.Void
+  SimdImaging.Processing.Contracts.PixelSemantics.Domain : SimdImaging.Processing.Contracts.PixelDomain { get; set; }
+  SimdImaging.Processing.Contracts.PixelSemantics.Equals(SimdImaging.Processing.Contracts.PixelSemantics other) -> System.Boolean
+  SimdImaging.Processing.Contracts.PixelSemantics.Equals(System.Object obj) -> System.Boolean
+  SimdImaging.Processing.Contracts.PixelSemantics.GetHashCode() -> System.Int32
+  SimdImaging.Processing.Contracts.PixelSemantics.Precision : SimdImaging.Processing.Contracts.Precision { get; set; }
+  SimdImaging.Processing.Contracts.PixelSemantics.ToString() -> System.String
+  SimdImaging.Processing.Contracts.PixelSemantics.op_Equality(SimdImaging.Processing.Contracts.PixelSemantics left, SimdImaging.Processing.Contracts.PixelSemantics right) -> System.Boolean
+  SimdImaging.Processing.Contracts.PixelSemantics.op_Inequality(SimdImaging.Processing.Contracts.PixelSemantics left, SimdImaging.Processing.Contracts.PixelSemantics right) -> System.Boolean
+  SimdImaging.Processing.Contracts.Precision.IntegerExact = 0
+  SimdImaging.Processing.Contracts.Precision.SingleRoundFloat = 1
   SimdImaging.Processing.Contracts.StateScope.None = 0
   SimdImaging.Processing.Contracts.StateScope.PerCall = 3
   SimdImaging.Processing.Contracts.StateScope.PerImage = 2
@@ -1541,6 +1558,8 @@ enum SimdImaging.Processing.Contracts.Determinism
 enum SimdImaging.Processing.Contracts.ExecutionOrder
 enum SimdImaging.Processing.Contracts.Partitioning
 enum SimdImaging.Processing.Contracts.PassModel
+enum SimdImaging.Processing.Contracts.PixelDomain
+enum SimdImaging.Processing.Contracts.Precision
 enum SimdImaging.Processing.Contracts.StateScope
 enum SimdImaging.Processing.DitherKernel
 enum SimdImaging.Processing.FusionFallbackReason
@@ -1578,6 +1597,7 @@ struct SimdImaging.Processing.BandContext
 struct SimdImaging.Processing.ChannelRange
 struct SimdImaging.Processing.ChannelStatistics
 struct SimdImaging.Processing.ColorBalanceShifts
+struct SimdImaging.Processing.Contracts.PixelSemantics
 struct SimdImaging.Processing.CurvePoint
 struct SimdImaging.Processing.DiffResult
 struct SimdImaging.Processing.Geometry.AffineMatrix

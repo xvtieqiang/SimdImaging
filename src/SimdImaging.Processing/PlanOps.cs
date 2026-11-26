@@ -28,10 +28,10 @@ public static class PlanOps
         WorkingFormatMask formats = WorkingFormatMask.All, ExecutionRequirements? requirements = null,
         PassModel pass = PassModel.Single, PixelSemantics? semantics = null,
         int? haloX = null, int? haloY = null, InputPort? input = null, InputPort? input2 = null,
-        WorkingFormat? outputFormat = null) =>
+        WorkingFormat? outputFormat = null, Func<PixelView, PixelRect>? injectedRect = null) =>
         new(OperatorContract.Create(name, category, formats, footprint, workspace, requirements, pass, semantics,
                 input: input, input2: input2, outputFormat: outputFormat, haloX: haloX, haloY: haloY),
-            kernels);
+            kernels, injectedRect);
 
     /// <summary>
     /// A step that changes the working format. Its plan kernel throws: a same-format plan cannot carry it, and the
@@ -400,7 +400,8 @@ public static class PlanOps
             semantics: PixelSemantics.EncodedFloatAlphaComputed,
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("overlay", PortRole.Overlay, WorkingFormatMask.All, Required: true,
-                WholeSourceFootprint.Instance));
+                WholeSourceFootprint.Instance),
+            injectedRect: view => new PixelRect(x, y, view.Width, view.Height));
 
     /// <summary>W3C blend whose overlay is supplied at <c>Add</c> time; same port rule as the injected composite.</summary>
     public static ImageOp Blend(int x, int y, BlendMode mode) =>
@@ -415,7 +416,8 @@ public static class PlanOps
             semantics: PixelSemantics.EncodedFloatAlphaComputed,
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("overlay", PortRole.Overlay, WorkingFormatMask.All, Required: true,
-                WholeSourceFootprint.Instance));
+                WholeSourceFootprint.Instance),
+            injectedRect: view => new PixelRect(x, y, view.Width, view.Height));
 
     /// <summary>
     /// Richardson-Lucy deconvolution of a Gaussian blur. The band halo is <c>2 × ceil(3σ) × iterations</c>: each
@@ -471,7 +473,8 @@ public static class PlanOps
             semantics: PixelSemantics.EncodedFloatAlphaComputed,
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("overlay", PortRole.Overlay, WorkingFormatMask.All, Required: true,
-                WholeSourceFootprint.Instance));
+                WholeSourceFootprint.Instance),
+            injectedRect: view => new PixelRect(0, 0, view.Width, view.Height));
 
     /// <summary>
     /// Applies a gain map to the base and returns linear light in Rgba32F. The output format differs, so this is a
@@ -501,7 +504,8 @@ public static class PlanOps
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("gain-map", PortRole.Overlay, WorkingFormatMask.All, Required: true,
                 WholeSourceFootprint.Instance),
-            outputFormat: WorkingFormat.Rgba32F);
+            outputFormat: WorkingFormat.Rgba32F,
+            injectedRect: view => new PixelRect(0, 0, view.Width, view.Height));
 
     /// <summary>Thresholded bloom. The highlights and the blurred copy are both full frames, so this is a whole-image
     /// step (Frame only) rather than a banded one.</summary>
@@ -839,7 +843,8 @@ public static class PlanOps
             WorkingFormatMask.All, ExecutionRequirements.WholeImage,
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("guide", PortRole.Guide, WorkingFormatMask.All, Required: true,
-                WholeSourceFootprint.Instance));
+                WholeSourceFootprint.Instance),
+            injectedRect: view => new PixelRect(0, 0, view.Width, view.Height));
     }
 
     /// <summary>

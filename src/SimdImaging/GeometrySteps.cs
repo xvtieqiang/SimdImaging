@@ -23,7 +23,7 @@ internal static class GeometrySteps
                 executeOptions ?? execute), Kind: GeometryKind.Resize, Resampler: resampler,
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
                 ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     internal static GeometryDescriptor Resize(int width, int height, ResizeMode mode, Anchor anchor,
         Resampler resampler, RgbaColor background)
@@ -34,7 +34,7 @@ internal static class GeometrySteps
             : null;
         return new($"resize {width}x{height} {mode}", new FixedSizeRule(width, height),
             (view, pool) => Canvas.Resize(view, width, height, resampler, mode, anchor, background, pool),
-            MapRegions: map, Alpha: AlphaPolicy.Recomputes);
+            MapRegions: map, Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
     }
 
     internal static GeometryDescriptor Crop(PixelRect region) =>
@@ -44,12 +44,13 @@ internal static class GeometrySteps
             Kind: GeometryKind.Crop,
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
                 new PixelRect(destination.X + region.X, destination.Y + region.Y, destination.Width,
-                    destination.Height)).Clamp(sourceWidth, sourceHeight));
+                    destination.Height)).Clamp(sourceWidth, sourceHeight),
+            Semantics: PixelSemantics.EncodedInteger);
 
     /// <summary>Applies the EXIF orientation as a geometry step; the metadata is set by the pipeline.</summary>
     internal static GeometryDescriptor AutoOrient(ImageOrientation orientation) =>
         new("auto-orient", (int)orientation >= 5 ? new SwappedSizeRule() : GeometryRule.SameSize,
-            (view, pool) => Orientation.AutoOrient(view, orientation, pool));
+            (view, pool) => Orientation.AutoOrient(view, orientation, pool), Semantics: PixelSemantics.EncodedInteger);
 
     internal static GeometryDescriptor Rotate90(bool clockwise) =>
         new("rotate90", new SwappedSizeRule(),
@@ -59,7 +60,8 @@ internal static class GeometrySteps
                     ? new PixelRect(destination.Y, sourceHeight - (destination.X + destination.Width),
                         destination.Height, destination.Width)
                     : new PixelRect(sourceWidth - (destination.Y + destination.Height), destination.X,
-                        destination.Height, destination.Width)).Clamp(sourceWidth, sourceHeight));
+                        destination.Height, destination.Width)).Clamp(sourceWidth, sourceHeight),
+            Semantics: PixelSemantics.EncodedInteger);
 
     internal static GeometryDescriptor Rotate180() =>
         new("rotate180", GeometryRule.SameSize, (view, pool) => Transforms.Rotate180(view, pool),
@@ -74,7 +76,8 @@ internal static class GeometrySteps
             (source, pool, _) => new FlipRowSource(source), Kind: GeometryKind.FlipHorizontal,
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
                 new PixelRect(sourceWidth - (destination.X + destination.Width), destination.Y,
-                    destination.Width, destination.Height)).Clamp(sourceWidth, sourceHeight));
+                    destination.Width, destination.Height)).Clamp(sourceWidth, sourceHeight),
+            Semantics: PixelSemantics.EncodedInteger);
 
     internal static GeometryDescriptor FlipVertical() =>
         new("flip-vertical", GeometryRule.SameSize, (view, pool) => Transforms.FlipVertical(view, pool),
@@ -84,20 +87,21 @@ internal static class GeometrySteps
 
     internal static GeometryDescriptor ResizeCanvas(int width, int height, Anchor anchor, RgbaColor background) =>
         new($"canvas {width}x{height}", new FixedSizeRule(width, height),
-            (view, pool) => Canvas.ResizeCanvas(view, width, height, anchor, background, pool));
+            (view, pool) => Canvas.ResizeCanvas(view, width, height, anchor, background, pool), Semantics: PixelSemantics.EncodedInteger);
 
     internal static GeometryDescriptor Tile(int width, int height, bool mirror) =>
         new($"tile {width}x{height}", new FixedSizeRule(width, height),
-            (view, pool) => Canvas.Tile(view, width, height, mirror, pool));
+            (view, pool) => Canvas.Tile(view, width, height, mirror, pool), Semantics: PixelSemantics.EncodedInteger);
 
     internal static GeometryDescriptor Trim(float tolerance) =>
-        new("trim", new ContentDerivedRule(), (view, pool) => Canvas.Trim(view, tolerance, pool));
+        new("trim", new ContentDerivedRule(), (view, pool) => Canvas.Trim(view, tolerance, pool), Semantics: PixelSemantics.EncodedInteger);
 
     internal static GeometryDescriptor RoundCorners(float radius) =>
         new("round-corners", GeometryRule.SameSize, (view, pool) => Canvas.RoundCorners(view, radius, pool));
 
     internal static GeometryDescriptor Transpose(bool anti) =>
         new("transpose", new SwappedSizeRule(), (view, pool) => Orientation.Transpose(view, anti, pool),
+            Semantics: PixelSemantics.EncodedInteger,
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) => anti
                 ? SourceRegionSet.Of(new PixelRect(sourceWidth - (destination.Y + destination.Height),
                     sourceHeight - (destination.X + destination.Width), destination.Height,
@@ -110,12 +114,13 @@ internal static class GeometrySteps
                 (width, height) => (quarterTurns & 1) == 0 ? (width, height) : (height, width),
                 "rotate/flip"),
             (view, pool) => Orientation.RotateFlip(view, quarterTurns, flipHorizontal, pool),
+            Semantics: PixelSemantics.EncodedInteger,
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) =>
                 MapRotateFlip(quarterTurns, flipHorizontal, destination, sourceWidth, sourceHeight));
 
     internal static GeometryDescriptor EntropyCrop(float threshold) =>
         new("entropy-crop", new ContentDerivedRule(),
-            (view, pool) => Processing.Geometry.EntropyCrop.Crop(view, threshold, pool));
+            (view, pool) => Processing.Geometry.EntropyCrop.Crop(view, threshold, pool), Semantics: PixelSemantics.EncodedInteger);
 
     internal static GeometryDescriptor RemoveSeams(SeamAxis axis, int count) =>
         new($"remove {count} seams", new RelativeRule(
@@ -125,7 +130,8 @@ internal static class GeometrySteps
                 $"remove {count} seams"),
             (view, pool) => SeamCarving.RemoveSeams(view, axis, count, pool),
             Pass: PassModel.WholeFrameAlgorithm, State: StateScope.PerImage, Order: ExecutionOrder.SourceOrder,
-            Determinism: Determinism.OrderDependent, Workspace: WorkspaceModel.Undeclared);
+            Determinism: Determinism.OrderDependent, Semantics: PixelSemantics.EncodedInteger,
+            Workspace: WorkspaceModel.Undeclared);
 
     internal static GeometryDescriptor InsertSeams(SeamAxis axis, int count) =>
         new($"insert {count} seams", new RelativeRule(
@@ -135,13 +141,15 @@ internal static class GeometrySteps
                 $"insert {count} seams"),
             (view, pool) => SeamCarving.InsertSeams(view, axis, count, pool),
             Pass: PassModel.WholeFrameAlgorithm, State: StateScope.PerImage, Order: ExecutionOrder.SourceOrder,
-            Determinism: Determinism.OrderDependent, Workspace: WorkspaceModel.Undeclared);
+            Determinism: Determinism.OrderDependent, Semantics: PixelSemantics.EncodedInteger,
+            Workspace: WorkspaceModel.Undeclared);
 
     internal static GeometryDescriptor SeamCarve(int width, int height) =>
         new($"carve {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => SeamCarving.CarveTo(view, width, height, pool),
             Pass: PassModel.WholeFrameAlgorithm, State: StateScope.PerImage, Order: ExecutionOrder.SourceOrder,
-            Determinism: Determinism.OrderDependent, Workspace: WorkspaceModel.Undeclared);
+            Determinism: Determinism.OrderDependent, Semantics: PixelSemantics.EncodedInteger,
+            Workspace: WorkspaceModel.Undeclared);
 
     internal static GeometryDescriptor Pad(int margin, RgbaColor background) =>
         Pad(margin, margin, margin, margin, background);
@@ -153,6 +161,7 @@ internal static class GeometrySteps
             (view, pool) => Transforms.Pad(view, left, top, right, bottom, background, pool),
             (source, pool, _) => new PadRowSource(source, left, top, right, bottom, background),
             Kind: GeometryKind.Pad,
+            Semantics: PixelSemantics.EncodedInteger,
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
                 new PixelRect(destination.X - left, destination.Y - top, destination.Width,
                     destination.Height)).Clamp(sourceWidth, sourceHeight));
@@ -162,7 +171,7 @@ internal static class GeometrySteps
             (view, pool) => Mapping.Transform(view, forward, width, height, background, pool),
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) =>
                 MapAffine(forward, destination, sourceWidth, sourceHeight, support: 1),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
 
     internal static GeometryDescriptor AffineWithOptions(AffineMatrix forward, int width, int height,
         Resampler resampler, SampleOptions options, RgbaColor background) =>
@@ -173,19 +182,19 @@ internal static class GeometrySteps
                 ? null
                 : (destination, sourceWidth, sourceHeight, _, _) =>
                     MapAffine(forward, destination, sourceWidth, sourceHeight, Support(resampler)),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
 
     internal static GeometryDescriptor Warp(int width, int height, PixelWarp map, Resampler resampler,
         RgbaColor background) =>
         new($"warp {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Sampling.Warp(view, width, height, map, resampler, background, pool),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
 
     internal static GeometryDescriptor WarpWithOptions(int width, int height, PixelWarp map, Resampler resampler,
         SampleOptions options, RgbaColor background) =>
         new($"warp {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Sampling.WarpWithOptions(view, width, height, map, resampler, options, background, pool),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
 
     internal static GeometryDescriptor Perspective(ReadOnlySpan<float> homography, int width, int height,
         RgbaColor background)
@@ -193,7 +202,7 @@ internal static class GeometrySteps
         var matrix = homography.ToArray();
         return new($"perspective {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Mapping.Perspective(view, matrix, width, height, background, pool),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
     }
 
     internal static GeometryDescriptor PerspectiveWithOptions(ReadOnlySpan<float> homography, int width,
@@ -203,7 +212,7 @@ internal static class GeometrySteps
         return new($"perspective {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Mapping.PerspectiveWithOptions(view, matrix, width, height, resampler, options,
                 background, pool),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
     }
 
     internal static GeometryDescriptor ResizeWithOptions(int width, int height, Resampler resampler,
@@ -212,7 +221,7 @@ internal static class GeometrySteps
             (view, pool) => Resample.ResizeWithOptions(view, width, height, resampler, options, background, pool),
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
                 ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
 
     internal static GeometryDescriptor ResizeToWidth(int width, Resampler resampler) =>
         new($"resize to width {width}", new RelativeRule(
@@ -223,7 +232,7 @@ internal static class GeometrySteps
                 ResizeMode.Stretch, Anchor.Centre, default, pool),
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
                 ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     internal static GeometryDescriptor ResizeToHeight(int height, Resampler resampler) =>
         new($"resize to height {height}", new RelativeRule(
@@ -234,7 +243,7 @@ internal static class GeometrySteps
                 ResizeMode.Stretch, Anchor.Centre, default, pool),
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
                 ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     internal static GeometryDescriptor Thumbnail(int maxWidth, int maxHeight, Resampler resampler,
         float sharpenAmount) =>
@@ -258,7 +267,7 @@ internal static class GeometrySteps
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
                 ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight,
                     Support(resampler) + 1),
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     internal static GeometryDescriptor Rotate(float degrees, RgbaColor background) =>
         new($"rotate {degrees}", RotateRule(degrees),
@@ -272,7 +281,7 @@ internal static class GeometrySteps
                 var (_, _, forward) = Image.RotationCanvas(sourceWidth, sourceHeight, degrees);
                 return MapAffine(forward, destination, sourceWidth, sourceHeight, support: 1);
             },
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
 
     internal static GeometryDescriptor RotateWithOptions(float degrees, Resampler resampler, SampleOptions options,
         RgbaColor background) =>
@@ -290,7 +299,7 @@ internal static class GeometrySteps
                     var (_, _, forward) = Image.RotationCanvas(sourceWidth, sourceHeight, degrees);
                     return MapAffine(forward, destination, sourceWidth, sourceHeight, Support(resampler));
                 },
-            Alpha: AlphaPolicy.Recomputes);
+            Semantics: PixelSemantics.EncodedFloatAlphaComputed with { Border = BorderMode.Constant });
 
     private static RelativeRule RotateRule(float degrees) =>
         new((width, height) =>

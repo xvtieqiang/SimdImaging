@@ -110,6 +110,33 @@ public sealed class CompositeStepTests
     }
 
     [Fact]
+    public void AnInjectedOverlay_ReportsItsExactPortRectangle()
+    {
+        using var background = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
+        using var overlay = TestImages.Gradient(20, 16, WorkingFormat.Rgba8);
+        var plan = new ProcessingPlan().Add(PlanOps.Composite(10, 8), overlay[0].Pixels.View);
+
+        var explanation = background.Explain(plan);
+
+        var port = explanation.Steps[0].SourceRegions.Single(region => region.Port == 1);
+        port.Region.ShouldBe(new PixelRect(10, 8, 20, 16));
+    }
+
+    [Fact]
+    public void AnInjectedDrawImage_ReportsTheWholeOverlay()
+    {
+        using var background = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);
+        using var overlay = TestImages.Gradient(20, 16, WorkingFormat.Rgba8);
+        var plan = new ProcessingPlan().Add(PlanOps.DrawImage(new PixelRect(10, 8, 20, 16), 0.5f),
+            overlay[0].Pixels.View);
+
+        var explanation = background.Explain(plan);
+
+        var port = explanation.Steps[0].SourceRegions.Single(region => region.Port == 1);
+        port.Region.ShouldBe(new PixelRect(0, 0, 20, 16));
+    }
+
+    [Fact]
     public void AnInjectedOverlay_IsRecordedOnTheStep()
     {
         using var background = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);

@@ -76,6 +76,12 @@ public readonly record struct PlanStep
     /// composite, which stays supported for callers that used the older <c>PlanOps</c> overload.</summary>
     internal OpKernel2? SecondKernel => Definition.Kernels.SecondKernel;
 
+    /// <summary>The exact rectangle the injected second input occupies in its declared coordinates, or null when the
+    /// operator's contract already carries it (closure-captured composites).</summary>
+    internal PixelRect? SecondaryRegion => Secondary is { } view && Definition.InjectedRect is { } rect
+        ? rect(view)
+        : null;
+
     /// <summary>Dispatches to the second-input kernel when the step has one, and checks that the view is present.</summary>
     internal void Invoke(PixelView source, PixelView destination, PixelRect destinationRect, PixelRect sourceRect)
     {

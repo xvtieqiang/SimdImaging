@@ -216,6 +216,12 @@ internal static class PipelineCompiler
 
                     for (var p = 1; p < step.Definition.Contract.Inputs.Count; p++)
                     {
+                        if (p == 1 && step.SecondaryRegion is { } injected)
+                        {
+                            ports.Add(new PortRegion(1, injected));
+                            continue;
+                        }
+
                         if (step.Definition.Contract.Inputs[p].Footprint is not { } portFootprint)
                             continue;
                         var portSet = portFootprint

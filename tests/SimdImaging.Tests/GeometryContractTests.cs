@@ -22,7 +22,10 @@ public sealed class GeometryContractTests
         warp.Pass.ShouldBe(PassModel.Single);
         warp.State.ShouldBe(StateScope.None);
         warp.Order.ShouldBe(ExecutionOrder.Any);
-        warp.Alpha.ShouldBe(AlphaPolicy.Recomputes);
+        warp.PixelSemantics.Alpha.ShouldBe(AlphaPolicy.Recomputes);
+        warp.PixelSemantics.Domain.ShouldBe(PixelDomain.Encoded);
+        warp.PixelSemantics.Border.ShouldBe(BorderMode.Constant);
+        warp.PixelSemantics.Precision.ShouldBe(Precision.SingleRoundFloat);
         warp.MapRegions.ShouldBeNull("an arbitrary destination-to-source lambda cannot be inverted region-wise");
         warp.WorkspaceModel.IsDeclared.ShouldBeTrue();
     }
@@ -37,7 +40,8 @@ public sealed class GeometryContractTests
         seam.State.ShouldBe(StateScope.PerImage);
         seam.Order.ShouldBe(ExecutionOrder.SourceOrder);
         seam.Determinism.ShouldBe(Determinism.OrderDependent);
-        seam.Alpha.ShouldBe(AlphaPolicy.Preserve);
+        seam.PixelSemantics.Alpha.ShouldBe(AlphaPolicy.Preserve);
+        seam.PixelSemantics.Precision.ShouldBe(Precision.IntegerExact);
         seam.WorkspaceModel.IsDeclared.ShouldBeFalse(
             "seam carving rents a full-size back-pointer and working planes that are not yet estimated");
     }
@@ -49,17 +53,20 @@ public sealed class GeometryContractTests
         resize.Requirements.Partition.ShouldBe(Partitioning.RowBands);
         resize.Wrap.ShouldNotBeNull();
         resize.MapRegions.ShouldNotBeNull();
-        resize.Alpha.ShouldBe(AlphaPolicy.Recomputes);
+        resize.PixelSemantics.Alpha.ShouldBe(AlphaPolicy.Recomputes);
+        resize.PixelSemantics.Border.ShouldBe(BorderMode.Clamp);
 
         var crop = GeometrySteps.Crop(new PixelRect(0, 0, 8, 8));
         crop.Requirements.Partition.ShouldBe(Partitioning.RowBands);
         crop.Wrap.ShouldNotBeNull();
         crop.MapRegions.ShouldNotBeNull();
-        crop.Alpha.ShouldBe(AlphaPolicy.Preserve);
+        crop.PixelSemantics.Alpha.ShouldBe(AlphaPolicy.Preserve);
+        crop.PixelSemantics.Precision.ShouldBe(Precision.IntegerExact);
 
         var flip = GeometrySteps.FlipHorizontal();
         flip.Requirements.Partition.ShouldBe(Partitioning.RowBands);
-        flip.Alpha.ShouldBe(AlphaPolicy.Preserve);
+        flip.PixelSemantics.Alpha.ShouldBe(AlphaPolicy.Preserve);
+        flip.PixelSemantics.Precision.ShouldBe(Precision.IntegerExact);
     }
 
     [Fact]
@@ -71,14 +78,14 @@ public sealed class GeometryContractTests
         seam.Workspace.IsLowerBound.ShouldBeTrue("the seam step declares no workspace estimate");
         seam.StepInfo[0].Requirements.Pass.ShouldBe(PassModel.WholeFrameAlgorithm);
         seam.StepInfo[0].Requirements.State.ShouldBe(StateScope.PerImage);
-        seam.StepInfo[0].Requirements.Alpha.ShouldBe(AlphaPolicy.Preserve);
+        seam.StepInfo[0].Requirements.Semantics.Alpha.ShouldBe(AlphaPolicy.Preserve);
 
         var cropRecipe = new PipelineRecipeBuilder().Append(GeometrySteps.Crop(new PixelRect(0, 0, 8, 8))).Build();
         var crop = PipelineCompiler.Compile(cropRecipe, Options(24, 18));
 
         crop.Workspace.IsLowerBound.ShouldBeFalse();
         crop.StepInfo[0].Requirements.Partitioning.ShouldBe(Partitioning.RowBands);
-        crop.StepInfo[0].Requirements.Alpha.ShouldBe(AlphaPolicy.Preserve);
+        crop.StepInfo[0].Requirements.Semantics.Alpha.ShouldBe(AlphaPolicy.Preserve);
     }
 
     private static void Identity(float destinationX, float destinationY, out float sourceX, out float sourceY)

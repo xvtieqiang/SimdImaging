@@ -633,7 +633,7 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 - **分段**：算子连续段与几何步各自成 `CompiledSection`；算子段喂给现有 `ProcessingPlan`，几何段喂给现有几何调用。
 - **融合**：与 `ProcessingPlan` 共用 `FusionDecision.ShouldFuse`（同一条规则、同一处代码）。
 - **几何契约**：`GeometryDescriptor` 与算子共享同一套要求词表（`PassModel` / `StateScope` / `ExecutionOrder` /
-  `Determinism` / `AlphaPolicy` / `WorkspaceModel`）；`GeometryStep.CanWrap` 由 `Requirements.Partition` 推出，
+  `Determinism` / `PixelSemantics` / `WorkspaceModel`）；`GeometryStep.CanWrap` 由 `Requirements.Partition` 推出，
   `PerImage` 状态或 `SourceOrder` 会否决 `Wrap`；未声明 workspace 的几何步计入计划下界。
 - **后端**：Tile 请求 → `TileRefused`（首个真实阻塞：无区域写 Sink / 块对齐 / Global / 无 Tile 内核）；Region 请求且源有 `RandomRegion`、无几何 → Region；全部算子段可流、几何步的 `Requirements.Partition == RowBands`、Sink 可写行 → Stream；否则 Frame。拒绝原因复用 `StreamRefusal` / `RegionRefusal`，不新增平行词汇。
 - **解释**：每个决定一行 `Explanation`，测试直接断言这些行。
@@ -807,8 +807,9 @@ orientation 复位（§6.3.10）。
   四分之一转组合，逐组合反推）、Affine 与任意角 Rotate（反变换四个角 + 核支持半径，实测保守 1–2 像素）。
   `SampleOptions.AaMode = Elliptical` 的足迹随 Jacobian 变化，仍返回整图；Warp / Perspective / 内容派生尺寸
   也仍保守返回整图。
-- 每个 `OperatorStep` 的端口分别推导：主输入用算子 footprint，第二端口用 `InputPort.Footprint`（Composite / Blend /
-  DrawImage / ApplyGainMap / GuidedFilter 已声明 Fixed）。
+- 每个 `OperatorStep` 的端口分别推导：主输入用算子 footprint；注入式第二输入用 `PlanStep.SecondaryRegion`
+  （算子声明如何从视图得到端口矩形：Composite/Blend 是 `(x, y, w, h)`，DrawImage/ApplyGainMap/GuidedFilter 是
+  整个 overlay），闭包式第二输入仍用 `InputPort.Footprint`。
 - 编译器把每步的 `CompiledStepInfo`（输出尺寸/格式、各端口源矩形、读取面积、放大比）放进
   `CompiledExecutionPlan`，并写进 `Explanation`。
 - `RegionCost` 汇总整条链的源读取面积 / 输出面积；`CompileOptions.MaxRegionReadAmplification` 超限时把 Region
@@ -870,8 +871,8 @@ requirements 与工作空间；文件侧的选路由 `ImageTranscode.Explain()` 
 - `OpKernel2` + `KernelImplementations.SecondKernel` 让执行器把记录的视图交给内核；Frame 的三条分派（融合窗口、整图
   步骤、未融合的单步带）统一走 `PlanStep.Invoke`，所以没有哪条路径会漏掉第二输入。Recipe 与编译段携带同一个
   `PixelView`，`Image.Apply`/`ImageTranscode` 的编译路径因此与 `ProcessingPlan` 一致。
-- 契约仍是唯一来源：`InputPort` 声明端口与 footprint，编译器按端口推导区域。注入式 `PlanOps.Composite/Blend` 在视图
-  未知时把第二端口保守记为整图（`WholeSourceFootprint`）；`DrawImage` 的 placement 已知，仍按目标矩形声明。
+- 契约仍是唯一来源：`InputPort` 声明端口与 footprint，编译器按端口推导区域。注入式算子在 `Add` 时把视图交给
+  `PlanStep.SecondaryRegion`，端口区域因此是精确的，不再保守记整图。
 - `ImagePipeline.Composite/Blend/DrawImage/Watermark` 已切到注入式；旧的 `PlanOps.Composite(PixelView, …)` /
   `Blend(PixelView, …)` / `DrawImage(PixelView, …)` 闭包重载保留，二者逐字节等价（`CompositeStepTests` 在 Rgba8 /
   Rgba16 / Rgba32F 三种格式上对照）。

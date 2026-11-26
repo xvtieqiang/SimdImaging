@@ -1294,11 +1294,12 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   Invert/GaussianBlur/Pixelate/Equalize/Noise 在列，Composite/Blend 在 `CompositeStepTests`。审查中发现并修复了
   两处真实语义偏差：Pixelate 与 Composite/Blend/DrawImage 实际会重算 alpha，却声明 `AlphaPolicy.Preserve`；现在声明
   `Recomputes`，并由 `RepresentativeSemanticsTests` 用像素行为（2×2 块 alpha 平均）守护。几何步现在也使用同一套
-  词表：`GeometryDescriptor` 带 `PassModel`/`StateScope`/`ExecutionOrder`/`Determinism`/`AlphaPolicy`/`WorkspaceModel`，
-  编译器据此做流式分类、解释和工作空间报告（SeamCarve 声明为 `WholeFrameAlgorithm` + `PerImage` + workspace
-  `Undeclared`，计划因此正确标为下界）；`IImageOp` 已退役，`ImageOp` 是唯一算子定义。**仍未逐一核验**：纯置换/画布
-  类几何（Tile、ResizeCanvas、RoundCorners、Trim、EntropyCrop）沿用默认 `Preserve`/`Single`，尚无像素级语义测试；
-  几何的 `PixelDomain` 也没有声明（目前只有 alpha 策略）。
+  词表：`GeometryDescriptor` 带 `PassModel`/`StateScope`/`ExecutionOrder`/`Determinism`/`PixelSemantics`/`WorkspaceModel`
+  （domain、alpha、precision、border），编译器据此做流式分类、解释和工作空间报告（SeamCarve 声明为
+  `WholeFrameAlgorithm` + `PerImage` + workspace `Undeclared`，计划因此正确标为下界）；`IImageOp` 已退役，
+  `ImageOp` 是唯一算子定义。注入式第二输入的端口区域也改为精确矩形，不再保守整图。**仍未逐一核验**：纯置换/画布类
+  几何（Tile、ResizeCanvas、RoundCorners、Trim、EntropyCrop）的声明已按实现给出（多为 `EncodedInteger`），但尚无
+  像素级语义测试；几何的 `Border` 只对 Warp/Affine/Perspective/Rotate 标了 `Constant`，其余用默认 `Clamp`。
 - **Tile 后端（P5 部分完成）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。公开入口：
   `Image.ProcessTiles` 的缓冲与 Sink 两个重载、`Image.ProcessTilesTo(IRegionSource, Stream, …)`（编码器端 sink：

@@ -25,10 +25,12 @@ namespace SimdImaging.Processing;
 /// </remarks>
 public sealed class ImageOp
 {
-    internal ImageOp(OperatorContract contract, KernelImplementations kernels)
+    internal ImageOp(OperatorContract contract, KernelImplementations kernels,
+        Func<PixelView, PixelRect>? injectedRect = null)
     {
         Contract = contract ?? throw new ArgumentNullException(nameof(contract));
         Kernels = kernels ?? throw new ArgumentNullException(nameof(kernels));
+        InjectedRect = injectedRect;
 
         // A format-changing step is executed as a whole-image reshape; a plan kernel writes into a destination of
         // the source format and cannot change it. Refuse the combination at construction instead of at a boundary.
@@ -47,6 +49,10 @@ public sealed class ImageOp
     internal OperatorContract Contract { get; }
 
     internal KernelImplementations Kernels { get; }
+
+    /// <summary>How an injected second view's port rectangle is derived from that view; null for a closure-captured
+    /// second input, whose footprint is already exact. Used only by the region derivation and the explanation.</summary>
+    internal Func<PixelView, PixelRect>? InjectedRect { get; }
 
     /// <summary>Diagnostic name, used in plan reports.</summary>
     public string Name => Contract.Name;

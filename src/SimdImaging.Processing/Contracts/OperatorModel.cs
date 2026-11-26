@@ -83,7 +83,7 @@ public enum PassModel : byte
 }
 
 /// <summary>The colour domain an operator computes in.</summary>
-internal enum PixelDomain : byte
+public enum PixelDomain : byte
 {
     /// <summary>Encoded sample values, as stored (sRGB-encoded for the current formats).</summary>
     Encoded = 0,
@@ -109,7 +109,7 @@ public enum AlphaPolicy : byte
 }
 
 /// <summary>Where rounding happens.</summary>
-internal enum Precision : byte
+public enum Precision : byte
 {
     /// <summary>Integer arithmetic; the result is exact for the declared formats.</summary>
     IntegerExact = 0,
@@ -141,10 +141,10 @@ internal readonly record struct ExecutionRequirements(
 }
 
 /// <summary>The colour and alpha rules an optimisation must not change.</summary>
-internal readonly record struct PixelSemantics(PixelDomain Domain, AlphaPolicy Alpha, Precision Precision)
+public readonly record struct PixelSemantics(PixelDomain Domain, AlphaPolicy Alpha, Precision Precision)
 {
     /// <summary>The edge rule the operator applies when it reads outside the image.</summary>
-    internal BorderMode Border { get; init; } = BorderMode.Clamp;
+    public BorderMode Border { get; init; } = BorderMode.Clamp;
     /// <summary>Encoded samples, alpha preserved, one rounding after float work — the default.</summary>
     internal static PixelSemantics EncodedFloat { get; } = new(
         PixelDomain.Encoded, AlphaPolicy.Preserve, Precision.SingleRoundFloat);

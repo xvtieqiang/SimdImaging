@@ -98,7 +98,7 @@ internal sealed record GeometryDescriptor(string Name, GeometryRule Geometry, Re
     WrapRowSource? Wrap = null, GeometryKind Kind = GeometryKind.Other, Resampler? Resampler = null,
     MapGeometryRegions? MapRegions = null, PassModel Pass = PassModel.Single, StateScope State = StateScope.None,
     ExecutionOrder Order = ExecutionOrder.Any, Determinism Determinism = Determinism.CoordinateDeterministic,
-    AlphaPolicy Alpha = AlphaPolicy.Preserve, WorkspaceModel? Workspace = null)
+    PixelSemantics? Semantics = null, WorkspaceModel? Workspace = null)
 {
     /// <summary>The requirements a row pump must honour. State or ordering turn a row-wrappable step into a
     /// whole-image one, because the pump may interleave calls and cannot replay a previous band.</summary>
@@ -111,7 +111,10 @@ internal sealed record GeometryDescriptor(string Name, GeometryRule Geometry, Re
     /// <summary>What this step holds privately; a step that has not declared it is reported as a lower bound.</summary>
     internal WorkspaceModel WorkspaceModel => Workspace ?? Contracts.WorkspaceModel.None;
 
-    internal StepRequirements StepRequirements => new(Requirements.Partition, Pass, State, Order, Determinism, Alpha);
+    internal PixelSemantics PixelSemantics => Semantics ?? Contracts.PixelSemantics.EncodedFloat;
+
+    internal StepRequirements StepRequirements => new(Requirements.Partition, Pass, State, Order, Determinism,
+        PixelSemantics);
 }
 
 /// <summary>The geometry operations the library exposes as steps. The compiler does not need this; the file-side
