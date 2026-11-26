@@ -304,7 +304,12 @@ internal static class WorkspacePlanner
         }
 
         var windowWidth = (int)Math.Min(options.SourceWidth, (long)width + 2L * haloX);
-        var windowHeight = (int)Math.Min(options.SourceHeight, (long)height + 2L * haloY);
+        var degree = options.Execute.MaxDegreeOfParallelism;
+        var plan = ProcessingPlan.FromCompiled(steps,
+            options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows);
+        var bandRows = SequentialBands.For(plan, windowWidth, height, options.SourceFormat, degree);
+        var windowHeight = (int)Math.Min(options.SourceHeight,
+            (long)Math.Min(bandRows, height) + 2L * haloY);
         foreach (var step in steps)
         {
             if (step.Scratch is not { } scratch)
@@ -325,9 +330,7 @@ internal static class WorkspacePlanner
         var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
         var tileBytes = TargetBuffer.Bytes(width, height, options.SourceFormat);
         var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
-        var workers = Math.Max(1, options.Execute.MaxDegreeOfParallelism > 0
-            ? options.Execute.MaxDegreeOfParallelism
-            : RowParallel.Degree);
+        var workers = Math.Max(1, degree > 0 ? degree : RowParallel.Degree);
         terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, tileBytes, "one resident destination tile"));
         if (windowBytes > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
