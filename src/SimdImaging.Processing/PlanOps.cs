@@ -230,11 +230,15 @@ public static class PlanOps
     /// <summary>Gaussian blur; support is <c>ceil(3σ)</c>, which is where the halo comes from.</summary>
     public static ImageOp GaussianBlur(float sigma) =>
         Neighborhood(nameof(FilterOps.GaussianBlur), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)),
-            v => FilterOps.GaussianBlur(v, sigma), pass: PassModel.SeparableRows);
+            v => FilterOps.GaussianBlur(v, sigma),
+            (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows,
+                Math.Max(1, (int)MathF.Ceiling(sigma * 3f)), format),
+            pass: PassModel.SeparableRows);
 
     /// <summary>Box blur of the given radius; support is the radius.</summary>
     public static ImageOp BoxBlur(int radius) =>
         Neighborhood(nameof(FilterOps.BoxBlur), radius, v => FilterOps.BoxBlur(v, radius),
+            (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows, radius, format),
             pass: PassModel.SeparableRows);
 
     /// <summary>
@@ -243,7 +247,10 @@ public static class PlanOps
     /// </summary>
     public static ImageOp Sharpen(float amount = 0.5f, float sigma = 1f) =>
         Neighborhood(nameof(FilterOps.Sharpen), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)),
-            v => FilterOps.Sharpen(v, amount, sigma), pass: PassModel.SeparableRows);
+            v => FilterOps.Sharpen(v, amount, sigma),
+            (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows,
+                Math.Max(1, (int)MathF.Ceiling(sigma * 3f)), format, sharpen: true),
+            pass: PassModel.SeparableRows);
 
     /// <summary>3x3 emboss; one row and one column.</summary>
     public static ImageOp Emboss(float strength = 1f) =>
