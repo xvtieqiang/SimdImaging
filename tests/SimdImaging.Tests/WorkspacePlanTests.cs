@@ -79,13 +79,21 @@ public sealed class WorkspacePlanTests
         const int height = 48;
         var crop = new PixelRect(8, 6, 32, 24);
         var recipe = Recipe(PlanOps.Invert(), GeometrySteps.Crop(crop), PlanOps.Invert());
-        var plan = PipelineCompiler.Compile(recipe, FrameOptions(width, height));
-        plan.Backend.ShouldBe(ExecutionBackend.Frame);
-
         var sourceBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
         var croppedBytes = (long)crop.Width * crop.Height * WorkingFormat.Rgba8.BytesPerPixel();
         var expectedPeak = sourceBytes + sourceBytes + croppedBytes;
+        var compileOptions = FrameOptions(width, height) with
+        {
+            Execute = new ExecuteOptions { MaxWorkingBytes = expectedPeak },
+        };
+        var plan = PipelineCompiler.Compile(recipe, compileOptions);
+        plan.Backend.ShouldBe(ExecutionBackend.Frame);
         plan.Workspace.BoundedBytes.ShouldBe(expectedPeak);
+        Should.Throw<InvalidOperationException>(() => PipelineCompiler.Compile(recipe,
+            compileOptions with
+            {
+                Execute = new ExecuteOptions { MaxWorkingBytes = expectedPeak - 1 },
+            }));
 
         using var source = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
         var manager = new WorkspaceManager(expectedPeak);
