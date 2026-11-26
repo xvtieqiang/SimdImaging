@@ -45,8 +45,11 @@ internal static class CompiledPlanExecutor
                     var output = formatStep.Operator.Contract.Output.Format!.Value;
                     var formatOld = (long)current.Width * current.Height * current.Format.BytesPerPixel();
                     var formatNew = (long)current.Width * current.Height * output.BytesPerPixel();
-                    CheckBudget(options, formatOld + formatNew, $"the format step '{formatStep.Name}'");
-                    using (options.Workspace?.Reserve(formatOld + formatNew, "format transition"))
+                    var formatScratch = formatStep.Operator.Contract.Workspace.Estimate?.Invoke(
+                        current.Width, current.Height, current.Height, current.Format) ?? 0L;
+                    var formatWorkingSet = checked(formatOld + formatNew + formatScratch);
+                    CheckBudget(options, formatWorkingSet, $"the format step '{formatStep.Name}'");
+                    using (options.Workspace?.Reserve(formatWorkingSet, "format transition"))
                     {
                         next = formatStep.Second is { } second &&
                                formatStep.Operator.Kernels.WholeImageSecond is { } two
