@@ -10,15 +10,24 @@ namespace SimdImaging.Processing;
 internal static class Pipeline
 {
     /// <summary>Rows per read; the source decides its own internal band, this is only the transfer size.</summary>
-    private const int ReadRows = 256;
+    internal const int TransferRows = 256;
 
     /// <summary>Drains <paramref name="source"/> into <paramref name="sink"/>; returns the rows copied.</summary>
-    public static int Copy(IRowSource source, IRowSink sink, CancellationToken cancellationToken)
+    public static int Copy(IRowSource source, IRowSink sink, CancellationToken cancellationToken,
+        ExecuteOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sink);
+        options ??= new ExecuteOptions();
 
-        var bandRows = Math.Min(ReadRows, source.Height);
+        var bandRows = Math.Min(TransferRows, source.Height);
+        var bufferBytes = checked((long)source.Width * bandRows * source.Format.BytesPerPixel());
+        if (options.MaxWorkingBytes > 0 && bufferBytes > options.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"The pipeline transfer buffer needs {bufferBytes} bytes, above " +
+                $"ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
+
+        using var lease = options.Workspace?.Reserve(bufferBytes, "pipeline transfer buffer");
         using var buffer = WorkingBuffer.Rent(source.Width, bandRows, source.Format);
         var view = buffer.View;
         var copied = 0;
