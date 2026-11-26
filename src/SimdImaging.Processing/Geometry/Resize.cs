@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using SimdImaging.Abstractions;
@@ -197,6 +196,7 @@ internal sealed class WeightTable
 /// </summary>
 public static class Resample
 {
+    internal const int VerticalStackTapLimit = 256;
     /// <summary>
     /// Row-band float scratch budget. A same-process sweep (16/8/4/2/1 MiB, three repeats each) showed
     /// 16 MiB pays a 2.2× cold-start penalty on the first call (43.1 ms vs 19.5 ms afterwards), while
@@ -319,17 +319,26 @@ public static class Resample
             // run concurrently without aliasing. Output rows are disjoint; source rows are read-only.
             RowParallel.ForBands(bandCount, (start, end) =>
             {
-                var row = FloatScratch.Rent(source.Width * 4);
-                var outputRow = FloatScratch.Rent(stride);
-
-                // A ring of horizontally resized rows instead of a whole source band. Bands used to redo the
-                // 2-taps rows of overlap at every boundary, which is why a small scratch cost time and a big
-                // one cost memory: the eight-megabyte band held 94 MiB at 7680 wide for a 960-wide answer.
+                float[]? row = null;
+                float[]? outputRow = null;
+                float[]? scratch = null;
+                int[]? tapRows = null;
+                float[]? tapWeights = null;
                 var ringRows = Math.Min(source.Height, weightsY.Taps + 2);
-                var scratch = FloatScratch.Rent(stride * ringRows);
                 var filledThrough = -1;
                 try
                 {
+                    // Keep all worker-local rentals inside the cleanup scope. For wide downscales, allocate the
+                    // exact tap arrays once per worker and reuse them for every output row in that worker's bands.
+                    row = FloatScratch.Rent(source.Width * 4);
+                    outputRow = FloatScratch.Rent(stride);
+                    scratch = FloatScratch.Rent(stride * ringRows);
+                    if (weightsY.Taps > VerticalStackTapLimit)
+                    {
+                        tapRows = new int[weightsY.Taps];
+                        tapWeights = new float[weightsY.Taps];
+                    }
+
                     for (var b = start; b < end; b++)
                     {
                         var bandStart = b * bandHeight;
@@ -349,21 +358,22 @@ public static class Resample
                             var last = Math.Clamp(weightsY.Starts[dy] + weightsY.Taps - 1, 0, source.Height - 1);
                             for (var sy = Math.Max(filledThrough + 1, first); sy <= last; sy++)
                             {
-                                Pixels.ReadRowPremultiplied(source.Row(sy), source.Width, source.Format, row);
-                                HorizontalRow(row, source.Width, scratch.AsSpan(sy % ringRows * stride, stride), width, weightsX);
+                                Pixels.ReadRowPremultiplied(source.Row(sy), source.Width, source.Format, row!);
+                                HorizontalRow(row!, source.Width, scratch!.AsSpan(sy % ringRows * stride, stride), width, weightsX);
                                 filledThrough = sy;
                             }
 
-                            VerticalRow(scratch, ringRows, source.Height, width, dy, weightsY, outputRow);
-                            Pixels.WriteRowUnpremultiplied(outputRow, width, source.Format, view.Row(dy));
+                            VerticalRow(scratch!, ringRows, source.Height, width, dy, weightsY, outputRow!,
+                                tapRows, tapWeights);
+                            Pixels.WriteRowUnpremultiplied(outputRow!, width, source.Format, view.Row(dy));
                         }
                     }
                 }
                 finally
                 {
-                    FloatScratch.Return(row);
-                    FloatScratch.Return(outputRow);
-                    FloatScratch.Return(scratch);
+                    if (row is not null) FloatScratch.Return(row);
+                    if (outputRow is not null) FloatScratch.Return(outputRow);
+                    if (scratch is not null) FloatScratch.Return(scratch);
                 }
             }, degree, options.CancellationToken);
 
@@ -400,9 +410,8 @@ public static class Resample
         var ringRows = Math.Min(source.Height, tapsY + 2);
         // VerticalRow uses two fixed stack buffers up to 256 taps, then rents the exact tap-sized
         // int/float arrays from ArrayPool. They are live for one worker while it processes its rows.
-        const int StackTapLimit = 256;
-        var tapScratch = tapsY <= StackTapLimit
-            ? (long)StackTapLimit * (sizeof(int) + sizeof(float))
+        var tapScratch = tapsY <= VerticalStackTapLimit
+            ? (long)VerticalStackTapLimit * (sizeof(int) + sizeof(float))
             : (long)tapsY * (sizeof(int) + sizeof(float));
         var perWorker = checked(((long)source.Width * 4 + stride + (long)stride * ringRows) * sizeof(float)
             + tapScratch);
@@ -485,7 +494,8 @@ internal static bool TryNearestTap(WeightTable table, out int offset)
 
 
     /// <summary>One destination row: accumulate every tap in a register, write the row once.</summary>
-    internal static void VerticalRow(float[] scratch, int ringRows, int sourceHeight, int width, int dy, WeightTable weights, float[] destination)
+    internal static void VerticalRow(float[] scratch, int ringRows, int sourceHeight, int width, int dy,
+        WeightTable weights, float[] destination, int[]? tapRows, float[]? tapWeights)
     {
         var stride = width * 4;
         var start = weights.Starts[dy];
@@ -495,28 +505,22 @@ internal static bool TryNearestTap(WeightTable table, out int offset)
         // Tap count grows with the downsample ratio: 16384 -> 1 needs ~98 K taps, which as two stackalloc
         // arrays is ~786 KB and overflows a 1 MB worker stack. Small ratios keep the stack (cheapest thing
         // there is); past StackTapLimit the arrays come from the shared pool instead.
-        const int StackTapLimit = 256;
-        if (weights.Taps <= StackTapLimit)
+        if (weights.Taps <= VerticalStackTapLimit)
         {
-            Span<int> rows = stackalloc int[StackTapLimit];
-            Span<float> tapWeights = stackalloc float[StackTapLimit];
+            Span<int> rows = stackalloc int[VerticalStackTapLimit];
+            Span<float> stackWeights = stackalloc float[VerticalStackTapLimit];
             Convolve(scratch, ringRows, sourceHeight, stride, interior, start, weights, tapBase,
-                rows, tapWeights, destination);
+                rows, stackWeights, destination);
             return;
         }
 
-        var rentedRows = ArrayPool<int>.Shared.Rent(weights.Taps);
-        var rentedWeights = ArrayPool<float>.Shared.Rent(weights.Taps);
-        try
-        {
-            Convolve(scratch, ringRows, sourceHeight, stride, interior, start, weights, tapBase,
-                rentedRows, rentedWeights, destination);
-        }
-        finally
-        {
-            ArrayPool<int>.Shared.Return(rentedRows);
-            ArrayPool<float>.Shared.Return(rentedWeights);
-        }
+        if (tapRows is null || tapWeights is null ||
+            tapRows.Length < weights.Taps || tapWeights.Length < weights.Taps)
+            throw new ArgumentException(
+                "Large vertical tap plans require per-worker row and weight scratch arrays.");
+
+        Convolve(scratch, ringRows, sourceHeight, stride, interior, start, weights, tapBase,
+            tapRows.AsSpan(0, weights.Taps), tapWeights.AsSpan(0, weights.Taps), destination);
     }
 
     /// <summary>
