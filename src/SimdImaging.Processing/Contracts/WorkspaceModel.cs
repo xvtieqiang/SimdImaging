@@ -50,6 +50,17 @@ internal sealed class WorkspaceModel
     internal WorkspaceScope Scope { get; }
 
     internal bool IsDeclared => Estimate is not null;
+    /// <summary>
+    /// Whether this invocation holds one copy or one copy per active worker. Category/partition controls how the
+    /// kernel is called; WorkspaceScope controls how its declared scratch is multiplied.
+    /// </summary>
+    internal bool IsSingleCopy(bool wholeImageInvocation) => Scope switch
+    {
+        WorkspaceScope.WholeImage => true,
+        WorkspaceScope.PerCall => wholeImageInvocation,
+        _ => false,
+    };
+
 }
 
 /// <summary>The kernels an operator offers. The contract describes; these run.</summary>
