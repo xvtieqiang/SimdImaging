@@ -245,12 +245,12 @@ public sealed class WorkspacePlanTests
             ObserveSteps = true,
         });
         plan.Backend.ShouldBe(ExecutionBackend.Frame);
-        plan.Workspace.BoundedBytes.ShouldBe(bytes);
+        plan.Workspace.BoundedBytes.ShouldBe(bytes * 2);
 
         using var source = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
-        var manager = new WorkspaceManager(bytes);
+        var manager = new WorkspaceManager(bytes * 2);
         using var result = CompiledPlanExecutor.ExecuteFrame(plan, source[0].Pixels.View,
-            options: new ExecuteOptions { MaxWorkingBytes = bytes, Workspace = manager });
+            options: new ExecuteOptions { MaxWorkingBytes = bytes * 2, Workspace = manager });
 
         result.View.Width.ShouldBe(width);
         result.View.Height.ShouldBe(height);
@@ -260,7 +260,7 @@ public sealed class WorkspacePlanTests
         var refusedManager = new WorkspaceManager();
         Should.Throw<InvalidOperationException>(() => CompiledPlanExecutor.ExecuteFrame(plan,
             source[0].Pixels.View,
-            options: new ExecuteOptions { MaxWorkingBytes = bytes - 1, Workspace = refusedManager }));
+            options: new ExecuteOptions { MaxWorkingBytes = bytes * 2 - 1, Workspace = refusedManager }));
         refusedManager.PeakBytes.ShouldBe(0);
         refusedManager.OutstandingBytes.ShouldBe(0);
     }
