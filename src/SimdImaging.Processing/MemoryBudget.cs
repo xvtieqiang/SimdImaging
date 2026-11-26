@@ -119,8 +119,9 @@ public static class MemoryEstimator
         var fuse = fusionAllowed && FusionDecision.ShouldFuse(
             plan.Steps, source.Width, source.Height, source.Format.BytesPerPixel());
         var bandRows = plan.BandRowsFor(source.Width, source.Height);
-        return Estimate(source.Width, source.Height, source.Format, plan.Steps, bandRows,
-            allowFusion: fuse, degree);
+        var stepwiseRows = plan.StepwiseRowsFor(source.Height, bandRows, degree);
+        return EstimateCore(source.Width, source.Height, source.Format, plan.Steps, bandRows,
+            stepwiseRows, allowFusion: fuse, degree);
     }
 
     /// <summary>Estimates a plan from geometry alone, without an image in hand.</summary>
@@ -137,15 +138,37 @@ public static class MemoryEstimator
         IReadOnlyList<PlanStep> steps, int bandRows = ProcessingPlan.DefaultBandRows,
         bool allowFusion = true, int degree = 0)
     {
+        ValidateEstimateArguments(width, height, steps, bandRows, degree);
+        var stepwiseRows = ProcessingPlan.ResolveStepwiseRows(height, bandRows, degree,
+            useDefaultBandPolicy: bandRows == ProcessingPlan.DefaultBandRows);
+        return EstimateCore(width, height, format, steps, bandRows, stepwiseRows, allowFusion, degree);
+    }
+
+    internal static MemoryEstimate EstimateForExecution(int width, int height, WorkingFormat format,
+        IReadOnlyList<PlanStep> steps, int bandRows, int stepwiseRows, bool allowFusion, int degree)
+    {
+        ValidateEstimateArguments(width, height, steps, bandRows, degree);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(stepwiseRows);
+        return EstimateCore(width, height, format, steps, bandRows, stepwiseRows, allowFusion, degree);
+    }
+
+    private static void ValidateEstimateArguments(int width, int height, IReadOnlyList<PlanStep> steps,
+        int bandRows, int degree)
+    {
         ArgumentNullException.ThrowIfNull(steps);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
         ArgumentOutOfRangeException.ThrowIfNegative(degree);
+    }
 
+    private static MemoryEstimate EstimateCore(int width, int height, WorkingFormat format,
+        IReadOnlyList<PlanStep> steps, int bandRows, int stepwiseRows, bool allowFusion, int degree)
+    {
         var bytesPerPixel = format.BytesPerPixel();
         var full = checked((long)width * height * bytesPerPixel);
         var bandWorkers = Workers(height, bandRows, degree);
+        var stepwiseWorkers = Workers(height, stepwiseRows, degree);
         var resolvedDegree = RowParallel.ResolveDegree(degree);
         var workers = 1;
 
@@ -196,11 +219,12 @@ public static class MemoryEstimator
             var wholeImageInvocation =
                 step.Category is OpCategory.Global or OpCategory.Composite ||
                 requirements.RequiresWholeImageInvocation;
+            var fusedInvocation = IsFusedStep(fusedSegments, stepIndex);
             var stepWorkers = wholeImageInvocation
                 ? requirements.Threading == ThreadSafety.SingleThread
                     ? 1
                     : Math.Min(resolvedDegree, height)
-                : bandWorkers;
+                : fusedInvocation ? bandWorkers : stepwiseWorkers;
 
             var workspace = step.Definition.Contract.Workspace;
             if (!workspace.IsDeclared)
@@ -210,7 +234,7 @@ public static class MemoryEstimator
             }
             var rows = wholeImageInvocation
                 ? height
-                : FusedInvocationRows(steps, stepIndex, fusedSegments, height, bandRows, step);
+                : FusedInvocationRows(steps, stepIndex, fusedSegments, height, bandRows, stepwiseRows, step);
 
             // The partition contract says how often the kernel is called; WorkspaceModel says which of its
             // allocations are per worker, whole-image, or per call. A Global kernel can still allocate per worker
@@ -247,13 +271,15 @@ public static class MemoryEstimator
         };
     }
 
+    }
+
     /// <summary>
     /// Rows in the view actually passed to one operator adapter. A fused neighbourhood step receives its current
     /// halo plus all downstream halos; a point adapter runs only over the output rectangle, which excludes its own
     /// halo. Outside a multi-step fused segment, the existing band/window geometry applies.
     /// </summary>
     private static int FusedInvocationRows(IReadOnlyList<PlanStep> steps, int stepIndex,
-        IReadOnlyList<(int First, int Count)>? segments, int height, int bandRows, PlanStep step)
+        IReadOnlyList<(int First, int Count)>? segments, int height, int bandRows, int stepwiseRows, PlanStep step)
     {
         if (segments is not null)
         {
@@ -273,7 +299,21 @@ public static class MemoryEstimator
             }
         }
 
-        return (int)Math.Min(height, (long)bandRows + (2L * step.HaloY));
+        return (int)Math.Min(height, (long)stepwiseRows + (2L * step.HaloY));
+    }
+
+    private static bool IsFusedStep(IReadOnlyList<(int First, int Count)>? segments, int stepIndex)
+    {
+        if (segments is null)
+            return false;
+
+        foreach (var (first, count) in segments)
+        {
+            if (count > 1 && stepIndex >= first && stepIndex < first + count)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>Mirrors <see cref="RowParallel"/>'s rule: one worker per band, capped by the degree.</summary>
