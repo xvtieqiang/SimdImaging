@@ -75,15 +75,12 @@ internal static class WorkspacePlanner
             new("codec buffers", "decoder and encoder rows are outside the engine's allocator"),
         };
 
-        if (backend == ExecutionBackend.Tile)
+        return backend switch
         {
-            unmanaged.Add(new UnmanagedTerm("tile dimensions",
-                "the caller's tile size sets the real window; this report uses the frame estimate, which is larger"));
-        }
-
-        return backend == ExecutionBackend.Stream
-            ? EstimateStream(recipe, steps, states, options, terms, unmanaged)
-            : EstimateFrame(recipe, steps, states, options, outputWidth, outputHeight, terms, unmanaged);
+            ExecutionBackend.Stream => EstimateStream(recipe, steps, states, options, terms, unmanaged),
+            ExecutionBackend.Tile => EstimateTile(steps, options, terms, unmanaged),
+            _ => EstimateFrame(recipe, steps, states, options, outputWidth, outputHeight, terms, unmanaged),
+        };
     }
 
     private static WorkspacePlan EstimateFrame(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
@@ -198,6 +195,67 @@ internal static class WorkspacePlanner
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.GeometryScratch, geometryScratch, "geometry scratch"));
 
         return new WorkspacePlan(terms, unmanaged, undeclared + geometryUndeclared);
+    }
+
+    /// <summary>
+    /// Tile execution owns one target tile and the RegionExecutor window set for that tile. It does not retain a
+    /// decoded source frame or a full-frame destination, so reusing EstimateFrame here defeats the tile memory knob.
+    /// </summary>
+    private static WorkspacePlan EstimateTile(IReadOnlyList<PlanStep> steps, CompileOptions options,
+        List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
+    {
+        var width = Math.Min(options.SourceWidth, options.TileWidth > 0 ? options.TileWidth : options.SourceWidth);
+        var height = Math.Min(options.SourceHeight, options.TileHeight > 0 ? options.TileHeight : options.SourceHeight);
+        var haloX = 0;
+        var haloY = 0;
+        var perWorker = 0L;
+        var wholeImage = 0L;
+        var undeclared = 0;
+        foreach (var step in steps)
+        {
+            haloX = checked(haloX + step.HaloX);
+            haloY = checked(haloY + step.HaloY);
+            if (step.Scratch is not { } scratch)
+            {
+                undeclared++;
+                continue;
+            }
+
+            var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
+                || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
+            if (isWholeImage)
+                wholeImage = Math.Max(wholeImage,
+                    scratch(options.SourceWidth, options.SourceHeight, options.SourceHeight, options.SourceFormat));
+            else
+                perWorker = Math.Max(perWorker,
+                    scratch(Math.Min(options.SourceWidth, width + 2 * haloX), options.SourceHeight,
+                        Math.Min(options.SourceHeight, height + 2 * haloY), options.SourceFormat));
+        }
+
+        var windowWidth = Math.Min(options.SourceWidth, checked(width + 2 * haloX));
+        var windowHeight = Math.Min(options.SourceHeight, checked(height + 2 * haloY));
+        var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
+        var tileBytes = TargetBuffer.Bytes(width, height, options.SourceFormat);
+        var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
+        var workers = Math.Max(1, options.Execute.MaxDegreeOfParallelism > 0
+            ? options.Execute.MaxDegreeOfParallelism
+            : Environment.ProcessorCount);
+        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, tileBytes, "one resident destination tile"));
+        if (windowBytes > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
+                $"{windows} windows of {windowWidth}x{windowHeight}"));
+        if (perWorker > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, perWorker * workers,
+                $"{perWorker} x {workers} tile workers"));
+        if (wholeImage > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.WholeImageScratch, wholeImage,
+                "whole-image scratch declared by a tile step"));
+
+        unmanaged.Add(new UnmanagedTerm("region source",
+            "the caller or codec owns the source; no full decoded frame is retained by the tile executor"));
+        unmanaged.Add(new UnmanagedTerm("sink",
+            "the caller owns the sink; encoder band memory is reported by the tile-to-encoder facade"));
+        return new WorkspacePlan(terms, unmanaged, undeclared);
     }
 
     private static WorkspacePlan EstimateStream(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
