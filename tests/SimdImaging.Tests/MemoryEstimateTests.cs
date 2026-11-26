@@ -524,6 +524,23 @@ public class MemoryEstimateTests : IDisposable
         }
     }
     [Fact]
+    public void NonLocalMeansWorkspace_OnlyCountsRollingArraysForIntegerFormats()
+    {
+        const int width = 80;
+        const int rows = 24;
+        var op = PlanOps.NonLocalMeans(searchRadius: 3, patchRadius: 1);
+
+        foreach (var format in new[] { WorkingFormat.Rgba8, WorkingFormat.Rgba16 })
+        {
+            var expected = (2L * rows * width * format.BytesPerPixel()) + (width * 64L);
+            op.Scratch!(width, rows, rows, format).ShouldBe(expected);
+        }
+
+        var rgba32 = WorkingFormat.Rgba32F;
+        var floatExpected = (2L * rows * width * rgba32.BytesPerPixel()) + (width * 16L);
+        op.Scratch!(width, rows, rows, rgba32).ShouldBe(floatExpected);
+    }
+    [Fact]
     public void Estimate_CountsDeclaredOperatorScratch()
     {
         var plan = new ProcessingPlan()
