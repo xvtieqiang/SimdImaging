@@ -2849,13 +2849,17 @@ public static class FilterOps
         {
             // Rented, not allocated: one set per worker per call, and at 1920 px that was ~1 MiB of float
             // scratch per call (measured: 1007 KiB/op against the oracle's 35). The contents are cleared below
-            // over the range actually used, so a larger rented buffer is harmless.
-            var sums = ArrayPool<float>.Shared.Rent(columns * 4);
-            var row = ArrayPool<float>.Shared.Rent(stride);
-            var output = ArrayPool<float>.Shared.Rent(stride);
+            // over the range actually used, so a larger rented buffer is harmless. Protect the first rent too:
+            // subsequent rent failures must not strand earlier buffers in the shared pool.
+            float[]? sums = null;
+            float[]? row = null;
+            float[]? output = null;
             try
             {
-            for (var band = firstBand; band < lastBand; band++)
+                sums = ArrayPool<float>.Shared.Rent(columns * 4);
+                row = ArrayPool<float>.Shared.Rent(stride);
+                output = ArrayPool<float>.Shared.Rent(stride);
+                for (var band = firstBand; band < lastBand; band++)
             {
                 var top = band * blockSize;
                 var bottom = Math.Min(top + blockSize, height);
@@ -2910,9 +2914,9 @@ public static class FilterOps
             }
             finally
             {
-                ArrayPool<float>.Shared.Return(sums);
-                ArrayPool<float>.Shared.Return(row);
-                ArrayPool<float>.Shared.Return(output);
+                if (output is not null) ArrayPool<float>.Shared.Return(output);
+                if (row is not null) ArrayPool<float>.Shared.Return(row);
+                if (sums is not null) ArrayPool<float>.Shared.Return(sums);
             }
         });
 
