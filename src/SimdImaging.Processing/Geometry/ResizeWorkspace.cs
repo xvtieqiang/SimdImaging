@@ -67,9 +67,14 @@ internal readonly record struct ResizeWorkspace(
         // vertical passes do not overlap, so one row covers both. Nearest samples on the calling thread.
         var readyRows = Math.Min(OutputBatchRows, destHeight);
         var readyBytes = checked((long)readyRows * destWidth * format.BytesPerPixel());
-        // Horizontal pulls are capped at MaxChunkRows and vertical batches at OutputBatchRows. No
-        // resize pass can have more active per-worker scratch owners than the larger of those row counts.
-        var workers = Math.Max(1, Math.Min(RowParallel.ResolveDegree(options.MaxDegreeOfParallelism), MaxChunkRows));
+        // PullAndConvert uses RowParallel.For: even at MaxChunkRows it can use at most one worker per
+        // RowsPerWorker rows (and may use fewer because of the pixel threshold). Emit uses ForBands, capped by
+        // the ready batch. The passes are sequential, so row scratch uses the larger count; Tap arrays are only
+        // live during Emit and use its exact worker cap.
+        var degree = RowParallel.ResolveDegree(options.MaxDegreeOfParallelism);
+        var pullWorkers = RowParallel.ResolveWorkers(destWidth, MaxChunkRows, degree);
+        var emitWorkers = Math.Min(degree, readyRows);
+        var workers = Math.Max(pullWorkers, emitWorkers);
 
         if (nearest)
         {
@@ -89,8 +94,8 @@ internal readonly record struct ResizeWorkspace(
         var tapBytesPerWorker = tapsY <= Resample.VerticalStackTapLimit
             ? (long)Resample.VerticalStackTapLimit * (sizeof(int) + sizeof(float))
             : (long)tapsY * (sizeof(int) + sizeof(float));
-        // Tap arrays are used only by Emit, whose ready batch bounds concurrent vertical workers.
-        var tapWorkers = Math.Min(workers, readyRows);
+        // Tap arrays are used only by Emit; no pull-worker scratch is simultaneously live.
+        var tapWorkers = emitWorkers;
         var workerTapBytes = checked((long)tapWorkers * tapBytesPerWorker);
         var fixedBytes = checked(readyBytes + sourceRowBytes + workerRowBytes + workerTapBytes);
         var rowFloats = (long)destStride * sizeof(float);
