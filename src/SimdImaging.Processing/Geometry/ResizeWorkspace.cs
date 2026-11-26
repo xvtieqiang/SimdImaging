@@ -16,6 +16,7 @@ namespace SimdImaging.Processing.Geometry;
 /// <param name="StagingBytes">The staging chunk's bytes.</param>
 /// <param name="ReadyBytes">The output batch's bytes.</param>
 /// <param name="WorkerRowBytes">One float row per worker.</param>
+/// <param name="WorkerTapBytes">Vertical tap-index and weight scratch per worker.</param>
 /// <param name="BudgetBytes">The budget this estimate was fitted to.</param>
 internal readonly record struct ResizeWorkspace(
     int ChunkRows,
@@ -27,6 +28,7 @@ internal readonly record struct ResizeWorkspace(
     long ReadyBytes,
     long WorkerRowBytes,
     long SourceRowBytes,
+    long WorkerTapBytes,
     long BudgetBytes)
 {
     /// <summary>Destination rows produced per batch.</summary>
@@ -41,7 +43,7 @@ internal readonly record struct ResizeWorkspace(
     internal bool IsNearest => ChunkRows == 0 && RingRows == 0;
 
     /// <summary>Everything this stage holds at once.</summary>
-    internal long TotalBytes => checked(RingBytes + StagingBytes + ReadyBytes + WorkerRowBytes + SourceRowBytes);
+    internal long TotalBytes => checked(RingBytes + StagingBytes + ReadyBytes + WorkerRowBytes + SourceRowBytes + WorkerTapBytes);
 
     /// <summary>Fits the stage to the budget, or throws with the parts named.</summary>
     /// <exception cref="InvalidOperationException">The minimum working set does not fit.</exception>
@@ -80,11 +82,16 @@ internal readonly record struct ResizeWorkspace(
                     + "ExecuteOptions.MaxWorkingBytes.");
             }
 
-            return new ResizeWorkspace(0, 0, readyRows, workers, 0, 0, readyBytes, 0, sourceRowBytes, budget);
+            return new ResizeWorkspace(0, 0, readyRows, workers, 0, 0, readyBytes, 0, sourceRowBytes, 0, budget);
         }
 
         var workerRowBytes = checked((long)workers * Math.Max(sourceWidth * 4, destStride) * sizeof(float));
-        var fixedBytes = checked(readyBytes + sourceRowBytes + workerRowBytes);
+        const int StackTapLimit = 256;
+        var tapBytesPerWorker = tapsY <= StackTapLimit
+            ? (long)StackTapLimit * (sizeof(int) + sizeof(float))
+            : (long)tapsY * (sizeof(int) + sizeof(float));
+        var workerTapBytes = checked((long)workers * tapBytesPerWorker);
+        var fixedBytes = checked(readyBytes + sourceRowBytes + workerRowBytes + workerTapBytes);
         var rowFloats = (long)destStride * sizeof(float);
         var ringBase = (long)(tapsY + 2) * rowFloats;
         var perChunk = rowFloats + sourceRowBytes;
@@ -118,6 +125,6 @@ internal readonly record struct ResizeWorkspace(
         }
 
         return new ResizeWorkspace(chunkRows, ringRows, readyRows, workers, ringBytes, stagingBytes, readyBytes,
-            workerRowBytes, sourceRowBytes, budget);
+            workerRowBytes, sourceRowBytes, workerTapBytes, budget);
     }
 }
