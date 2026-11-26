@@ -113,8 +113,9 @@ internal sealed class PadRowSource : IRowSource, IDisposable
         _right = right;
         _color = color;
         _bytesPerPixel = source.Format.BytesPerPixel();
-        _sourceRowBytes = source.Width * _bytesPerPixel;
-        _rowBytes = checked((source.Width + left + right) * _bytesPerPixel);
+        _sourceRowBytes = checked(source.Width * _bytesPerPixel);
+        _rowBytes = checked(checked(source.Width + left + right) * _bytesPerPixel);
+        var outputHeight = checked(source.Height + top + bottom);
         options ??= new ExecuteOptions();
         if (options.MaxWorkingBytes > 0 && _sourceRowBytes > options.MaxWorkingBytes)
             throw new InvalidOperationException(
@@ -133,7 +134,7 @@ internal sealed class PadRowSource : IRowSource, IDisposable
             throw;
         }
 
-        Height = checked(source.Height + top + bottom);
+        Height = outputHeight;
     }
 
     public int Width => _source.Width + _left + _right;
