@@ -1,6 +1,7 @@
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Compilation;
+using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Fusion;
 using SimdImaging.Processing.Geometry;
 using Shouldly;
@@ -102,6 +103,47 @@ public sealed class WorkspacePlanTests
         manager.PeakBytes.ShouldBe(0);
     }
 
+    [Fact]
+    public void FormatExecution_MixedWorkspacePerCallIsReservedExactlyOnce()
+    {
+        const int width = 80;
+        const int height = 48;
+        const long perWorker = 1024;
+        const long wholeImage = 2048;
+        const long perCall = 512;
+        var model = WorkspaceModel.OfMixed(
+            (_, _, _, _) => perWorker,
+            (_, _, _, _) => wholeImage,
+            (_, _, _, _) => perCall);
+        var contract = OperatorContract.Create("mixed-format-scratch", OpCategory.Global,
+            WorkingFormatMask.All, WholeSourceFootprint.Instance, model,
+            requirements: ExecutionRequirements.WholeImage, outputFormat: WorkingFormat.Rgba32F);
+        var op = new ImageOp(contract, new KernelImplementations(
+            (_, _, _, _) => { },
+            wholeImage: source => WorkingBuffer.Rent(source.Width, source.Height, WorkingFormat.Rgba32F)));
+        var compileOptions = FrameOptions(width, height) with
+        {
+            Execute = new ExecuteOptions { MaxDegreeOfParallelism = 1 },
+        };
+        var plan = PipelineCompiler.Compile(Recipe(op), compileOptions);
+        plan.Backend.ShouldBe(ExecutionBackend.Frame);
+
+        var oldBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
+        var newBytes = (long)width * height * WorkingFormat.Rgba32F.BytesPerPixel();
+        var scratchBytes = perWorker + wholeImage + perCall;
+        var expectedWorkingBytes = oldBytes + newBytes + scratchBytes;
+        plan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.FormatScratch)
+            .Bytes.ShouldBe(scratchBytes);
+
+        using var source = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
+        var manager = new WorkspaceManager(expectedWorkingBytes);
+        using var result = CompiledPlanExecutor.ExecuteFrame(plan, source[0].Pixels.View,
+            options: new ExecuteOptions { MaxDegreeOfParallelism = 1, Workspace = manager });
+
+        result.View.Format.ShouldBe(WorkingFormat.Rgba32F);
+        manager.PeakBytes.ShouldBe(expectedWorkingBytes);
+        manager.OutstandingBytes.ShouldBe(0);
+    }
     [Fact]
     public void ResizeTerms_MatchTheRowSourceThatWillRun()
     {
