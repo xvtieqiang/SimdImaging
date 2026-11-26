@@ -55,8 +55,9 @@ internal static class CompiledPlanExecutor
                             + formatWorkspace.EstimateWholeImage(current.Width, current.Height, current.Format));
                     if (formatWorkspace.HasPerWorkerEstimate)
                     {
-                        var workers = RowParallel.ResolveWorkers(current.Width, current.Height,
-                            options.MaxDegreeOfParallelism);
+                        var workers = formatStep.Operator.Contract.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : Math.Min(RowParallel.ResolveDegree(options.MaxDegreeOfParallelism), current.Height);
                         formatScratch = checked(formatScratch + checked(formatWorkspace.EstimatePerWorker(
                             current.Width, current.Height, current.Height, current.Format) * workers));
                     }
@@ -64,6 +65,10 @@ internal static class CompiledPlanExecutor
                     CheckBudget(options, formatWorkingSet, $"the format step '{formatStep.Name}'");
                     using (options.Workspace?.Reserve(formatWorkingSet, "format transition"))
                     {
+                        var degree = formatStep.Operator.Contract.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : options.MaxDegreeOfParallelism;
+                        using var topLevel = RowParallel.EnterTopLevel(degree);
                         next = formatStep.Second is { } second &&
                                formatStep.Operator.Kernels.WholeImageSecond is { } two
                             ? two(current, second)
@@ -89,7 +94,9 @@ internal static class CompiledPlanExecutor
                             + geometryWorkspace.EstimateWholeImage(width, height, current.Format));
                     if (geometryWorkspace.HasPerWorkerEstimate)
                     {
-                        var workers = RowParallel.ResolveWorkers(width, height, options.MaxDegreeOfParallelism);
+                        var workers = geometry.Descriptor.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : Math.Min(RowParallel.ResolveDegree(options.MaxDegreeOfParallelism), height);
                         scratch = checked(scratch + checked(geometryWorkspace.EstimatePerWorker(
                             width, height, height, current.Format) * workers));
                     }
@@ -97,6 +104,10 @@ internal static class CompiledPlanExecutor
                     CheckBudget(options, bytes, $"the geometry step '{geometry.Name}'");
                     using (options.Workspace?.Reserve(bytes, "geometry transition"))
                     {
+                        var degree = geometry.Descriptor.Requirements.Threading == ThreadSafety.SingleThread
+                            ? 1
+                            : options.MaxDegreeOfParallelism;
+                        using var topLevel = RowParallel.EnterTopLevel(degree);
                         next = geometry.Reshape(current, pool);
                     }
                 }
