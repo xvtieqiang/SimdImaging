@@ -553,16 +553,16 @@ public class MemoryEstimateTests : IDisposable
         const int width = 64;
         const int height = 256;
         const int bandRows = 32;
-        const int radius = 1;
+        const int halo = 3; // GaussianBlur(1) derives ceil(3 * sigma).
         var first = PlanOps.GaussianBlur(1f);
         var second = PlanOps.GaussianBlur(1f);
         var third = PlanOps.GaussianBlur(1f);
         var plan = new ProcessingPlan { BandRows = bandRows }.Add(first).Add(second).Add(third);
         var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
             bandRows, allowFusion: true, degree: 1);
-        var firstWindowRows = bandRows + (2 * radius * 3);
-        var secondWindowRows = bandRows + (2 * radius * 2);
-        var thirdWindowRows = bandRows + (2 * radius);
+        var firstWindowRows = bandRows + (2 * halo * 3);
+        var secondWindowRows = bandRows + (2 * halo * 2);
+        var thirdWindowRows = bandRows + (2 * halo);
         var expectedPerWorker = Math.Max(
             first.Scratch!(width, height, firstWindowRows, WorkingFormat.Rgba8),
             Math.Max(second.Scratch!(width, height, secondWindowRows, WorkingFormat.Rgba8),
