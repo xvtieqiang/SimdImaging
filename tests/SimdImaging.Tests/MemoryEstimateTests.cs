@@ -74,6 +74,34 @@ public class MemoryEstimateTests : IDisposable
         pool.Rents.ShouldBe(0);
     }
 
+    [Theory]
+    [InlineData(3, 3, false)]
+    [InlineData(16, 8, false)]
+    [InlineData(16, 8, true)]
+    public void SeparableFilterWorkspace_CoversActiveFloatScratch(int width, int height, bool sharpen)
+    {
+        using var source = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba32F);
+        var op = sharpen ? PlanOps.Sharpen(sigma: 1f) : PlanOps.GaussianBlur(1f);
+        var declared = op.Scratch!(width, height, height, WorkingFormat.Rgba32F);
+        var previousDegree = RowParallel.DegreeOverride;
+        try
+        {
+            RowParallel.DegreeOverride = 1;
+            MemoryBudget.Trim();
+            FloatScratch.ResetForTests();
+
+            using var result = new ProcessingPlan { BandRows = height }.Add(op).Execute(source.View);
+
+            declared.ShouldBeGreaterThanOrEqualTo(FloatScratch.PeakLiveBytes,
+                $"declared {declared}, active FloatScratch peak {FloatScratch.PeakLiveBytes}");
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previousDegree;
+            MemoryBudget.ResetForTests();
+        }
+    }
+
     [Fact]
     public void Estimate_CountsDeclaredOperatorScratch()
     {
