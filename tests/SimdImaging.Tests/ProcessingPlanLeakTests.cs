@@ -167,6 +167,25 @@ public class ProcessingPlanLeakTests
         pool.DuplicateDisposeCount.ShouldBe(0);
     }
 
+    [Fact]
+    public void TrailingResize_Cancellation_ReleasesBothIntermediateAndDestination()
+    {
+        var pool = new CountingPool();
+        using var source = WorkingBuffer.Rent(Width, Height, WorkingFormat.Rgba8);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var plan = new ProcessingPlan().Resize(4, 3, SimdImaging.Processing.Resampler.Nearest);
+
+        Should.Throw<OperationCanceledException>(() =>
+            plan.ExecuteWithOptions(source.View,
+                new ExecuteOptions { CancellationToken = cancellation.Token, MaxDegreeOfParallelism = 1 },
+                pool));
+
+        pool.DisposeCount.ShouldBe(pool.RentCount);
+        pool.DuplicateDisposeCount.ShouldBe(0);
+        pool.AllOwnersDisposedExactlyOnce().ShouldBeTrue();
+    }
+
     /// <summary>Deterministic, thread-safe pool: fused segments rent from band workers, so every counter
     /// transition happens under one gate and disposal is recorded centrally.</summary>
     private sealed class CountingPool : IPixelPool
