@@ -104,9 +104,13 @@ internal sealed class WorkspaceModel
 
     internal bool HasWholeImageEstimate => WholeImageEstimate is not null;
 
-    /// <summary>Scratch owned once by a worker, including per-call scratch on a banded invocation.</summary>
+    /// <summary>Scratch owned once by each worker, excluding any per-call allocation.</summary>
+    internal long EstimatePerWorkerScratch(int width, int height, int rows, WorkingFormat format) =>
+        PerWorkerEstimate?.Invoke(width, height, rows, format) ?? 0L;
+
+    /// <summary>Scratch for a banded invocation: per-worker plus one per-call allocation.</summary>
     internal long EstimatePerWorker(int width, int height, int rows, WorkingFormat format) =>
-        checked((PerWorkerEstimate?.Invoke(width, height, rows, format) ?? 0L)
+        checked(EstimatePerWorkerScratch(width, height, rows, format)
             + (PerCallEstimate?.Invoke(width, height, rows, format) ?? 0L));
 
     /// <summary>Scratch held once for the whole-image invocation, including per-call scratch on that invocation.</summary>
