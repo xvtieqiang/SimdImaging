@@ -1967,6 +1967,53 @@ public static class FilterOps
         }
     }
 
+    /// <summary>
+    /// Temporary workspace for a morphology plan step. Radius one uses the streaming 3×3 kernel; larger radii
+    /// compose two sliding passes and two transposes, so four full window buffers can be simultaneously live.
+    /// Opening/closing retains the first morphology result while the second runs.
+    /// </summary>
+    internal static long MorphPlanWorkspaceBytes(int width, int rows, WorkingFormat format, int radius,
+        Morphology kind)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+
+        var bytesPerPixel = format.BytesPerPixel();
+        var frameBytes = checked((long)width * rows * bytesPerPixel);
+        var strideFloats = checked((long)width * 4);
+
+        long primitiveScratch;
+        if (radius == 1)
+        {
+            // Morph3x3Into: three cached source rows, one source row and one output row, all float RGBA.
+            primitiveScratch = checked(5L * strideFloats * sizeof(float));
+        }
+        else
+        {
+            var window = checked((radius * 2) + 1);
+            var paddedWidth = checked(width + (radius * 2));
+            var blocks = checked(((paddedWidth + window - 1) / window) * window);
+            // SlideRows: row + output (4W each), and padded/prefix/suffix (4*blocks each).
+            primitiveScratch = checked(((8L * width) + (12L * blocks)) * sizeof(float));
+        }
+
+        var primitivePeak = radius == 1
+            ? checked(frameBytes + primitiveScratch)
+            : checked((4L * frameBytes) + primitiveScratch);
+
+        if (kind is Morphology.Erode or Morphology.Dilate)
+            return primitivePeak;
+
+        // Open/Close keep the first morphology result while the second morphology runs. TopHat/BlackHat
+        // subsequently hold the opened/closed result and Difference's destination plus three float rows.
+        var combinedPeak = radius == 1
+            ? checked((2L * frameBytes) + primitiveScratch)
+            : checked((5L * frameBytes) + primitiveScratch);
+        var differencePeak = checked((2L * frameBytes) + (12L * strideFloats * sizeof(float)));
+        return Math.Max(combinedPeak, differencePeak);
+    }
+
     /// <summary>Per-channel clamped difference: source − opened, or closed − source.</summary>
     private static WorkingBuffer Difference(PixelView source, PixelView other, bool subtractOpened, IPixelPool? pool)
     {
