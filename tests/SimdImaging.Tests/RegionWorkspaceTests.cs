@@ -119,7 +119,7 @@ public sealed class RegionWorkspaceTests
                 .Invert()
                 .Run(destination));
 
-            error.Message.ShouldContain("region destination");
+            error.Message.ShouldContain("complete region working set");
             pool.Rented.ShouldBe(0, "the target was refused before it was rented");
             workspace.OutstandingBytes.ShouldBe(0);
         }
