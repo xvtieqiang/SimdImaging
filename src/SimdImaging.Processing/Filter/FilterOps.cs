@@ -1967,6 +1967,35 @@ public static class FilterOps
         }
     }
 
+    /// <summary>Per-worker scratch for the plan adapter's median result. The returned band buffer is
+    /// accounted separately by <see cref="PlanOps.Neighborhood"/>.</summary>
+    internal static long MedianPlanScratchBytes(int width, WorkingFormat format, int radius)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        var side = checked(2 * radius + 1);
+        var stride = checked((long)width * 4);
+
+        if (radius == 1)
+            return checked(5L * stride * sizeof(float));
+
+        if (format == WorkingFormat.Rgba8)
+        {
+            // Sliding histogram: side × 256 column counts, one 256-bin histogram, one output byte row
+            // and side source rows in the worker's byte window.
+            return checked(((long)side * 256 * sizeof(int))
+                + (256L * sizeof(int))
+                + (stride * sizeof(byte))
+                + ((long)side * stride * sizeof(byte)));
+        }
+
+        // Wider formats use a float ring, row + output buffers, a side² sort window and row load markers.
+        return checked(((long)side * stride * sizeof(float))
+            + ((long)2 * stride * sizeof(float))
+            + ((long)side * side * sizeof(float))
+            + ((long)side * sizeof(int)));
+    }
+
     /// <summary>
     /// Temporary workspace for a morphology plan step. Radius one uses the streaming 3×3 kernel; larger radii
     /// compose two sliding passes and two transposes, so four full window buffers can be simultaneously live.
