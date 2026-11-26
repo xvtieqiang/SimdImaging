@@ -2,6 +2,7 @@ using System.Buffers;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Internal;
+using SimdImaging.Processing.Contracts;
 
 namespace SimdImaging.Tests;
 
@@ -107,6 +108,63 @@ public class ProcessingPlanLeakTests
         {
             RowParallel.DegreeOverride = previousDegree;
             RowParallel.RowsPerWorkerOverride = previousRows;
+        }
+    }
+
+    [Fact]
+    public void Execute_WholeImagePartition_IsInvokedOnceWithTheFullRectangle()
+    {
+        using var source = WorkingBuffer.Rent(Width, Height, WorkingFormat.Rgba8);
+        var calls = 0;
+        var contract = OperatorContract.Create("whole-partition", OpCategory.Neighborhood,
+            WorkingFormatMask.All, IdentityFootprint.Instance, WorkspaceModel.None,
+            requirements: ExecutionRequirements.WholeImage);
+        var op = new ImageOp(contract, new KernelImplementations((input, output, destination, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            destination.ShouldBe(new PixelRect(0, 0, Width, Height));
+            CopyRows(input, output, destination, destination);
+        }));
+
+        using var result = new ProcessingPlan { BandRows = 1 }.Add(op).ExecuteWithOptions(source.View,
+            new ExecuteOptions { MaxDegreeOfParallelism = 4 });
+
+        calls.ShouldBe(1);
+        result.View.Span.ToArray().ShouldBe(source.View.Span.ToArray());
+    }
+
+    [Fact]
+    public void Execute_SingleThreadContract_NeverRunsTwoBandsConcurrently()
+    {
+        using var source = WorkingBuffer.Rent(Width, Height, WorkingFormat.Rgba8);
+        var active = 0;
+        var maxActive = 0;
+        var contract = OperatorContract.Create("single-thread", OpCategory.Neighborhood,
+            WorkingFormatMask.All, IdentityFootprint.Instance, WorkspaceModel.None,
+            requirements: ExecutionRequirements.RowBands with { Threading = ThreadSafety.SingleThread });
+        var op = new ImageOp(contract, new KernelImplementations((input, output, destination, _) =>
+        {
+            var now = Interlocked.Increment(ref active);
+            UpdateMaximum(ref maxActive, now);
+            Thread.SpinWait(20_000);
+            CopyRows(input, output, destination, destination);
+            Interlocked.Decrement(ref active);
+        }));
+
+        using var result = new ProcessingPlan { BandRows = 1 }.Add(op).ExecuteWithOptions(source.View,
+            new ExecuteOptions { MaxDegreeOfParallelism = 4 });
+
+        maxActive.ShouldBe(1);
+        result.View.Span.ToArray().ShouldBe(source.View.Span.ToArray());
+    }
+
+    private static void UpdateMaximum(ref int target, int value)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref target);
+            if (current >= value || Interlocked.CompareExchange(ref target, value, current) == current)
+                return;
         }
     }
 
