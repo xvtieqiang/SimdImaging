@@ -63,7 +63,7 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
-    public void StreamingResizeWorkspace_CapsWorkersToMaximumActiveBatchRows()
+    public void StreamingResizeWorkspace_CapsRowWorkersAndTapWorkersToTheirOwnBatches()
     {
         var workspace = ResizeWorkspace.Estimate(
             sourceWidth: 8,
@@ -76,8 +76,8 @@ public class MemoryEstimateTests : IDisposable
             options: new ExecuteOptions { MaxDegreeOfParallelism = 1024 });
 
         workspace.Workers.ShouldBe(ResizeWorkspace.MaxChunkRows);
-        workspace.WorkerTapBytes.ShouldBe((long)ResizeWorkspace.MaxChunkRows * 300
-            * (sizeof(int) + sizeof(float)));
+        var tapWorkers = Math.Min(ResizeWorkspace.MaxChunkRows, ResizeWorkspace.OutputBatchRows);
+        workspace.WorkerTapBytes.ShouldBe((long)tapWorkers * 300 * (sizeof(int) + sizeof(float)));
     }
     [Fact]
     public void ResizeWorkspaceRefusal_HappensBeforeDestinationRent()
