@@ -182,8 +182,7 @@ internal static class WorkspacePlanner
         // Each operator run is estimated at the size and format it actually sees. Taking the maximum of the
         // sections is the right peak: sections run one after another, so their windows are never alive together.
         long maxPlan = 0;
-        long maxPerWorker = 0;
-        var maxWorkers = 1;
+        long maxPerWorkerPeak = 0;
         long maxWholeImage = 0;
         var undeclared = 0;
         foreach (var state in states)
@@ -198,8 +197,7 @@ internal static class WorkspacePlanner
             var estimate = MemoryEstimator.Estimate(state.InputWidth, state.InputHeight, state.InputFormat, slice,
                 bandRows, allowFusion: state.Fused, options.Execute.MaxDegreeOfParallelism);
             maxPlan = Math.Max(maxPlan, estimate.PlanScratchBytes);
-            maxPerWorker = Math.Max(maxPerWorker, estimate.PerWorkerBytes);
-            maxWorkers = Math.Max(maxWorkers, estimate.Workers);
+            maxPerWorkerPeak = Math.Max(maxPerWorkerPeak, estimate.PerWorkerPeakBytes);
             maxWholeImage = Math.Max(maxWholeImage, estimate.WholeImageScratchBytes);
             undeclared += estimate.UndeclaredSteps;
         }
@@ -225,11 +223,9 @@ internal static class WorkspacePlanner
         terms.AddRange(formatTerms);
         if (maxPlan > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, maxPlan, "largest operator-run window set"));
-        if (maxPerWorker > 0)
-        {
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, maxPerWorker * maxWorkers,
-                $"{maxPerWorker} x {maxWorkers} workers"));
-        }
+        if (maxPerWorkerPeak > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, maxPerWorkerPeak,
+                "maximum simultaneous per-worker scratch peak across operator sections"));
 
         if (maxWholeImage > 0)
         {
