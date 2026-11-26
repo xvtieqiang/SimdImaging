@@ -271,8 +271,6 @@ public static class MemoryEstimator
         };
     }
 
-    }
-
     /// <summary>
     /// Rows in the view actually passed to one operator adapter. A fused neighbourhood step receives its current
     /// halo plus all downstream halos; a point adapter runs only over the output rectangle, which excludes its own
