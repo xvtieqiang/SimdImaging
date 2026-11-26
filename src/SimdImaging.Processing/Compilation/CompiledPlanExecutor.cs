@@ -162,7 +162,7 @@ internal static class CompiledPlanExecutor
             return owned;
 
         var copyBytes = checked((long)source.Width * source.Height * source.Format.BytesPerPixel());
-        CheckBudget(options, copyBytes, "the empty frame plan copy");
+        CheckBudget(options, checked(sourceBytes + copyBytes), "the empty frame plan copy");
         using (options.Workspace?.Reserve(copyBytes, "empty frame plan destination"))
             return Transforms.Copy(source, pool);
     }
