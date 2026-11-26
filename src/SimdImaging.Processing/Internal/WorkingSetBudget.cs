@@ -41,8 +41,10 @@ internal static class WorkingSetBudget
             if (workspace.HasPerWorkerEstimate ||
                 (!wholeImageInvocation && workspace.PerCallEstimate is not null))
             {
-                perWorker = Math.Max(perWorker,
-                    workspace.EstimatePerWorker(windowCols, height, windowRows, format));
+                var stepScratch = wholeImageInvocation
+                    ? workspace.EstimatePerWorkerScratch(windowCols, height, windowRows, format)
+                    : workspace.EstimatePerWorker(windowCols, height, windowRows, format);
+                perWorker = Math.Max(perWorker, stepScratch);
             }
         }
 
