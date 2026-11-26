@@ -2204,7 +2204,9 @@ public static class FilterOps
         var combinedPeak = radius == 1
             ? checked((2L * frameBytes) + primitiveScratch)
             : checked((5L * frameBytes) + primitiveScratch);
-        var differencePeak = checked((2L * frameBytes) + (12L * strideFloats * sizeof(float)));
+        // Difference allocates exactly three float RGBA rows per active worker (left, right and output).
+        // strideFloats is already width * 4, so multiplying it by 12 counted four times the live row arrays.
+        var differencePeak = checked((2L * frameBytes) + (3L * strideFloats * sizeof(float)));
         return Math.Max(combinedPeak, differencePeak);
     }
 
