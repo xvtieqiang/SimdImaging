@@ -27,43 +27,88 @@ internal enum WorkspaceScope : byte
 /// </summary>
 internal sealed class WorkspaceModel
 {
-    private WorkspaceModel(Func<int, int, int, WorkingFormat, long>? estimate, WorkspaceScope scope)
+    private WorkspaceModel(Func<int, int, int, WorkingFormat, long>? estimate, WorkspaceScope scope,
+        Func<int, int, int, WorkingFormat, long>? perWorkerEstimate,
+        Func<int, int, int, WorkingFormat, long>? wholeImageEstimate,
+        Func<int, int, int, WorkingFormat, long>? perCallEstimate)
     {
         Estimate = estimate;
         Scope = scope;
+        PerWorkerEstimate = perWorkerEstimate;
+        WholeImageEstimate = wholeImageEstimate;
+        PerCallEstimate = perCallEstimate;
     }
 
     /// <summary>The operator has not declared its footprint; the estimator reports a lower bound.</summary>
-    internal static WorkspaceModel Undeclared { get; } = new(null, WorkspaceScope.PerWorker);
+    internal static WorkspaceModel Undeclared { get; } =
+        new(null, WorkspaceScope.PerWorker, null, null, null);
 
     /// <summary>The step allocates nothing worth reporting.</summary>
-    internal static WorkspaceModel None { get; } = new((_, _, _, _) => 0L, WorkspaceScope.PerWorker);
+    internal static WorkspaceModel None { get; } =
+        Of((_, _, _, _) => 0L, WorkspaceScope.PerWorker);
 
-    /// <summary>A declaration: bytes for a view of <c>width × rows</c>, and how the executor multiplies it.</summary>
+    /// <summary>A declaration with one allocation lifetime. Width × rows is the view passed to the operator.</summary>
     internal static WorkspaceModel Of(Func<int, int, int, WorkingFormat, long> estimate,
-        WorkspaceScope scope = WorkspaceScope.PerWorker) =>
-        new(estimate ?? throw new ArgumentNullException(nameof(estimate)), scope);
+        WorkspaceScope scope = WorkspaceScope.PerWorker)
+    {
+        ArgumentNullException.ThrowIfNull(estimate);
+        return scope switch
+        {
+            WorkspaceScope.PerWorker =>
+                new WorkspaceModel(estimate, scope, estimate, null, null),
+            WorkspaceScope.WholeImage =>
+                new WorkspaceModel(estimate, scope, null, estimate, null),
+            WorkspaceScope.PerCall =>
+                new WorkspaceModel(estimate, scope, null, null, estimate),
+            _ => throw new ArgumentOutOfRangeException(nameof(scope)),
+        };
+    }
 
-    /// <summary>The declaration, or null when there is none. The signature matches the executor's scratch hook.</summary>
+    /// <summary>
+    /// A mixed lifetime: the operator has some buffers shared by its one whole-image invocation and other buffers
+    /// privately owned by each active worker. This avoids multiplying full-frame intermediates by the worker count.
+    /// </summary>
+    internal static WorkspaceModel OfMixed(
+        Func<int, int, int, WorkingFormat, long>? perWorker,
+        Func<int, int, int, WorkingFormat, long>? wholeImage)
+    {
+        if (perWorker is null && wholeImage is null)
+            throw new ArgumentException("A mixed workspace model must declare at least one allocation.");
+
+        long Combined(int width, int height, int rows, WorkingFormat format) =>
+            checked((perWorker?.Invoke(width, height, rows, format) ?? 0L)
+                + (wholeImage?.Invoke(width, height, height, format) ?? 0L));
+
+        return new WorkspaceModel(Combined, WorkspaceScope.PerWorker, perWorker, wholeImage, null);
+    }
+
+    /// <summary>
+    /// Combined unmultiplied declaration retained for diagnostics and legacy internal callers. Budget decisions
+    /// must use <see cref="PerWorkerEstimate"/> and <see cref="WholeImageEstimate"/> separately.
+    /// </summary>
     internal Func<int, int, int, WorkingFormat, long>? Estimate { get; }
 
     internal WorkspaceScope Scope { get; }
 
+    internal Func<int, int, int, WorkingFormat, long>? PerWorkerEstimate { get; }
+
+    internal Func<int, int, int, WorkingFormat, long>? WholeImageEstimate { get; }
+
+    internal Func<int, int, int, WorkingFormat, long>? PerCallEstimate { get; }
+
     internal bool IsDeclared => Estimate is not null;
-    /// <summary>
-    /// Whether this invocation holds one copy or one copy per active worker. Category/partition controls how the
-    /// kernel is called; WorkspaceScope controls how its declared scratch is multiplied.
-    /// </summary>
-    internal bool IsSingleCopy(bool wholeImageInvocation) => Scope switch
-    {
-        WorkspaceScope.WholeImage => true,
-        WorkspaceScope.PerCall => wholeImageInvocation,
-        _ => false,
-    };
 
-}
+    /// <summary>Scratch owned once by a worker, including per-call scratch on a banded invocation.</summary>
+    internal long EstimatePerWorker(int width, int height, int rows, WorkingFormat format) =>
+        checked((PerWorkerEstimate?.Invoke(width, height, rows, format) ?? 0L)
+            + (PerCallEstimate?.Invoke(width, height, rows, format) ?? 0L));
 
-/// <summary>The kernels an operator offers. The contract describes; these run.</summary>
+    /// <summary>Scratch held once for the whole-image invocation, including per-call scratch on that invocation.</summary>
+    internal long EstimateWholeImage(int width, int height, WorkingFormat format) =>
+        checked((WholeImageEstimate?.Invoke(width, height, height, format) ?? 0L)
+            + (PerCallEstimate?.Invoke(width, height, height, format) ?? 0L));
+
+}/// <summary>The kernels an operator offers. The contract describes; these run.</summary>
 internal sealed class KernelImplementations
 {
     internal KernelImplementations(OpKernel planKernel,
