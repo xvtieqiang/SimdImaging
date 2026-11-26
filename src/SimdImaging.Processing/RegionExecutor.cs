@@ -23,8 +23,8 @@ public enum RegionRefusal : byte
     /// Wrap borders). A window would reflect about the window edge and seam.</summary>
     StepNeedsWholeSource,
 
-    /// <summary>The plan ends with a size change; a region run produces the rectangle at its own size. Use
-    /// <c>Image.ResizeRegion</c> for "decode a rectangle, then resize it".</summary>
+    /// <summary>The plan ends with a size change; a region run produces the rectangle at its own size. Run the
+    /// resize on the returned image instead.</summary>
     GeometricStep,
 
     /// <summary>A step changes the working format, which the region path's single destination format cannot carry.</summary>
@@ -136,8 +136,14 @@ internal static class RegionExecutor
         // serially (measured 3–5× slower than 192- and 256-row bands on the same pixels).
         var bandRows = SequentialBands.For(plan, maxWindowCols, region.Height, source.Format,
             options.MaxDegreeOfParallelism);
-        var probe = new PixelRect(region.X, region.Y, region.Width, Math.Min(bandRows, region.Height));
-        var maxWindowRows = Math.Min(height, SourceWindow(steps, probe, width, height).Height);
+
+        // The tallest window is not the first band's: at the top of the page one side of its halo is clamped away,
+        // and at the bottom the other side is. The bound is the same one PlanRowSource uses — a band plus the
+        // declared halo on both sides — so every band's window fits and the two sequential-band executors size
+        // their buffers by the same rule. The region backend accepts only identity/constant-halo footprints, so
+        // this equals the footprint-derived window; the width probe below still uses the footprint itself.
+        var probeRows = Math.Min(bandRows, region.Height);
+        var maxWindowRows = Math.Min(height, probeRows + (2 * haloY));
         var bytesPerPixel = source.Format.BytesPerPixel();
 
         var estimate = WorkingSetBudget.Measure(steps, options, maxWindowCols, height, maxWindowCols, maxWindowRows,

@@ -320,13 +320,12 @@ internal static class PipelineCompiler
 
     private static void ApplyGeometrySize(GeometryStep step, ref int width, ref int height, ref bool known)
     {
-        if (!step.Geometry.SizeKnown)
-        {
-            known = false;
-            return;
-        }
-
+        // Map is exact when the size is known and an upper bound when it is not, so it is always safe to apply:
+        // a content-derived crop can only shrink, and the following sections must be estimated at the largest
+        // size the frame can have.
         (width, height) = step.Geometry.Map(width, height);
+        if (!step.Geometry.SizeKnown)
+            known = false;
     }
 
     /// <summary>Returns the first step-driven refusal; <paramref name="blocked"/> names a non-refusal reason the

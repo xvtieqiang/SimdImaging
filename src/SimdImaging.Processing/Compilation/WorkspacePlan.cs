@@ -1,4 +1,5 @@
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
 
@@ -46,7 +47,9 @@ internal sealed class WorkspacePlan
 
     internal IReadOnlyList<UnmanagedTerm> Unmanaged { get; }
 
-    /// <summary>Sum of the engine-managed terms. Sequential stages make this an upper bound, not a simultaneous peak.</summary>
+    /// <summary>Sum of the engine-managed terms. For a frame plan the sections run sequentially, so this is an upper
+    /// bound rather than a simultaneous peak; for a stream plan the pull chain keeps every stage's windows and
+    /// reservations alive at once, so the sum is the peak the workspace account sees.</summary>
     internal long BoundedBytes { get; }
 
     /// <summary>Steps whose operator declared no workspace: the figure is then a lower bound.</summary>
@@ -99,22 +102,22 @@ internal static class WorkspacePlanner
         {
             if (step is GeometryStep geometry)
             {
-                if (geometry.Geometry.SizeKnown)
-                    (width, height) = geometry.Geometry.Map(width, height);
-
+                // Exact when the size is known, an upper bound when it is not (a content-derived crop only
+                // shrinks). The declaration covers the step's own scratch; the input+output frame pair is the
+                // SectionTransition term. A declared content-derived step is therefore bounded, not a lower bound.
+                var (nextWidth, nextHeight) = geometry.Geometry.Map(width, height);
                 var declared = geometry.Descriptor.WorkspaceModel;
-                if (!declared.IsDeclared || !geometry.Geometry.SizeKnown)
+                if (!declared.IsDeclared)
                 {
-                    // An undeclared workspace is a lower bound; so is a geometry step whose output size is only
-                    // known after reading the pixels (Trim, EntropyCrop, SeamCarve). Both make the prediction a
-                    // floor, and a strict ceiling must refuse rather than pretend.
                     geometryUndeclared++;
                 }
                 else if (declared.Estimate is { } estimateGeometry)
                 {
-                    geometryScratch += estimateGeometry(width, height, height, options.SourceFormat);
+                    geometryScratch += estimateGeometry(nextWidth, nextHeight, nextHeight, options.SourceFormat);
                 }
 
+                width = nextWidth;
+                height = nextHeight;
                 continue;
             }
 
@@ -206,11 +209,16 @@ internal static class WorkspacePlanner
         var bandRowsOption = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
 
         // Every operator run has its own width, height and format; a plan after a resize must be estimated at the
-        // resized geometry, not at the source. Sections run one at a time, so the peak is the largest window set
-        // and the largest per-worker scratch among them.
+        // resized geometry, not at the source. Unlike the frame path, the sections do not run one after another: a
+        // pull chain keeps every stage's windows and workspace reservations alive at once, so the peak is their sum,
+        // not the largest one. Scratch is summed for the same reason — each PlanRowSource reserves its own figure in
+        // the shared account and releases it only when disposed.
         long windowBytes = 0;
         long perWorker = 0;
+        long wholeImage = 0;
         var undeclared = 0;
+        var sections = 0;
+        var windowNote = string.Empty;
         foreach (var state in states)
         {
             if (state.Kind != CompiledSectionKind.OperatorRun || state.StepCount == 0)
@@ -229,16 +237,13 @@ internal static class WorkspacePlanner
                 options.Execute.MaxDegreeOfParallelism);
             var windowRows = Math.Min(state.InputHeight, bandRows + (2 * halo));
             var windows = slice.Length > 1 ? 4 : 2;
-            var sectionWindowBytes = (long)windows * state.InputWidth * windowRows *
-                                     state.InputFormat.BytesPerPixel();
-            if (sectionWindowBytes > windowBytes)
-            {
-                windowBytes = sectionWindowBytes;
-                terms.RemoveAll(term => term.Kind == WorkspaceTermKind.Window);
-                terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
-                    $"{windows} windows of {state.InputWidth}x{windowRows}"));
-            }
+            windowBytes += (long)windows * state.InputWidth * windowRows * state.InputFormat.BytesPerPixel();
+            var sectionCount = sections == 0 ? "1 operator section" : $"{sections + 1} operator sections";
+            windowNote = $"{sectionCount}, largest {windows} windows of {state.InputWidth}x{windowRows}";
+            sections++;
 
+            var sectionPerWorker = 0L;
+            var sectionWholeImage = 0L;
             foreach (var step in slice)
             {
                 if (step.Scratch is not { } scratch)
@@ -247,9 +252,24 @@ internal static class WorkspacePlanner
                     continue;
                 }
 
-                perWorker = Math.Max(perWorker, scratch(state.InputWidth, state.InputHeight, windowRows,
-                    state.InputFormat));
+                // The same scope rule as MemoryEstimator and WorkingSetBudget: WholeImage is one copy, not one per
+                // worker. A streaming stage has no whole-image step today, but the accounting must not disagree with
+                // the other two executors about what a declaration means.
+                var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
+                    || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
+                if (isWholeImage)
+                {
+                    sectionWholeImage = Math.Max(sectionWholeImage,
+                        scratch(state.InputWidth, state.InputHeight, state.InputHeight, state.InputFormat));
+                    continue;
+                }
+
+                sectionPerWorker = Math.Max(sectionPerWorker,
+                    scratch(state.InputWidth, state.InputHeight, windowRows, state.InputFormat));
             }
+
+            perWorker += sectionPerWorker;
+            wholeImage += sectionWholeImage;
         }
 
         if (windowBytes == 0)
@@ -258,13 +278,22 @@ internal static class WorkspacePlanner
             var bandRows = bandRowsOption;
             var windowRows = Math.Min(options.SourceHeight, bandRows);
             windowBytes = 2L * options.SourceWidth * windowRows * options.SourceFormat.BytesPerPixel();
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
-                $"2 windows of {options.SourceWidth}x{windowRows}"));
+            windowNote = $"2 windows of {options.SourceWidth}x{windowRows}";
         }
 
+        terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes, windowNote));
+
         if (perWorker > 0)
+        {
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, perWorker * workers,
-                $"{perWorker} x {workers} workers"));
+                $"{perWorker} x {workers} workers across {sections} sections"));
+        }
+
+        if (wholeImage > 0)
+        {
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.WholeImageScratch, wholeImage,
+                "whole-image scratch across sections"));
+        }
 
         AddResizeTerms(recipe, options, terms);
 

@@ -375,9 +375,9 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             return Write(image, destinationPath, destination, format, refusal, cancellationToken);
         }
 
-        // A forward-only source cannot be rewound, so a whole-input decode has to happen here: ToImageCore reads
-        // the stream exactly once, which is all such a source allows. ProcessChain would have to refuse it.
-        if (_stream is not null && !_stream.CanSeek && Image.RequiresWholeInput(_options.Load))
+        // A whole-input decode cannot stream before the decoder has settled its size, so it is read exactly once:
+        // ToImageCore is the whole-image path, and a forward-only source is safe because nothing is replayed.
+        if (Image.RequiresWholeInput(_options.Load))
         {
             using var image = ToImageCore(cancellationToken);
             using var materialized = ReserveImage(image);
@@ -524,8 +524,8 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         }
     }
 
-    /// <summary>The region path: operator steps, then at most one trailing resize. Anything else would silently
-    /// produce a different image from the whole-file path.</summary>
+    /// <summary>The region path: operator steps over the decoded rectangle, then at most one trailing resize on the
+    /// materialised result. Anything else would silently produce a different image from the whole-file path.</summary>
     private Image ToRegionCore(PixelRect region, CancellationToken cancellationToken)
     {
         var recipe = _recipe.Build();
@@ -555,25 +555,56 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         }
 
         var plan = ProcessingPlan.FromCompiled(steps, ProcessingPlan.DefaultBandRows);
+
+        var width = 0;
+        var height = 0;
         if (resize is not null)
         {
-            var (width, height) = resize.Geometry.Map(region.Width, region.Height);
-            var resampler = resize.Resampler ?? Resampler.Bicubic;
-            return _path is not null
-                ? Image.ResizeRegion(_path, plan, region, width, height, resampler, _options, cancellationToken)
-                : Image.ResizeRegion(_stream!, plan, region, width, height, resampler, _options, cancellationToken);
+            (width, height) = resize.Geometry.Map(region.Width, region.Height);
+            if ((long)width * height > _options.Load.MaxPixels)
+                throw new InvalidOperationException(
+                    $"The destination would be {width}x{height} = {(long)width * height} pixels, above the "
+                    + $"{_options.Load.MaxPixels} pixel limit.");
         }
 
-        if (_path is not null)
+        var regionImage = _path is not null
+            ? Image.ProcessRegion(_path, plan, region, _options, cancellationToken, out var predicted)
+            : Image.ProcessRegion(_stream!, plan, region, _options, cancellationToken, out predicted);
+
+        if (resize is null)
         {
-            var image = Image.ProcessRegion(_path, plan, region, _options, cancellationToken, out var predicted);
             _predictedBytes = predicted;
-            return image;
+            return regionImage;
         }
 
-        var streamed = Image.ProcessRegion(_stream!, plan, region, _options, cancellationToken, out var predictedBytes);
-        _predictedBytes = predictedBytes;
-        return streamed;
+        // The region executor produces the rectangle at its own size; the trailing resize is a second compiled
+        // section over that image. Both halves are compiled plans, and the pixels are exactly
+        // Load → Apply → Crop → Resize.
+        try
+        {
+            var builder = new PipelineRecipeBuilder();
+            builder.Append(GeometrySteps.Resize(width, height, resize.Resampler ?? Resampler.Bicubic));
+            var compiled = PipelineCompiler.Compile(builder.Build(), new CompileOptions
+            {
+                SourceWidth = regionImage.Width,
+                SourceHeight = regionImage.Height,
+                SourceFormat = regionImage.Format,
+                Sink = SinkCapabilities.None,
+                Execute = _options.Execute,
+            });
+
+            _predictedBytes = predicted + compiled.Workspace.BoundedBytes;
+            var buffer = CompiledPlanExecutor.ExecuteFrame(compiled, regionImage[0].Pixels.View,
+                _options.Region?.Pool, _options.Execute);
+            var resized = regionImage.ReplaceBuffer(buffer);
+            regionImage.Dispose();
+            return resized;
+        }
+        catch
+        {
+            regionImage.Dispose();
+            throw;
+        }
     }
 
     /// <summary>One options bag for the pipeline; the region-specific execution knobs are unified here so a caller
@@ -603,5 +634,6 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
 
     private ProcessReport MaterializedReport(Image image, StreamRefusal refusal) =>
         new(ProcessMode.Materialized, refusal, ReaderIsStreaming: false, EncoderIsStreaming: false,
-            image.Width, image.Height, image.Height, _options.Save.Metadata is not null);
+            image.Width, image.Height, image.Height,
+            _options.Save.Metadata is not null || !image.Metadata.IsEmpty);
 }

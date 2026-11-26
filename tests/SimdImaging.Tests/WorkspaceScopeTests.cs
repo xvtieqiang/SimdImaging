@@ -1,6 +1,8 @@
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Compilation;
 using SimdImaging.Processing.Contracts;
+using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Tests;
 
@@ -32,6 +34,43 @@ public sealed class WorkspaceScopeTests
             [new PlanStep(ScopedOp(WorkspaceScope.PerCall))], 64, allowFusion: false, degree: 4);
         perCall.PerWorkerBytes.ShouldBe(1024);
         perCall.OperatorScratchBytes.ShouldBe(4096);
+    }
+
+    [Fact]
+    public void TheCompilerAndTheStreamingBudget_ReadTheSameScope()
+    {
+        var options = new ExecuteOptions { MaxDegreeOfParallelism = 4 };
+        var perWorker = ScopedOp(WorkspaceScope.PerWorker);
+        var wholeImage = ScopedOp(WorkspaceScope.WholeImage);
+
+        CompiledExecutionPlan Compile(ImageOp op) => PipelineCompiler.Compile(
+            new PipelineRecipeBuilder().Append(op).Build(), new CompileOptions
+            {
+                SourceWidth = 64,
+                SourceHeight = 256,
+                SourceFormat = WorkingFormat.Rgba8,
+                Source = SourceCapabilities.ForwardOnly,
+                Sink = SinkCapabilities.RowWritable,
+                Execute = options,
+            });
+
+        var perWorkerPlan = Compile(perWorker);
+        var wholeImagePlan = Compile(wholeImage);
+        perWorkerPlan.Backend.ShouldBe(ExecutionBackend.Stream);
+        perWorkerPlan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.PerWorkerScratch).Bytes
+            .ShouldBe(1024 * 4);
+        wholeImagePlan.Workspace.Terms.ShouldNotContain(term => term.Kind == WorkspaceTermKind.PerWorkerScratch);
+        wholeImagePlan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.WholeImageScratch).Bytes
+            .ShouldBe(1024);
+
+        // The stream and region executors measure through WorkingSetBudget, which must apply the same rule.
+        var perWorkerBudget = WorkingSetBudget.Measure([new PlanStep(perWorker)], options, 64, 256, 64, 64,
+            WorkingFormat.Rgba8, windows: 2, extraBytes: 0, out _);
+        var wholeImageBudget = WorkingSetBudget.Measure([new PlanStep(wholeImage)], options, 64, 256, 64, 64,
+            WorkingFormat.Rgba8, windows: 2, extraBytes: 0, out _);
+
+        (perWorkerBudget - wholeImageBudget).ShouldBe((1024 * 4) - 1024,
+            "the scope must change the multiplier on every path, not only in MemoryEstimator");
     }
 
     private static ImageOp ScopedOp(WorkspaceScope scope)

@@ -97,7 +97,9 @@ public sealed class TranscodeRecipeTests
             var report = ImageTranscode.From(source).Convolve([0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f], 1,
                 BorderMode.Mirror).Run(streamed);
 
-            Image.ProcessTo(source, plan, expected);
+            using (var loaded = Image.Load(source))
+            using (var whole = loaded.Apply(plan))
+                Image.Save(whole, expected);
 
             report.Mode.ShouldBe(ProcessMode.Materialized);
             report.Refusal.ShouldBe(StreamRefusal.StepNeedsWholeSource);

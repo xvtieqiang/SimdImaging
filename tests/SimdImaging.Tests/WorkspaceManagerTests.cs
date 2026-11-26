@@ -114,6 +114,42 @@ public sealed class WorkspaceManagerTests
     }
 
     [Fact]
+    public void AMultiStageStream_StaysWithinItsPrediction()
+    {
+        var source = Path.Combine(Path.GetTempPath(), $"simd-ws-{Guid.NewGuid():N}.png");
+        var destination = Path.Combine(Path.GetTempPath(), $"simd-ws-{Guid.NewGuid():N}.png");
+        try
+        {
+            using (var image = TestImages.Gradient(96, 72, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+
+            var workspace = new WorkspaceManager();
+            var report = ImageTranscode.From(source)
+                .GaussianBlur(1f)
+                .Resize(48, 36)
+                .GaussianBlur(1f)
+                .WithOptions(TranscodeOptions.Default with
+                {
+                    Execute = new ExecuteOptions { Workspace = workspace, MaxDegreeOfParallelism = 1 },
+                })
+                .Run(destination);
+
+            // The two operator runs are stages of one pull chain, so both windows and both reservations are alive
+            // together. The prediction must sum them; the old max-of-sections figure was below the real peak.
+            report.Mode.ShouldBe(ProcessMode.Streamed);
+            report.PredictedWorkingBytes.ShouldBeGreaterThan(0);
+            report.PeakWorkingBytes.ShouldBeGreaterThan(0);
+            report.PeakWorkingBytes.ShouldBeLessThanOrEqualTo(report.PredictedWorkingBytes,
+                $"{report.PeakWorkingBytes} > {report.PredictedWorkingBytes}");
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
+    [Fact]
     public void APlanReservation_IsVisibleToTheManager()
     {
         using var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8);

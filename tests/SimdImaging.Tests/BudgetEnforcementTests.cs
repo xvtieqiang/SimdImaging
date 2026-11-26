@@ -44,6 +44,33 @@ public sealed class BudgetEnforcementTests
     }
 
     [Fact]
+    public void AContentDerivedGeometry_BeyondTheBudget_IsRefusedBeforeTheAllocation()
+    {
+        var plan = Compile(Recipe(GeometrySteps.Trim(0f)), new ExecuteOptions());
+        using var image = TestImages.Gradient(32, 32, WorkingFormat.Rgba8);
+        // The output size is only known after reading pixels, but an upper bound is: input frame + input-sized
+        // output + the declared row scratch. The executor refuses on that bound before trimming.
+        var execute = new ExecuteOptions { MaxWorkingBytes = 1024 };
+
+        var error = Should.Throw<InvalidOperationException>(() =>
+            CompiledPlanExecutor.ExecuteFrame(plan, image[0].Pixels.View, options: execute));
+        error.Message.ShouldContain("geometry step");
+        error.Message.ShouldContain("MaxWorkingBytes");
+    }
+
+    [Fact]
+    public void AContentDerivedGeometry_IsBoundedAndDeclaresItsScratch()
+    {
+        var plan = Compile(Recipe(GeometrySteps.Trim(0f)), new ExecuteOptions { MaxWorkingBytes = 1 << 20 });
+
+        plan.Workspace.IsLowerBound.ShouldBeFalse("a declared content-derived crop is bounded by its input size");
+        plan.Workspace.Terms.ShouldContain(term =>
+            term.Kind == WorkspaceTermKind.GeometryScratch && term.Bytes > 0);
+        plan.Workspace.Terms.ShouldContain(term =>
+            term.Kind == WorkspaceTermKind.SectionTransition && term.Bytes > 0);
+    }
+
+    [Fact]
     public void APlanBeyondTheBudget_IsRefusedAtCompileTime()
     {
         var recipe = Recipe(PlanOps.GaussianBlur(1f), PlanOps.Invert());

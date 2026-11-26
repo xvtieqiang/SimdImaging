@@ -76,7 +76,7 @@ public class ImageTranscodeTests
     }
 
     [Fact]
-    public void ApplySave_MatchesProcessTo()
+    public void ApplySave_MatchesTheWholeImageChain()
     {
         var source = Temp(".png");
         var builder = Temp(".png");
@@ -87,7 +87,9 @@ public class ImageTranscodeTests
                 Image.Save(image, source);
 
             ImageTranscode.From(source).GaussianBlur(1f).Contrast(1.1f).Save(builder);
-            Image.ProcessTo(source, BlurContrast(), direct);
+            using (var loaded = Image.Load(source))
+            using (var filtered = loaded.Apply(BlurContrast()))
+                Image.Save(filtered, direct);
 
             File.ReadAllBytes(builder).ShouldBe(File.ReadAllBytes(direct));
         }
@@ -99,7 +101,7 @@ public class ImageTranscodeTests
     }
 
     [Fact]
-    public void NamedOperators_MatchThePlanForm()
+    public void NamedOperators_MatchTheWholeImageChain()
     {
         var source = Temp(".png");
         var fluent = Temp(".png");
@@ -110,7 +112,10 @@ public class ImageTranscodeTests
                 Image.Save(image, source);
 
             ImageTranscode.From(source).GaussianBlur(1f).Contrast(1.1f).Resize(97, 61).Save(fluent);
-            Image.ResizeTo(source, planned, 97, 61, Resampler.Bicubic, plan: BlurContrast());
+            using (var loaded = Image.Load(source))
+            using (var filtered = loaded.Apply(BlurContrast()))
+            using (var resized = filtered.Pipe().Resize(97, 61, Resampler.Bicubic).ToImage())
+                Image.Save(resized, planned);
 
             File.ReadAllBytes(fluent).ShouldBe(File.ReadAllBytes(planned));
         }
@@ -122,7 +127,7 @@ public class ImageTranscodeTests
     }
 
     [Fact]
-    public void ApplyResizeApplySave_MatchesResizeTo()
+    public void ApplyResizeApplySave_MatchesTheWholeImageChain()
     {
         var source = Temp(".png");
         var builder = Temp(".png");
@@ -133,8 +138,11 @@ public class ImageTranscodeTests
                 Image.Save(image, source);
 
             ImageTranscode.From(source).GaussianBlur(1f).Contrast(1.1f).Resize(97, 61).Invert().Save(builder);
-            Image.ResizeTo(source, direct, 97, 61, Resampler.Bicubic, plan: BlurContrast(),
-                after: new ProcessingPlan().Add(PlanOps.Invert()));
+            using (var loaded = Image.Load(source))
+            using (var filtered = loaded.Apply(BlurContrast()))
+            using (var resized = filtered.Pipe().Resize(97, 61, Resampler.Bicubic).ToImage())
+            using (var inverted = resized.Apply(new ProcessingPlan().Add(PlanOps.Invert())))
+                Image.Save(inverted, direct);
 
             File.ReadAllBytes(builder).ShouldBe(File.ReadAllBytes(direct));
         }
@@ -146,7 +154,7 @@ public class ImageTranscodeTests
     }
 
     [Fact]
-    public void RegionApplyResizeToImage_MatchesResizeRegion()
+    public void RegionApplyResizeToImage_MatchesLoadApplyCropResize()
     {
         var source = Temp(".tif");
         try
@@ -156,7 +164,10 @@ public class ImageTranscodeTests
             var region = new PixelRect(40, 30, 160, 120);
 
             using var built = ImageTranscode.From(source).Region(region).GaussianBlur(1f).Contrast(1.1f).Resize(61, 47).ToImage();
-            using var direct = Image.ResizeRegion(source, BlurContrast(), region, 61, 47);
+            using var loaded = Image.Load(source);
+            using var filtered = loaded.Apply(BlurContrast());
+            using var cropped = filtered.Pipe().Crop(region).ToImage();
+            using var direct = cropped.Pipe().Resize(61, 47, Resampler.Bicubic).ToImage();
 
             built.WritablePixels.ToArray().ShouldBe(direct.WritablePixels.ToArray());
         }
@@ -167,7 +178,7 @@ public class ImageTranscodeTests
     }
 
     [Fact]
-    public void RegionSave_MatchesEncode()
+    public void RegionSave_MatchesLoadCropResizeEncode()
     {
         var source = Temp(".tif");
         var saved = Temp(".png");
@@ -178,8 +189,10 @@ public class ImageTranscodeTests
 
             ImageTranscode.From(source).Region(new PixelRect(8, 6, 32, 24)).Resize(16, 12).Save(saved);
 
-            using (var direct = Image.ResizeRegion(source, new PixelRect(8, 6, 32, 24), 16, 12))
-                Image.Save(direct, expected);
+            using (var loaded = Image.Load(source))
+            using (var cropped = loaded.Pipe().Crop(new PixelRect(8, 6, 32, 24)).ToImage())
+            using (var resized = cropped.Pipe().Resize(16, 12, Resampler.Bicubic).ToImage())
+                Image.Save(resized, expected);
 
             File.ReadAllBytes(saved).ShouldBe(File.ReadAllBytes(expected));
         }
@@ -252,8 +265,8 @@ public class ImageTranscodeTests
     [Fact]
     public void AForwardOnlyStream_WithAWholeInputDecode_MaterialisesOnce()
     {
-        // A codec-negotiated scale is settled from the header, so ProcessChain would have to rewind a source that
-        // cannot seek. The facade reads such a stream exactly once instead of turning the call into a throw.
+        // A codec-negotiated scale is settled from the header, so the transcode materialises such a source before
+        // the row chain is opened. A forward-only stream is read exactly once instead of turning the call into a throw.
         var source = Temp(".png");
         var destination = Temp(".png");
         try

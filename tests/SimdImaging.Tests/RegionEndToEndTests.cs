@@ -118,7 +118,7 @@ public class RegionEndToEndTests
     }
 
     [Fact]
-    public void ResizeRegion_MatchesLoadCropResize()
+    public void RegionResize_MatchesLoadCropResize()
     {
         var path = Temp(".tif");
         try
@@ -133,7 +133,7 @@ public class RegionEndToEndTests
                      })
             {
                 var region = new PixelRect(40, 30, 160, 120);
-                using var actual = Image.ResizeRegion(path, region, 61, 47, filter);
+                using var actual = ImageTranscode.From(path).Region(region).Resize(61, 47, filter).ToImage();
 
                 using var whole = Image.Load(path);
                 using var cropped = whole.Pipe().Crop(region).ToImage();
@@ -151,7 +151,7 @@ public class RegionEndToEndTests
     }
 
     [Fact]
-    public void ResizeRegion_WithAPlan_MatchesLoadApplyCropResize()
+    public void RegionResize_WithAPlan_MatchesLoadApplyCropResize()
     {
         var path = Temp(".tif");
         try
@@ -160,7 +160,8 @@ public class RegionEndToEndTests
             var plan = new ProcessingPlan().Add(PlanOps.GaussianBlur(1f)).Add(PlanOps.Contrast(1.1f));
             var region = new PixelRect(40, 30, 160, 120);
 
-            using var actual = Image.ResizeRegion(path, plan, region, 61, 47, Resampler.Bicubic);
+            using var actual = ImageTranscode.From(path).Region(region).Append(plan)
+                .Resize(61, 47, Resampler.Bicubic).ToImage();
 
             using var whole = Image.Load(path);
             using var applied = whole.Apply(plan);
@@ -176,15 +177,15 @@ public class RegionEndToEndTests
     }
 
     [Fact]
-    public void ResizeRegion_RefusesAPlanThatNeedsTheWholeImage()
+    public void RegionResize_RefusesAPlanThatNeedsTheWholeImage()
     {
         var path = Temp(".tif");
         try
         {
             File.WriteAllBytes(path, TiffFixture.Strips(64, 48, PixelFormat.Rgb24, Pattern(64, 48, 3)));
             var error = Should.Throw<NotSupportedException>(() =>
-                Image.ResizeRegion(path, new ProcessingPlan().Add(PlanOps.Equalize()),
-                    new PixelRect(0, 0, 32, 24), 16, 12));
+                ImageTranscode.From(path).Region(new PixelRect(0, 0, 32, 24)).Equalize()
+                    .Resize(16, 12).ToImage());
             error.Message.ShouldContain("GlobalStep");
         }
         finally
@@ -194,7 +195,7 @@ public class RegionEndToEndTests
     }
 
     [Fact]
-    public void ResizeRegion_AtTheEdge_MatchesLoadCropResize()
+    public void RegionResize_AtTheEdge_MatchesLoadCropResize()
     {
         var path = Temp(".tif");
         try
@@ -202,10 +203,36 @@ public class RegionEndToEndTests
             File.WriteAllBytes(path, TiffFixture.Strips(64, 48, PixelFormat.Rgb48, Pattern(64, 48, 6)));
             var region = new PixelRect(0, 0, 64, 48);
 
-            using var actual = Image.ResizeRegion(path, region, 31, 23);
+            using var actual = ImageTranscode.From(path).Region(region).Resize(31, 23).ToImage();
             using var whole = Image.Load(path);
             using var cropped = whole.Pipe().Crop(region).ToImage();
             using var expected = cropped.Pipe().Resize(31, 23, Resampler.Bicubic).ToImage();
+
+            actual.WritablePixels.ToArray().ShouldBe(expected.WritablePixels.ToArray());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ProcessRegion_AtTheTopAcrossManyBands_MatchesLoadApplyCrop()
+    {
+        var path = Temp(".tif");
+        try
+        {
+            File.WriteAllBytes(path, TiffFixture.Strips(256, 256, PixelFormat.Rgb24, Pattern(256, 256, 3)));
+            var region = new PixelRect(0, 0, 256, 256);
+            // A small band height guarantees interior bands, whose windows carry halo on both sides. The first
+            // band's window is clamped at the top, so it is the smallest — not the largest.
+            var plan = new ProcessingPlan { BandRows = 32 }.Add(PlanOps.GaussianBlur(1f))
+                .Add(PlanOps.Contrast(1.1f));
+
+            using var whole = Image.Load(path);
+            using var applied = whole.Apply(plan);
+            using var expected = applied.Pipe().Crop(region).ToImage();
+            using var actual = Image.ProcessRegion(path, plan, region);
 
             actual.WritablePixels.ToArray().ShouldBe(expected.WritablePixels.ToArray());
         }

@@ -168,7 +168,7 @@ RegionCapabilities caps = Image.DescribeRegion("huge.tif");
 
 - 输出与 `Load(整图) → 处理 → Crop(rect)`（带缩放时再加 `Resize`）**逐字节相同**，halo 边界也一样。
 - 只读与矩形相交的 strip/tile：16×16 区域在 512² 上读 **3.1 KB**（文件 43.8 KB），图像高 4 倍后仍 **3.4 KB**。
-- 不带缩放时那块按带读、按带处理，区域本身不整块存在；带缩放时按 Σhalo 扩大读入、只把内圈交给缩放，一趟完成。
+- 不带缩放时那块按带读、按带处理，区域本身不整块存在；带缩放时先由编译区域执行器产出矩形（整块存在），再跑编译的缩放段，结果与 `Load → Crop → Resize` 逐字节相同。
 - 读不了就抛，不物化：非 TIFF、4 通道（`ExtraSamples` 不可见）、Palette / CMYK / YCbCr、单段超预算、含 `Global` 的计划，各有明确消息。
 - 结果不带 ICC/Exif（codec 读元数据要整个文件）；需要时用 `SaveOptions.Metadata` 附上。
 - 本库 `Save` 出的 TIFF 是 4 通道单条带，会被区域读拒绝——这个入口是给「别处写的大图」用的。
@@ -176,7 +176,8 @@ RegionCapabilities caps = Image.DescribeRegion("huge.tif");
 > 内存里不需要 builder：`image.Pipe().GaussianBlur(1f).Resize(1600, 900).ToImage()` 就是惯用法。
 > 计划是低阶：`Image.Apply(plan)` / `ApplyWithOptions` 标为 `EditorBrowsable(Advanced)`，只给「编译好的配方」与逐步
 > 计时用；用户层只有 `Pipe()` / `Mutate()` / `ImageTranscode`。
-> 旧的静态入口（`ProcessTo` / `ResizeTo` / `ProcessRegion` / `ResizeRegion`）已改为内部实现，公开面只留 builder 与 `DescribeRegion`。
+> 旧的静态入口（`ProcessTo` / `ResizeTo` / `ResizeRegion`）已删除，文件侧只剩 `ImageTranscode` 与 `DescribeRegion`；
+> `ProcessChain` / `ProcessRegion` 是 builder 的内部路由目标，不再是可单独调用的兼容层。
 
 ### 原地修改
 

@@ -105,6 +105,55 @@ public sealed class GeometrySemanticsTests
     }
 
     [Fact]
+    public void EntropyCrop_KeepsTheSurvivingPixelsUnchanged()
+    {
+        using var source = Image.Create(12, 12, WorkingFormat.Rgba8);
+        var pixels = source.WritablePixels;
+
+        // A flat grey border and a 4x4 interior whose pixels vary in luma and alpha. Every interior row and
+        // column then has more than one level, so only the border is below the entropy cut.
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = 90;
+            pixels[i + 1] = 90;
+            pixels[i + 2] = 90;
+            pixels[i + 3] = 255;
+        }
+
+        for (var y = 4; y < 8; y++)
+        {
+            for (var x = 4; x < 8; x++)
+            {
+                var o = ((y * 12) + x) * 4;
+                var k = ((y - 4) * 4) + (x - 4);
+                pixels[o] = (byte)(10 + (k * 15));
+                pixels[o + 1] = (byte)(240 - (k * 15));
+                pixels[o + 2] = (byte)(20 + (k * 12));
+                pixels[o + 3] = (byte)(10 + (k * 15));
+            }
+        }
+
+        var descriptor = GeometrySteps.EntropyCrop(0.25f);
+        using var cropped = descriptor.Reshape(source[0].Pixels.View, null);
+
+        descriptor.PixelSemantics.Alpha.ShouldBe(AlphaPolicy.Preserve);
+        descriptor.PixelSemantics.Precision.ShouldBe(Precision.IntegerExact);
+        cropped.Width.ShouldBe(4);
+        cropped.Height.ShouldBe(4);
+
+        for (var y = 0; y < 4; y++)
+        {
+            for (var x = 0; x < 4; x++)
+            {
+                var expected = (((y + 4) * 12) + (x + 4)) * 4;
+                var actual = ((y * 4) + x) * 4;
+                cropped.View.Span.Slice(actual, 4).ToArray()
+                    .ShouldBe(source[0].Pixels.View.Span.Slice(expected, 4).ToArray(), $"pixel ({x},{y})");
+            }
+        }
+    }
+
+    [Fact]
     public void EntropyCrop_DeclaresAnIntegerPreservingContract()
     {
         var descriptor = GeometrySteps.EntropyCrop(0.5f);
@@ -113,5 +162,9 @@ public sealed class GeometrySemanticsTests
         descriptor.PixelSemantics.Alpha.ShouldBe(AlphaPolicy.Preserve);
         descriptor.PixelSemantics.Precision.ShouldBe(Precision.IntegerExact);
         descriptor.WorkspaceModel.IsDeclared.ShouldBeTrue();
+        descriptor.WorkspaceModel.Scope.ShouldBe(WorkspaceScope.WholeImage,
+            "the column histograms are held once, not per worker");
+        descriptor.WorkspaceModel.Estimate!(64, 48, 48, WorkingFormat.Rgba8)
+            .ShouldBeGreaterThan(1024L * 64, "the per-column histograms dominate and must be declared");
     }
 }

@@ -654,9 +654,10 @@ CopyRows(result.View, 0, destination, ...);          // 再整块拷进目标
 `MinWorkPixels`。修法是 `SequentialBands`（≥ degree×32 行、≥ 64 K 像素、≤ 4 MiB/窗口）。修正后：
 512² 区域 9.7 ms（同像素整图 8.1 ms），2048² 区域 59.6 ms（整图 73.1 ms）。
 
-## `ProcessTo` 的读放大（2026-11-25）
+## 文件侧流式读放大（2026-11-25；入口现为 `ImageTranscode`）
 
-`ProcessTo(stream → stream, Invert)`，`CountingStream` 统计 `Read` 字节。
+当时用 `ProcessTo(stream → stream, Invert)` 测；同一段代码现在是 `ImageTranscode.From(stream).Invert().Run(...)`，
+`CountingStream` 统计 `Read` 字节。
 
 | 输入 | 文件字节 | 实际读出 | 倍数 |
 |---|---|---|---|
@@ -679,7 +680,7 @@ TIFF 的 1.41× 来自 codec 行读器自身的预读（`OpenRowReader` 约 66 K
 
 ## 行流式缩放（M18 第一切片，2026-11-25）
 
-`Image.ResizeTo`（`StreamingResize`）对 `Load → Resize`，同机同进程交替执行：
+`ImageTranscode.Resize`（`StreamingResize`）对 `Load → Resize`，同机同进程交替执行：
 
 | 输入 | 流式 | 整图 | 比值 |
 |---|---|---|---|
@@ -721,3 +722,20 @@ M16–M18 改过带高规则（顺序出带改 `SequentialBands`）、文件流�
 2. 暂不替换 m16 基线：阈值需要按「五次运行归一化后的偏差 `max(20, ceil(3×S))`」手工推导，仓库里没有录制脚本；
    在噪声地板附近录出来的阈值要么过宽（掩盖回归）要么过窄（继续误报）。
 3. 待办：写一个录制脚本（N 次运行 → 归一化中位值 + 阈值），再用它产出 `-m18.json` 替换 `-m16.json`。
+   Tile 两条已先用独立基线文件落地（见下节），全量重录仍待这个脚本。
+
+## Tile 后端基线（2026-11-26）
+
+`SimdImaging.Benchmarks` 的 `tile invert 512x512` / `tile gaussian 512x512`（4K 源、512×512 tile、
+`Image.ProcessTiles`）已录入独立版本化基线
+`benchmarks/baselines/windows-10.0.19045-x64-16-m16-tile.json`：与主基线同机、同协议，带自己的 calibration 块
+（memory 10.67 ms / alu 91.62 ms），阈值为 invert 30%、gaussian 35%。
+
+| 场景 | 读数 | MPix/s | 分配 |
+|---|---|---|---|
+| tile invert 512x512 | 49.861 ms | 166.35 | 42 160 B |
+| tile gaussian 512x512 | 149.417 ms | 55.51 | 138 608 B |
+
+同会话的整图 `gaussian blur 4K sigma=3` 是 109.1 ms；tile 版慢 **1.37×**，这就是「不持整帧」换来的代价，
+不应按整图算子的标准要求它。tile 计划不能带几何步，所以这两条目前就是 tile 路径的全部性能覆盖；
+`check-baseline.sh` 会把它们和主基线一起比较（各自按本文件的探针校正）。

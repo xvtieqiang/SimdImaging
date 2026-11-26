@@ -58,21 +58,19 @@ internal static class CompiledPlanExecutor
                 {
                     var geometry = (GeometryStep)plan.Recipe.Steps[section.RecipeIndex];
                     var oldBytes = (long)current.Width * current.Height * current.Format.BytesPerPixel();
-                    if (geometry.Geometry.SizeKnown)
-                    {
-                        var (width, height) = geometry.Geometry.Map(current.Width, current.Height);
-                        var newBytes = (long)width * height * current.Format.BytesPerPixel();
-                        CheckBudget(options, oldBytes + newBytes, $"the geometry step '{geometry.Name}'");
-                        using (options.Workspace?.Reserve(oldBytes + newBytes, "geometry transition"))
-                        {
-                            next = geometry.Reshape(current, pool);
-                        }
-                    }
-                    else
+
+                    // Map is the exact output size when the step knows it and an upper bound when it does not (the
+                    // content-derived rules this build ships only crop). The declaration adds the step's own
+                    // scratch, so the ceiling is checked against everything the reshape can allocate — before the
+                    // allocation, not after it.
+                    var (width, height) = geometry.Geometry.Map(current.Width, current.Height);
+                    var scratch = geometry.Descriptor.WorkspaceModel.Estimate?.Invoke(width, height, height,
+                        current.Format) ?? 0;
+                    var bytes = oldBytes + ((long)width * height * current.Format.BytesPerPixel()) + scratch;
+                    CheckBudget(options, bytes, $"the geometry step '{geometry.Name}'");
+                    using (options.Workspace?.Reserve(bytes, "geometry transition"))
                     {
                         next = geometry.Reshape(current, pool);
-                        CheckBudget(options, oldBytes + (long)next.Width * next.Height * next.Format.BytesPerPixel(),
-                            $"the geometry step '{geometry.Name}'");
                     }
                 }
 

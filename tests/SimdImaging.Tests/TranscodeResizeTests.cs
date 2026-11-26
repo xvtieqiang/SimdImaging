@@ -7,12 +7,12 @@ using SimdImaging.Processing.Geometry;
 namespace SimdImaging.Tests;
 
 /// <summary>
-/// <c>Image.ResizeTo</c>: a resize that never holds the image, against <c>Load → Resize → Save</c>.
+/// The streaming resize: a resize that never holds the image, against <c>Load → Resize → Save</c>.
 /// </summary>
-public class ResizeToTests
+public class TranscodeResizeTests
 {
     private static string Temp(string extension) =>
-        Path.Combine(Path.GetTempPath(), $"simd-resizeto-{Guid.NewGuid():N}{extension}");
+        Path.Combine(Path.GetTempPath(), $"simd-transcoderesize-{Guid.NewGuid():N}{extension}");
 
     [Theory]
     [InlineData("Nearest")]
@@ -39,7 +39,7 @@ public class ResizeToTests
             using (var image = TestImages.Gradient(320, 200, WorkingFormat.Rgba8))
                 Image.Save(image, source);
 
-            var report = Image.ResizeTo(source, streamed, 97, 61, resampler);
+            var report = ImageTranscode.From(source).Resize(97, 61, resampler).Run(streamed);
 
             using (var loaded = Image.Load(source))
             using (var resized = loaded.Pipe().Resize(97, 61, resampler).ToImage())
@@ -69,7 +69,7 @@ public class ResizeToTests
             using (var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba16))
                 Image.Save(image, source);
 
-            Image.ResizeTo(source, streamed, 31, 23, Resampler.Bicubic);
+            ImageTranscode.From(source).Resize(31, 23, Resampler.Bicubic).Run(streamed);
 
             using (var loaded = Image.Load(source))
             using (var resized = loaded.Pipe().Resize(31, 23, Resampler.Bicubic).ToImage())
@@ -96,7 +96,7 @@ public class ResizeToTests
                 Image.Save(image, source);
 
             var plan = new ProcessingPlan().Add(PlanOps.GaussianBlur(1f)).Add(PlanOps.Contrast(1.1f));
-            var report = Image.ResizeTo(source, streamed, 97, 61, Resampler.Bicubic, plan: plan);
+            var report = ImageTranscode.From(source).Append(plan).Resize(97, 61, Resampler.Bicubic).Run(streamed);
 
             using (var loaded = Image.Load(source))
             using (var filtered = loaded.Apply(plan))
@@ -128,7 +128,8 @@ public class ResizeToTests
             var before = new ProcessingPlan().Add(PlanOps.GaussianBlur(1f)).Add(PlanOps.Contrast(1.1f));
             var after = new ProcessingPlan().Add(PlanOps.Sharpen(0.5f)).Add(PlanOps.Brightness(0.02f));
 
-            var report = Image.ResizeTo(source, streamed, 97, 61, Resampler.Bicubic, plan: before, after: after);
+            var report = ImageTranscode.From(source).Append(before).Resize(97, 61, Resampler.Bicubic).Append(after)
+                .Run(streamed);
 
             using (var loaded = Image.Load(source))
             using (var filtered = loaded.Apply(before))
@@ -159,7 +160,7 @@ public class ResizeToTests
                 Image.Save(image, source);
 
             var plan = new ProcessingPlan().Add(PlanOps.Equalize());
-            var report = Image.ResizeTo(source, streamed, 31, 23, plan: plan);
+            var report = ImageTranscode.From(source).Append(plan).Resize(31, 23).Run(streamed);
 
             using (var loaded = Image.Load(source))
             using (var filtered = loaded.Apply(plan))
@@ -189,7 +190,7 @@ public class ResizeToTests
             using (var image = TestImages.Gradient(40, 30, WorkingFormat.Rgba8))
                 Image.Save(image, source);
 
-            Image.ResizeTo(source, streamed, 157, 91, Resampler.Bilinear);
+            ImageTranscode.From(source).Resize(157, 91, Resampler.Bilinear).Run(streamed);
 
             using (var loaded = Image.Load(source))
             using (var resized = loaded.Pipe().Resize(157, 91, Resampler.Bilinear).ToImage())

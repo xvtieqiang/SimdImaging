@@ -3,11 +3,10 @@ using Sdcb.SimdCodecs.Abstractions;
 using Sdcb.SimdCodecs.Tiff;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
-using SimdImaging.Processing.Geometry;
 
 namespace SimdImaging;
 
-/// <summary>What <c>Image.ProcessTo</c> asks of the decode, the plan and the encode.</summary>
+/// <summary>What <see cref="ImageTranscode"/> asks of the decode, the plan and the encode.</summary>
 public sealed record ProcessOptions
 {
     /// <summary>Defaults: native depth, whole image, encoder defaults.</summary>
@@ -39,7 +38,7 @@ public sealed record ProcessOptions
     public ExecuteOptions? Execute { get; init; }
 }
 
-/// <summary>How <c>Image.ProcessTo</c> produced its output.</summary>
+/// <summary>How a file-side chain produced its output.</summary>
 public enum ProcessMode : byte
 {
     /// <summary>The plan ran over decoded rows: the source was never held whole.</summary>
@@ -52,7 +51,7 @@ public enum ProcessMode : byte
     Tiled,
 }
 
-/// <summary>What <c>Image.ProcessTo</c> did, and how much of it was actually streamed.</summary>
+/// <summary>What a file-side chain did, and how much of it was actually streamed.</summary>
 /// <remarks>
 /// The two <c>IsStreaming</c> flags are separate from <see cref="Mode"/> on purpose. A codec that cannot decode a
 /// variant as its input arrives (progressive JPEG, interlaced PNG, a scaled decode) buffers the whole image behind
@@ -70,8 +69,9 @@ public enum ProcessMode : byte
 /// <param name="Height">Output height.</param>
 /// <param name="RowsWritten">Rows written to the encoder.</param>
 /// <param name="MetadataCarried">True when metadata blocks reached the encoder — from the source
-/// (<see cref="ProcessOptions.PreserveMetadata"/>) or from <see cref="ProcessOptions.Save"/>. False is the default
-/// for a streamed run and is reported rather than left to be discovered.</param>
+/// (<see cref="ProcessOptions.PreserveMetadata"/> for a streamed run; a materialised run decodes the file whole and
+/// carries what it holds) or from <see cref="ProcessOptions.Save"/>. False is the default for a streamed run and is
+/// reported rather than left to be discovered.</param>
 public readonly record struct ProcessReport(ProcessMode Mode, StreamRefusal Refusal, bool ReaderIsStreaming,
     bool EncoderIsStreaming, int Width, int Height, int RowsWritten, bool MetadataCarried)
 {
@@ -97,112 +97,17 @@ public sealed partial class Image
         load.PreferNativeScale && (load.ScaleDenominator ?? 1) > 1;
 
     /// <summary>
-    /// Decodes <paramref name="sourcePath"/>, runs <paramref name="plan"/> over the rows and encodes the result to
-    /// <paramref name="destinationPath"/>, holding one band of rows instead of the whole image.
-    /// <para>When the plan cannot stream (see <see cref="ProcessingPlan.CanStream"/>) the file is decoded,
-    /// processed and encoded whole, and <see cref="ProcessReport.Refusal"/> says why. Bytes are the same either
-    /// way for the same pixels and options; the streamed path does not carry metadata stored after the pixels
-    /// unless <see cref="ProcessOptions.Save"/> supplies it.</para>
-    /// </summary>
-    /// <exception cref="ArgumentNullException">A path is null.</exception>
-    /// <exception cref="NotSupportedException">The extension names no writable format, or the source is float and
-    /// has no row projection.</exception>
-    /// <exception cref="InvalidDataException">The file is not a recognised image.</exception>
-    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled; a partial
-    /// destination file is left behind, exactly as an interrupted <c>Save</c> would.</exception>
-    internal static ProcessReport ProcessTo(string sourcePath, ProcessingPlan plan, string destinationPath,
-        ProcessOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(sourcePath);
-        ArgumentNullException.ThrowIfNull(plan);
-        ArgumentNullException.ThrowIfNull(destinationPath);
-
-        using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        return ProcessTo(input, plan, output, FormatFromExtension(Path.GetExtension(destinationPath)), options,
-            cancellationToken);
-    }
-
-    /// <summary>
-    /// The stream form of <see cref="ProcessTo(string, ProcessingPlan, string, ProcessOptions?, CancellationToken)"/>.
-    /// The source is read from its current position and left open; it need not seek. The destination is written
-    /// from its current position and left open.
-    /// <para>When the plan cannot stream, a seekable source is rewound and processed whole; a forward-only source
-    /// cannot be re-read, so that combination throws instead of silently producing a different result.</para>
-    /// </summary>
-    /// <param name="source">The encoded image.</param>
-    /// <param name="plan">The same-size steps to apply.</param>
-    /// <param name="destination">Where the encoded result is written.</param>
-    /// <param name="format">The container to write.</param>
-    /// <param name="options">Decode, plan and encode options.</param>
-    /// <param name="cancellationToken">Checked between bands and before the encode is committed.</param>
-    /// <exception cref="ArgumentException"><paramref name="format"/> is <see cref="ImageFormat.Unknown"/>.</exception>
-    /// <exception cref="InvalidDataException">The bytes are not a recognised image.</exception>
-    /// <exception cref="NotSupportedException">Float samples (no row reader), a non-seekable source whose header
-    /// does not fit the sniff budget (name it in <see cref="ProcessOptions.Load"/>), a non-seekable source with a
-    /// plan that cannot stream, or a format this build cannot write.</exception>
-    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
-    internal static ProcessReport ProcessTo(Stream source, ProcessingPlan plan, Stream destination,
-        ImageFormat format, ProcessOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(plan);
-        return ProcessCore(source, destination, format, options, plan, resizeWidth: null, resizeHeight: null,
-            resampler: default, planAfter: null, chain: null, chainSize: null, cancellationToken);
-    }
-
-    /// <summary>
-    /// Decodes <paramref name="source"/>, resizes it to <paramref name="width"/> × <paramref name="height"/> as the
-    /// rows arrive and encodes the result: the first geometric operator to run inside the streaming model, holding a
-    /// ring of horizontally resized rows and a staging chunk instead of the image.
-    /// <para>Byte-identical to <c>Load → Resize</c> (same weights, same premultiplied floats, same convolution).
-    /// A plan that composes a resize with other steps is M18 (§6.7); this entry is one resize and nothing else.</para>
-    /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
-    /// <exception cref="InvalidOperationException">The ring the vertical pass needs would exceed
-    /// <see cref="ExecuteOptions.MaxWorkingBytes"/> (or the 24 MiB default) — the resize is refused rather than
-    /// silently allocating it.</exception>
-    internal static ProcessReport ResizeTo(Stream source, Stream destination, ImageFormat format, int width,
-        int height, Resampler resampler = Resampler.Bicubic, ProcessOptions? options = null,
-        ProcessingPlan? plan = null, ProcessingPlan? after = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
-        return ProcessCore(source, destination, format, options, plan, width, height, resampler, after, chain: null,
-            chainSize: null, cancellationToken);
-    }
-
-    /// <summary>The path form of <c>ResizeTo</c>: the container comes from the destination's extension, and
-    /// <paramref name="plan"/> (when given) runs before the resize, in the same pass.</summary>
-    internal static ProcessReport ResizeTo(string sourcePath, string destinationPath, int width, int height,
-        Resampler resampler = Resampler.Bicubic, ProcessOptions? options = null, ProcessingPlan? plan = null,
-        ProcessingPlan? after = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(sourcePath);
-        ArgumentNullException.ThrowIfNull(destinationPath);
-        using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        return ResizeTo(input, output, FormatFromExtension(Path.GetExtension(destinationPath)), width, height,
-            resampler, options, plan, after, cancellationToken);
-    }
-
-    /// <summary>
     /// Runs a caller-built stage chain: decode, wrap the rows through each stage, encode. The output size must be
     /// known up front because the encoder is opened before the first row is pulled.
     /// </summary>
     internal static ProcessReport ProcessChain(Stream source, Stream destination, ImageFormat format,
         Func<int, int, (int Width, int Height)> sizeOf, Func<IRowSource, IRowSource> chain, ProcessOptions? options,
-        CancellationToken cancellationToken) =>
-        ProcessCore(source, destination, format, options, plan: null, resizeWidth: null, resizeHeight: null,
-            resampler: default, planAfter: null, chain, sizeOf, cancellationToken);
-
-    /// <summary>The shared body: decode, run the plan or the single resize, encode. Exactly one of the two is set.</summary>
-    private static ProcessReport ProcessCore(Stream source, Stream destination, ImageFormat format,
-        ProcessOptions? options, ProcessingPlan? plan, int? resizeWidth, int? resizeHeight, Resampler resampler,
-        ProcessingPlan? planAfter, Func<IRowSource, IRowSource>? chain,
-        Func<int, int, (int Width, int Height)>? chainSize, CancellationToken cancellationToken)
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(destination);
+        ArgumentNullException.ThrowIfNull(sizeOf);
+        ArgumentNullException.ThrowIfNull(chain);
         if (format == ImageFormat.Unknown)
             throw new ArgumentException("Unknown is not an encodable format.", nameof(format));
 
@@ -211,18 +116,6 @@ public sealed partial class Image
         var save = options.Save ?? SaveOptions.Default;
 
         var start = source.CanSeek ? source.Position : 0;
-
-        // PreferNativeScale negotiates the output size from the whole header before decoding; a row reader has to be
-        // opened with its format and size already settled, so this one goes through the whole-image path — which is
-        // exactly the Load the caller asked for.
-        var refusal = plan is not null && RequiresWholeInput(load)
-            ? StreamRefusal.DecodeNeedsWholeInput
-            : plan?.CanStream() ?? StreamRefusal.None;
-        if (refusal == StreamRefusal.None)
-            refusal = planAfter?.CanStream() ?? StreamRefusal.None;
-        if (refusal != StreamRefusal.None)
-            return Materialize(source, start, plan, destination, format, options, refusal, resizeWidth, resizeHeight,
-                resampler, planAfter, cancellationToken);
 
         var (working, rowStream, headerMetadata) = ResolveFormat(source, start, load, options.PreserveMetadata,
             cancellationToken);
@@ -247,28 +140,10 @@ public sealed partial class Image
                 $"The decoded image would be {reader.Width}x{reader.Height} = {(long)reader.Width * reader.Height} "
                 + $"pixels, above the {load.MaxPixels} pixel limit.");
 
-        int outputWidth;
-        int outputHeight;
-        if (chainSize is not null)
-        {
-            (outputWidth, outputHeight) = chainSize(reader.Width, reader.Height);
-        }
-        else if (plan is not null && plan.HasResize)
-        {
-            if (resizeWidth is not null)
-                throw new ArgumentException(
-                    "The plan already ends with a resize; giving ResizeTo a size as well would resize twice.",
-                    nameof(plan));
-            (outputWidth, outputHeight) = plan.OutputSize(reader.Width, reader.Height);
-        }
-        else
-        {
-            outputWidth = resizeWidth ?? reader.Width;
-            outputHeight = resizeHeight ?? reader.Height;
-        }
+        var (outputWidth, outputHeight) = sizeOf(reader.Width, reader.Height);
 
-        // The encoder session is opened only after the plan (or the resize) is known to be possible: creating one and
-        // abandoning it uncommitted would leave whatever it had already written in the caller's stream.
+        // The encoder session is opened only after the chain's output size is known: creating one and abandoning it
+        // uncommitted would leave whatever it had already written in the caller's stream.
         var encodeOptions = BuildEncodeOptions(format, save);
         using var session = ImageCodecs.CreateEncoder(format, destination, encodeOptions, leaveOpen: true);
         // Colour encoding always travels (it is in the header the reader already parsed). Metadata blocks do not,
@@ -280,76 +155,23 @@ public sealed partial class Image
         var sourceRows = new CodecRowSource(reader, working, cancellationToken);
         var sink = new CodecRowSink(frame, cancellationToken);
 
-        StreamResult result;
-        if (chain is not null)
+        // A caller-supplied stage chain (crop / pad / flip / plan / resize, in order). Its output size was settled
+        // before the encoder was opened, so the frame already has it.
+        var chained = chain(sourceRows);
+        int writtenRows;
+        try
         {
-            // A caller-supplied stage chain (crop / pad / flip / plan / resize, in order). Its output size was settled
-            // before the encoder was opened, so the frame already has it.
-            var chained = chain(sourceRows);
-            try
-            {
-                result = new StreamResult(StreamRefusal.None, Pipeline.Copy(chained, sink, cancellationToken), 0, 1);
-            }
-            finally
-            {
-                (chained as IDisposable)?.Dispose();
-            }
+            writtenRows = Pipeline.Copy(chained, sink, cancellationToken);
         }
-        else if (resizeWidth is { } targetWidth)
+        finally
         {
-            // plan → resize → plan is a chain of pull sources: each stage asks the one before it for rows. A missing
-            // plan is simply a stage that is not there.
-            using var prefix = plan is null ? null : new PlanRowSource(plan, sourceRows, options.Execute);
-            var resizeInput = prefix is null ? sourceRows : (IRowSource)prefix;
-            using var resized = new ResizeRowSource(resizeInput, targetWidth, outputHeight, resampler,
-                options.Execute);
-            using var tail = planAfter is null ? null : new PlanRowSource(planAfter, resized, options.Execute);
-            var writtenRows = Pipeline.Copy(tail ?? (IRowSource)resized, sink, cancellationToken);
-            result = new StreamResult(StreamRefusal.None, writtenRows, prefix?.Bands ?? 0, 1);
-        }
-        else
-        {
-            result = plan!.TryExecuteTo(sourceRows, sink, options.Execute);
-            if (!result.Succeeded)
-                throw new InvalidOperationException(
-                    $"The plan reported '{result.Refusal}' at step '{result.RefusingStep}' after CanStream said it "
-                    + "could stream. That is a bug in the capability check, not in the caller.");
+            (chained as IDisposable)?.Dispose();
         }
 
         var report = new ProcessReport(ProcessMode.Streamed, StreamRefusal.None, reader.IsStreaming,
-            session.IsStreaming, outputWidth, outputHeight, result.RowsWritten, metadata is not null);
+            session.IsStreaming, outputWidth, outputHeight, writtenRows, metadata is not null);
         session.Commit(cancellationToken);
         return report;
-    }
-
-    /// <summary>Decodes, runs the plan and encodes, because the plan cannot stream.</summary>
-    private static ProcessReport Materialize(Stream source, long start, ProcessingPlan? plan,
-        Stream destination, ImageFormat format, ProcessOptions options, StreamRefusal refusal, int? resizeWidth,
-        int? resizeHeight, Resampler resampler, ProcessingPlan? planAfter, CancellationToken cancellationToken)
-    {
-        if (!source.CanSeek)
-            throw new NotSupportedException(
-                $"This plan cannot stream ({refusal}), and the source stream cannot be re-read, so it would have to "
-                + "be decoded whole — which a forward-only stream cannot do after its header. Use a seekable source, "
-                + "or Image.Load + Image.Encode.");
-
-        source.Position = start;
-        using var image = Load(source, options.Load, cancellationToken);
-        using var filtered = plan is null ? null : image.ApplyWithOptions(plan, options.Execute ?? new ExecuteOptions());
-        var current = filtered ?? image;
-        using var resized = resizeWidth is { } width
-            ? current.Pipe().Resize(width, resizeHeight!.Value, resampler).ToImage()
-            : null;
-        var resizedOrCurrent = resized ?? current;
-        using var tail = planAfter is null
-            ? null
-            : resizedOrCurrent.ApplyWithOptions(planAfter, options.Execute ?? new ExecuteOptions());
-        var output = tail ?? resizedOrCurrent;
-        var bytes = Encode(output, format, options.Save, cancellationToken);
-        destination.Write(bytes, 0, bytes.Length);
-
-        return new ProcessReport(ProcessMode.Materialized, refusal, ReaderIsStreaming: false,
-            EncoderIsStreaming: false, output.Width, output.Height, output.Height, MetadataCarried: true);
     }
 
     /// <summary>

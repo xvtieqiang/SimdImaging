@@ -94,7 +94,11 @@ internal static class GeometrySteps
             (view, pool) => Canvas.Tile(view, width, height, mirror, pool), Semantics: PixelSemantics.EncodedInteger);
 
     internal static GeometryDescriptor Trim(float tolerance) =>
-        new("trim", new ContentDerivedRule(), (view, pool) => Canvas.Trim(view, tolerance, pool), Semantics: PixelSemantics.EncodedInteger);
+        new("trim", new ContentDerivedRule(), (view, pool) => Canvas.Trim(view, tolerance, pool),
+            Semantics: PixelSemantics.EncodedInteger,
+            // One converted row plus the four-float reference. The output crop is bounded by the input frame and
+            // is accounted as the geometry transition, not here.
+            Workspace: WorkspaceModel.Of((width, _, _, _) => (16L * width) + 16, WorkspaceScope.WholeImage));
 
     internal static GeometryDescriptor RoundCorners(float radius) =>
         new("round-corners", GeometryRule.SameSize, (view, pool) => Canvas.RoundCorners(view, radius, pool),
@@ -121,7 +125,13 @@ internal static class GeometrySteps
 
     internal static GeometryDescriptor EntropyCrop(float threshold) =>
         new("entropy-crop", new ContentDerivedRule(),
-            (view, pool) => Processing.Geometry.EntropyCrop.Crop(view, threshold, pool), Semantics: PixelSemantics.EncodedInteger);
+            (view, pool) => Processing.Geometry.EntropyCrop.Crop(view, threshold, pool),
+            Semantics: PixelSemantics.EncodedInteger,
+            // One converted row (16/w), the 256-bin histogram (1 KiB), per-row entropy (8/h), per-column entropy
+            // (8/w) and the per-column histograms (1024/w). The output crop is the geometry transition.
+            Workspace: WorkspaceModel.Of(
+                (width, height, _, _) => (1048L * width) + (8L * height) + 1024L,
+                WorkspaceScope.WholeImage));
 
     internal static GeometryDescriptor RemoveSeams(SeamAxis axis, int count) =>
         new($"remove {count} seams", new RelativeRule(

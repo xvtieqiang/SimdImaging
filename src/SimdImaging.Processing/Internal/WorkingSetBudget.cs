@@ -1,4 +1,5 @@
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Contracts;
 
 namespace SimdImaging.Processing.Internal;
 
@@ -17,11 +18,22 @@ internal static class WorkingSetBudget
         var estimate = ((long)windows * windowCols * windowRows * format.BytesPerPixel()) + extraBytes;
         undeclared = 0;
         var perWorker = 0L;
+        var wholeImage = 0L;
         for (var i = 0; i < steps.Count; i++)
         {
             if (steps[i].Scratch is not { } scratch)
             {
                 undeclared++;
+                continue;
+            }
+
+            // The declared scope is part of the contract, not a hint: the same rule MemoryEstimator applies to
+            // the frame path, so a ceiling means the same thing on all three executors.
+            var isWholeImage = steps[i].Category is OpCategory.Global or OpCategory.Composite
+                || steps[i].Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
+            if (isWholeImage)
+            {
+                wholeImage = Math.Max(wholeImage, scratch(width, height, height, format));
                 continue;
             }
 
@@ -31,7 +43,7 @@ internal static class WorkingSetBudget
         var workers = Math.Max(1, options.MaxDegreeOfParallelism > 0
             ? options.MaxDegreeOfParallelism
             : Environment.ProcessorCount);
-        return estimate + (perWorker * workers);
+        return estimate + (perWorker * workers) + wholeImage;
     }
 
     /// <summary>Checks a measurement against <see cref="ExecuteOptions.MaxWorkingBytes"/>.</summary>

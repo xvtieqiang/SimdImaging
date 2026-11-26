@@ -1,0 +1,32 @@
+{
+  "machine": "Microsoft Windows 10.0.19045|X64|16",
+  "date": "2026-11-26",
+  "gitSha": "e5df952",
+  "sourceSha": "1997beb13e3530b4ae3b9777a8681785bf41e76c-dirty",
+  "protocol": "best-of-N warm single process; SimdImaging.Benchmarks; slow=0; norm=max(mem,alu)",
+  "repeats": 3,
+  "note": "Tile backend only; recorded on the same machine/protocol as the main baseline. Values are raw best-of-3 from the session whose calibration block is below.",
+  "calibration": { "memory": 10.67, "alu": 91.62 },
+  "entries": [
+    {
+      "scenario": "tile invert 512x512",
+      "size": "as named",
+      "metric": "milliseconds",
+      "value": 49.861,
+      "unit": "ms",
+      "thresholdPercent": 30.0,
+      "megapixelsPerSecond": 166.35,
+      "allocatedBytes": 42160
+    },
+    {
+      "scenario": "tile gaussian 512x512",
+      "size": "as named",
+      "metric": "milliseconds",
+      "value": 149.417,
+      "unit": "ms",
+      "thresholdPercent": 35.0,
+      "megapixelsPerSecond": 55.51,
+      "allocatedBytes": 138608
+    }
+  ]
+}

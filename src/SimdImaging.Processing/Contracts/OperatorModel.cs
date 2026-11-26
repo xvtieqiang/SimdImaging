@@ -194,7 +194,8 @@ internal abstract record GeometryRule
     /// <summary>False when the output size depends on pixels (trim, entropy crop, seam carve).</summary>
     internal abstract bool SizeKnown { get; }
 
-    /// <summary>The output size for a given input size.</summary>
+    /// <summary>The output size for a given input size. When <see cref="SizeKnown"/> is false this is an upper
+    /// bound: the content-derived rules this build ships only crop, so the input size bounds the output.</summary>
     internal abstract (int Width, int Height) Map(int width, int height);
 
     /// <summary>One line for plan explanations.</summary>

@@ -6,7 +6,7 @@ using SimdImaging.Processing.Internal;
 namespace SimdImaging.Tests;
 
 /// <summary>
-/// The file-level streaming path: <see cref="ProcessingPlan.TryExecuteTo"/> and <c>Image.ProcessTo</c>.
+/// The file-level streaming path: <see cref="ProcessingPlan.TryExecuteTo"/> and <see cref="ImageTranscode"/>.
 /// <para>Every test here compares against the whole-image path byte for byte. That is the contract: a streamed
 /// result is the same image, reached with less memory — never a similar one.</para>
 /// </summary>
@@ -208,7 +208,7 @@ public class StreamingTests
     }
 
     [Fact]
-    public void ProcessTo_Png_Streams_AndMatchesTheWholeImagePath()
+    public void Transcode_Png_Streams_AndMatchesTheWholeImagePath()
     {
         using var image = TestImages.Gradient(97, 41, WorkingFormat.Rgba8);
         var source = Temp(".png");
@@ -219,7 +219,7 @@ public class StreamingTests
             Image.Save(image, source);
             var plan = new ProcessingPlan().Add(PlanOps.GaussianBlur(1.2f)).Add(PlanOps.Contrast(1.15f));
 
-            var report = Image.ProcessTo(source, plan, streamed);
+            var report = ImageTranscode.From(source).Append(plan).Run(streamed);
             using (var loaded = Image.Load(source))
             using (var whole = loaded.Apply(plan))
                 Image.Save(whole, expected);
@@ -238,7 +238,7 @@ public class StreamingTests
     }
 
     [Fact]
-    public void ProcessTo_Rgba16Png_KeepsTheDepth()
+    public void Transcode_Rgba16Png_KeepsTheDepth()
     {
         using var image = TestImages.Gradient(64, 33, WorkingFormat.Rgba16);
         var source = Temp(".png");
@@ -249,7 +249,7 @@ public class StreamingTests
             Image.Save(image, source);
             var plan = new ProcessingPlan().Add(PlanOps.Median3x3());
 
-            var report = Image.ProcessTo(source, plan, streamed);
+            var report = ImageTranscode.From(source).Append(plan).Run(streamed);
             using (var loaded = Image.Load(source))
             using (var whole = loaded.Apply(plan))
                 Image.Save(whole, expected);
@@ -265,7 +265,7 @@ public class StreamingTests
     }
 
     [Fact]
-    public void ProcessTo_DropsMetadataByDefault_AndSaysSo()
+    public void Transcode_DropsMetadataByDefault_AndSaysSo()
     {
         var exif = new byte[26];
         exif[0] = 0x49;
@@ -286,7 +286,7 @@ public class StreamingTests
             using (var stamped = image.WithMetadata(new ImageMetadata { Exif = exif }))
                 Image.Save(stamped, source);
 
-            var report = Image.ProcessTo(source, new ProcessingPlan().Add(PlanOps.Invert()), streamed);
+            var report = ImageTranscode.From(source).Invert().Run(streamed);
 
             using var check = Image.Load(streamed);
             check.Metadata.Exif.Length.ShouldBe(0, "the default trade is a header-only read");
@@ -301,7 +301,7 @@ public class StreamingTests
     }
 
     [Fact]
-    public void ProcessTo_ReadsTheSourceAboutOnce()
+    public void Transcode_ReadsTheSourceAboutOnce()
     {
         foreach (var (extension, format) in new[]
                  {
@@ -325,7 +325,7 @@ public class StreamingTests
                 using var counting = new CountingStream(file);
                 using var output = new MemoryStream();
 
-                Image.ProcessTo(counting, new ProcessingPlan().Add(PlanOps.Invert()), output, ImageFormat.Png);
+                ImageTranscode.From(counting).Invert().Run(output, ImageFormat.Png);
 
                 // One pass, plus the sniff. 1.5× allows for the TIFF reader's own pre-read (measured 1.41×) and
                 // is far below the 2.0–3.4× the full-file probe used to cost.
@@ -341,7 +341,7 @@ public class StreamingTests
     }
 
     [Fact]
-    public void ProcessTo_Materializes_WhenThePlanCannotStream_AndSaysWhy()
+    public void Transcode_Materializes_WhenThePlanCannotStream_AndSaysWhy()
     {
         using var image = TestImages.Gradient(48, 30, WorkingFormat.Rgba8);
         var source = Temp(".png");
@@ -352,7 +352,7 @@ public class StreamingTests
             Image.Save(image, source);
             var plan = new ProcessingPlan().Add(PlanOps.Equalize());
 
-            var report = Image.ProcessTo(source, plan, streamed);
+            var report = ImageTranscode.From(source).Append(plan).Run(streamed);
             using (var loaded = Image.Load(source))
             using (var whole = loaded.Apply(plan))
                 Image.Save(whole, expected);
@@ -398,7 +398,7 @@ public class StreamingTests
     }
 
     [Fact]
-    public void ProcessTo_KeepsTheHeadersExif_AndMatchesTheWholeImagePath()
+    public void Transcode_KeepsTheHeadersExif_AndMatchesTheWholeImagePath()
     {
         // A minimal little-endian TIFF block with one IFD entry, as MetadataOpsTests builds it.
         var exif = new byte[26];
@@ -422,7 +422,8 @@ public class StreamingTests
                 Image.Save(stamped, source);
 
             var plan = new ProcessingPlan().Add(PlanOps.GaussianBlur(1f));
-            var report = Image.ProcessTo(source, plan, streamed, new ProcessOptions { PreserveMetadata = true });
+            var report = ImageTranscode.From(source).Append(plan)
+                .WithOptions(new TranscodeOptions { PreserveMetadata = true }).Run(streamed);
             using (var loaded = Image.Load(source))
             using (var whole = loaded.Apply(plan))
                 Image.Save(whole, expected);
@@ -442,7 +443,7 @@ public class StreamingTests
     }
 
     [Fact]
-    public void ProcessTo_PreferNativeScale_Materializes_AndKeepsTheDecodesSize()
+    public void Transcode_PreferNativeScale_Materializes_AndKeepsTheDecodesSize()
     {
         using var image = TestImages.Gradient(64, 64, WorkingFormat.Rgba8);
         var source = Temp(".png");
@@ -450,11 +451,12 @@ public class StreamingTests
         try
         {
             Image.Save(image, source);
-            var report = Image.ProcessTo(source, new ProcessingPlan().Add(PlanOps.Invert()), destination,
-                new ProcessOptions
+            var report = ImageTranscode.From(source).Invert()
+                .WithOptions(new TranscodeOptions
                 {
                     Load = new LoadOptions { ScaleDenominator = 2, PreferNativeScale = true },
-                });
+                })
+                .Run(destination);
 
             report.Mode.ShouldBe(ProcessMode.Materialized);
             report.Refusal.ShouldBe(StreamRefusal.DecodeNeedsWholeInput);
@@ -469,7 +471,7 @@ public class StreamingTests
     }
 
     [Fact]
-    public void ProcessTo_RefusesFloatOutput()
+    public void Transcode_RefusesFloatOutput()
     {
         using var image = TestImages.Gradient(16, 9, WorkingFormat.Rgba8);
         var source = Temp(".png");
@@ -479,8 +481,9 @@ public class StreamingTests
             Image.Save(image, source);
             var plan = new ProcessingPlan().Add(PlanOps.Invert());
 
-            Should.Throw<NotSupportedException>(() => Image.ProcessTo(source, plan, destination,
-                new ProcessOptions { Load = new LoadOptions { Format = WorkingFormat.Rgba32F } }));
+            Should.Throw<NotSupportedException>(() => ImageTranscode.From(source).Append(plan)
+                .WithOptions(new TranscodeOptions { Load = new LoadOptions { Format = WorkingFormat.Rgba32F } })
+                .Run(destination));
         }
         finally
         {
@@ -490,14 +493,13 @@ public class StreamingTests
     }
 
     [Fact]
-    public void ProcessTo_NonSeekableSource_Streams()
+    public void Transcode_NonSeekableSource_Streams()
     {
         using var image = TestImages.Gradient(40, 26, WorkingFormat.Rgba8);
         var buffer = new MemoryStream(Image.Encode(image, ImageFormat.Png));
         var output = new MemoryStream();
 
-        var report = Image.ProcessTo(new ForwardOnlyStream(buffer), new ProcessingPlan().Add(PlanOps.Invert()), output,
-            ImageFormat.Png);
+        var report = ImageTranscode.From(new ForwardOnlyStream(buffer)).Invert().Run(output, ImageFormat.Png);
 
         report.Mode.ShouldBe(ProcessMode.Streamed);
         output.Length.ShouldBeGreaterThan(0);

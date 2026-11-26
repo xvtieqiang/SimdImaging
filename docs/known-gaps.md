@@ -21,11 +21,11 @@
 | 多帧 / 动画 | 已实现：`Load` 见 `FrameCount > 1` 走会话逐帧解码（`LoadFrames`），保留每帧 `Duration`；保存仍只写单帧，对多帧抛 `NotSupportedException`（见「实现边界」） |
 | 处理算子 | 已实现 119 个（全量）；实现边界见下方「实现边界」 |
 | SIMD 内核 | Rgba8 行读写、resize/blur 两遍卷积已向量化；点算子走「字节 LUT + 值主序矩阵记录 + 寄存器内钳制打包」，与标量孪生逐位一致（有端到端对比测试）。全部逐位一致，有测试兜底 |
-| `ProcessingPlan` | 已实现：同尺寸步骤按行带执行，也是行泵的输入。**缩放不在计划里**——它由门面表达（`ResizeTo(plan, after)` / `ResizeRegion`），因为计划目前没有尺寸变换；**公共面只有 `Add(ImageOp)`**——halo 由 `ImageOps` 工厂从算子参数推出，调用方写不出来；`PlanSteps`（手工 halo 的适配器）已转 `internal`，字符串版 `Add` 同样内部化。`Mutate` 未提供（算子返回新图，原地绘制归 DrawOps） |
+| `ProcessingPlan` | 已实现：同尺寸步骤按行带执行，也是行泵的输入。**缩放只能是最后一步**——`ProcessingPlan.Resize` 追加一个尾部几何步（`ImageTranscode.Resize` 是文件侧的同一件事），`Add` 在它之后会抛；**公共面只有 `Add(ImageOp)`**——halo 由 `ImageOps` 工厂从算子参数推出，调用方写不出来；`PlanSteps`（手工 halo 的适配器）已转 `internal`，字符串版 `Add` 同样内部化。`Mutate` 未提供（算子返回新图，原地绘制归 DrawOps） |
 | `SimdImaging.Drawing` 包 | 未创建，P1 起 |
 | `NativePixelPool` / `NullPixelPool` | 只有 `ArrayPixelPool` |
 | 公开 API 门禁 | 不接 RS0016 分析器，改用 `docs/public-api.txt` 快照：`PublicApiTests` 反射出全部公开签名（含可空标注）逐行比对，改动必须显式重新生成并 review diff |
-| 分块 / 行带 / 区域 / 几何 | 已实现：整图；行带（`ProcessTo`）；矩形（`ProcessRegion`、`ResizeRegion`）；行流式缩放（`ResizeTo`，可夹在一个计划之后）。未做：`Global` 两遍、多级缩放连用、Affine/Perspective、区域 sink（把结果写回文件的矩形） |
+| 分块 / 行带 / 区域 / 几何 | 已实现：整图；行带（`ImageTranscode` → `ProcessChain`）；矩形（`ProcessRegion`）；行流式缩放（`ImageTranscode.Resize`，可夹在算子之间）；区域 + 尾部缩放（编译区域执行产出矩形 + 编译缩放段）。未做：`Global` 两遍、多级缩放连用、Affine/Perspective、区域 sink（把结果写回文件的矩形） |
 | 公开参考向量包 | 已实现（M6，2026-11-14）：`tests/Fixtures/vectors/` 固定输入 / 期望 / SHA-256 + 独立高精度生成脚本；初始 3 条 `warp-identity-*`，`VectorTests` 独立重算哈希。新增向量允许，为过测试改已有 `expected` 禁止 |
 | 像素差异工具 | 已实现（M6）：`src/Shared/PixelDiff.cs` 单一源码共享，测试项目与 Comparison 工程链接复用，不造第二把尺子；补首个不匹配位置、每通道误差、Top N、SHA-256、P6 差异热图，分级沿用 `Metrics.Grade` |
 | SIMD 档位自动化 | 已实现（M6）：`benchmarks/simd-tiers.sh` 三档 JIT 全量测试 + 算子输出 body SHA-256 逐档比对。修正了 §7.5 设计稿的 `--filter "FullyQualifiedName~Kernel"` —— 它实际只匹配名字里恰好带 Kernel 的用例，不匹配 scalar-twin 测试，现改为跑全量 |
@@ -1256,13 +1256,13 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
 - **每步处理整个窗口**：区域路径把窗口当独立小图（`band 0`、`bandRows = winH`），`RunWindow` 的每步都写满窗口，
   而不是像带泵那样按 `remaining` 收缩。链长 × halo 大时会多算，量级 `(步数−1)×窗口`；**未实测**。若实测同像素量
   比带泵慢 >1.5×，给 `RunWindow` 加 `top/bottom` 重载（语义不变）。
-- **`ProcessTo` 的读放大已修（2026-11-25）**：早先 `ResolveFormat` 用 `ImageDecoder.Open` 取深度与元数据，实测它
-  会遍历整个文件（202 KB 的 JPEG 读 206 KB、71.7 KB 的 TIFF 读 147 KB），整条 `ProcessTo` 是文件的 2.0–3.4×。
+- **文件侧读放大已修（2026-11-25）**：早先 `ResolveFormat` 用 `ImageDecoder.Open` 取深度与元数据，实测它
+  会遍历整个文件（202 KB 的 JPEG 读 206 KB、71.7 KB 的 TIFF 读 147 KB），整条 `ImageTranscode` 是文件的 2.0–3.4×。
   现在默认只读头部：TIFF 走 `TiffReader.ReadLayout`，其它格式 ≤4 KiB 前缀（失败再增长到 1 MiB）；实测
   JPEG 1.01× / PNG 1.07× / TIFF 1.41×（TIFF 行读器的预读，codec 行为，不是我们的）。**代价**：元数据默认不随行，
   `ProcessOptions.PreserveMetadata = true` 恢复旧的整文件行为（2.01× / 2.14× / 3.40×），
   `ProcessReport.MetadataCarried` 报告是否携带。修的过程中还抓到一个签名判断 bug：`LooksLikeTiff` 拿**整个** 4 KiB
-  前缀和 4 字节签名比较，永远为 false，把 TIFF 推进了 1 MiB 嗅探——`ProcessTo_ReadsTheSourceAboutOnce` 就是为此加的。
+  前缀和 4 字节签名比较，永远为 false，把 TIFF 推进了 1 MiB 嗅探——`Transcode_ReadsTheSourceAboutOnce` 就是为此加的。
 - **多页 TIFF 只测了越界**：`RegionOptions.PageIndex` 透传给 `TiffReader.ReadLayout(stream, page)`，正例没有夹具
   （手写构建器目前单页）。补夹具后再把这一行删掉。
 
@@ -1282,7 +1282,8 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
      `AllowUnestimatedScratch`（与旧 `ProcessingPlan` 同规则）；
   2. 几何/格式段按「旧帧 + 新帧」预留，`WorkspacePlan` 增加 `SectionTransition` 项；
   3. `EstimateFrame` 按 `CompiledSection` 的输入尺寸/格式逐段估算（Resize 之后的算子不再按源尺寸算），
-     `EstimateStream` 同样按段取最大的窗口/Scratch，多个 Resize 取各自最大 ring 而不是只算第一个；
+     `EstimateStream` 的窗口/Scratch 当时按段取最大，2026-11-26 改为按段累加（见下一条）；多个 Resize 取各自
+     最大 ring 而不是只算第一个；
   4. Region/Stream 的窗口与 Scratch 也 `Reserve` 进同一个 `WorkspaceManager`，`PeakWorkingBytes` 不再漏掉
      `RegionExecutor` 的工作集；区域路径也设 `PredictedWorkingBytes`。`WorkspaceScope.WholeImage` 现在真正改变
      乘法（不再只靠 Category）。
@@ -1290,6 +1291,19 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   当前策略是物化或明确拒绝，两者都计入预算；临时文件需要存储与清理契约，超出本库边界。FloatScratch 空闲保留与编解码器
   内部缓冲作为 `PlanWorkspaceReport.Unmanaged` 显式登记，不当成零。M2–M4 的出口条件按 2026-11-26 的口径关闭
   （见 §「M2–M4 出口条件核验」）。
+- **工作集口径收尾（2026-11-26）**：四处此前会低估或口径不一的地方已修：
+  1. `EstimateStream` 把多个 OperatorRun 的窗口与 scratch 从「取最大」改为「按段累加」——拉式链里每个
+     `PlanRowSource` 的窗口和账户预留同时存活，`PeakWorkingBytes` 是它们的和，预测必须与之一致；
+  2. `WorkingSetBudget`（Stream/Region 的运行时门）与 `WorkspacePlanner.EstimateStream` 现在和 `MemoryEstimator`
+     一样读 `WorkspaceScope`：`WholeImage` 只算一份，`PerWorker` 才乘 worker，三条路径不再各说各话；
+  3. `Trim` / `EntropyCrop` 声明真实 scratch（行缓冲、逐列直方图等）；尺寸未知时 `GeometryRule.Map` 作为输出上界，
+     `CompiledPlanExecutor` 在 reshape **之前**按「旧帧 + 上界输出 + 声明 scratch」CheckBudget + Reserve，而不是
+     分配完再补检查；
+  4. `RegionExecutor` 的最大窗口高度改用与 `PlanRowSource` 相同的公式（band + 2ΣHaloY，再钳到页高）：顶部/底部
+     band 的 halo 被图像边钳掉，用首带探测会低估，顶部多 band 区域会越界（回归测试
+     `ProcessRegion_AtTheTopAcrossManyBands_MatchesLoadApplyCrop`）。
+  对账测试新增 `AMultiStageStream_StaysWithinItsPrediction`、`TheCompilerAndTheStreamingBudget_ReadTheSameScope`、
+  `AContentDerivedGeometry_*`；`EstimateStream` 的旧「最大」口径不再保留。
 - **区域推导（P1 部分完成）**：已有 `SourceRegionSet`、反向逐段推导、Resize/Crop/Pad/FlipVertical/FlipHorizontal/
   Rotate90/Rotate180/Transpose/RotateFlip（8 种组合）/Affine/任意角 Rotate 反向映射、每个输入端口的 footprint、
   区域成本与 `RegionCost` 拒绝、公开的 `Image.Explain`（`PlanExplanation`：后端与拒绝原因、编译段与融合、工作空间
@@ -1298,7 +1312,8 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   真实的多矩形集合、成本驱动的后端比较/切分；文件侧选路已由 `ImageTranscode.Explain()` 公开（读头部、不消耗流），
   带 `Region` 的转码仍走 `RegionExecutor`、没有编译计划可解释；
   `Image.Apply/ApplyWithOptions/ProcessRegion` 已统一到 Compiler（区域经 `CompiledPlanExecutor.ExecuteRegion`），
-  `ProcessTo` 与 `ResizeRegion` 仍走旧 `ProcessingPlan`/行泵路径。
+  文件侧的 `ProcessChain`（`ImageTranscode`）与区域路径也都由同一份编译结果驱动；旧的 `ProcessTo` / `ResizeRegion`
+  旁路已删除。
 - **P0 契约收尾（模型完成，代表算子已核验；2026-11-26）**：`OperatorContract` 覆盖所有算子步；
   `ContractConformanceTests` 逐工厂校验格式、footprint、halo、pass、分区与 workspace，代表八算子中的
   Invert/GaussianBlur/Pixelate/Equalize/Noise 在列，Composite/Blend 在 `CompositeStepTests`。审查中发现并修复了
@@ -1307,33 +1322,39 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   词表：`GeometryDescriptor` 带 `PassModel`/`StateScope`/`ExecutionOrder`/`Determinism`/`PixelSemantics`/`WorkspaceModel`
   （domain、alpha、precision、border），编译器据此做流式分类、解释和工作空间报告（SeamCarve 声明为
   `WholeFrameAlgorithm` + `PerImage` + workspace `Undeclared`，计划因此正确标为下界）；`IImageOp` 已退役，
-  `ImageOp` 是唯一算子定义。注入式第二输入的端口区域也改为精确矩形，不再保守整图。**仍未逐一核验**：纯置换/画布类
-  几何（Tile、ResizeCanvas、RoundCorners、Trim、EntropyCrop）的声明已按实现给出（多为 `EncodedInteger`），但尚无
-  像素级语义测试；几何的 `Border` 只对 Warp/Affine/Perspective/Rotate 标了 `Constant`，其余用默认 `Clamp`。
+  `ImageOp` 是唯一算子定义。注入式第二输入的端口区域也改为精确矩形，不再保守整图。纯置换/画布类几何
+  （Tile、ResizeCanvas、RoundCorners、Trim、EntropyCrop）的声明已有像素级语义测试（`GeometrySemanticsTests`：
+  Tile 的置换、ResizeCanvas 的背景/alpha、RoundCorners 的角 alpha、Trim 与 EntropyCrop 的存活像素逐字节），
+  EntropyCrop 另外核对了 scratch 声明非零且按整图一份计。几何的 `Border` 仍只对 Warp/Affine/Perspective/Rotate
+  标了 `Constant`，其余用默认 `Clamp`。
 - **PassModel 的当前定位（2026-11-26 明确）**：`PassModel` 仍是描述性字段，不生成独立 Pass 调度。现有
   `GatherThenApply` / `MultiPass` 算子都在一个内核里完成整图或整带计算，拆开只会增加一次中间物化而没有算法收益；
   因此不在本轮“为了用上字段”而拆算法。将来出现必须跨 Pass 复用统计/中间结果的算子时，再引入 Pass 计划，并让它
   真正驱动 `CompiledSection`。这是决定，不是遗漏。
-- **旧入口的兼容决定（2026-11-26）**：`ProcessTo` 与 `ResizeRegion` 保留为内部/兼容行泵路径；主要公开入口
-  （`Image.Pipe` / `Apply` / `ProcessRegion` / `ImageTranscode` / `ProcessTiles`）已走 Compiler。区域 + 尾部 resize
-  仍是行泵组合，因为编译器的 Region 后端只建模同尺寸矩形；强行并入会引入第二套几何语义。若未来要统一，先扩展
-  Region 计划到「算子 + 尾部 Resize」再迁移。
+- **旧入口清零（2026-11-26）**：`ProcessTo` / `ResizeTo` / `ResizeRegion` 已删除，文件侧只剩 `ImageTranscode`；
+  `ProcessChain` / `ProcessRegion` 是它的内部路由目标，不再是可单独调用的兼容层。区域 + 尾部 resize 改为
+  「编译区域执行产出矩形（`Load → 处理 → Crop` 的字节）+ 编译 Resize 段」，与 `Load → 处理 → Crop → Resize`
+  逐字节相同；代价是矩形在缩放期间整块存在，此前的 halo 扩窗 + 单带缩放行泵组合不再保留。要恢复单带，必须先把
+  Region 计划扩展到「算子 + 尾部 Resize」，让编译器和执行器一起认识尺寸变化，而不是恢复一条旁路。
 - **Tile 后端（P5 部分完成）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。公开入口：
   `Image.ProcessTiles` 的缓冲与 Sink 两个重载、`Image.ProcessTilesTo(IRegionSource, Stream, …)`（编码器端 sink：
   持一条 `tileHeight` 行的带、行填满即写、`ProcessMode.Tiled`）与 `ProcessTilesTo(path, path, …)`（TIFF 区域源）。
   公开的文件级区域源是 `Image.OpenRegionSource`（TIFF 布局，可释放）；其它格式仍要调用方自己实现 `IRegionSource`。
-  tile 吞吐已有两个基准条目（`tile invert` / `tile gaussian`，512×512 tile、4K 源），但还没有版本化基线。tile 计划不能带几何步（含尾部 resize），编译期以 `NotTileable` 拒绝。
+  tile 吞吐的两个基准条目（`tile invert` / `tile gaussian`，512×512 tile、4K 源）已录入独立版本化基线
+  `windows-10.0.19045-x64-16-m16-tile.json`（阈值 30% / 35%，见 `measurements.md`）；主基线仍是 m16，
+  全量重录待录制脚本。tile 计划不能带几何步（含尾部 resize），编译期以 `NotTileable` 拒绝。
 - **需求选路（P1 补完）**：`StateScope.PerCall` / `ExecutionOrder.SourceOrder` 现在参与 Stream/Region 拒绝
   （`StatefulStep`），并由 `RequirementsSelectionTests` 用一个合成的行可分步验证；`PassModel` 与 `Determinism`
   仍只用于解释与预算，不改变后端选择（当前非默认项都是 Global，分类已被 Category 拦下）。
 - **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 19 MiB
   （ring + staging + 输出批 + worker 行，一个账本；超限先缩 chunk 再拒绝）。
-- **一次流水线只支持一个缩放**：`ResizeTo(..., plan, after)` 覆盖「计划 → 缩放 → 计划」；两次缩放连用仍要分两次调用
-  （中间落一张整图）。真正的多级流水线需要 plan 自带尺寸变换，见 `architecture.md` §6.7。
-- **编码器尺寸仍由门面给出**：`ResizeTo` 的 width/height 是参数；计划自己改变尺寸（不经过门面参数）还不支持。
-- **区域 + 几何已支持「解码 + 计划 + 缩放」**：`ResizeRegion(path, plan, rect, w, h)` 一趟完成；
-  仍未做的是「缩放夹在多个计划之间」（需要 plan 的尺寸变换）与 Affine/Perspective。
+- **一次流水线只支持一个缩放**：`ImageTranscode.Resize` 两侧都可以挂算子（`GaussianBlur → Resize → Sharpen`）；
+  两次缩放连用仍要分两次调用（中间落一张整图）。真正的多级流水线需要 plan 自带尺寸变换，见 `architecture.md` §6.7。
+- **编码器尺寸仍由门面给出**：`Resize` 的 width/height 是参数；计划自己改变尺寸（不经过门面参数）还不支持。
+- **区域 + 几何（2026-11-26 起）**：`ImageTranscode.From(path).Region(rect).Resize(w, h)` 先由编译区域执行器产出
+  矩形，再跑编译缩放段，结果与 `Load → Apply → Crop → Resize` 逐字节相同；矩形在缩放期间整块存在。仍未做的是
+  「缩放夹在多个计划之间」的区域版（需要 Region 计划认识尺寸变换）与 Affine/Perspective。
 - **原点感知重采样未做**：`Resize` 以 view 尺寸建权重、按 view 坐标钳制；分块需要「全图尺寸 + 原点」，
   而权重/钳制/累加序必须逐字节不变。
 - **Affine / Perspective 不在行模型里**：它们的源区域通常不是矩形（透视甚至不可表达），需要另一套按目标行

@@ -66,8 +66,8 @@ internal sealed class GeometryStep : RecipeStep
 
     internal GeometryKind Kind { get; }
 
-    /// <summary>The resampler a resize step uses; null for every other kind. The region path needs it because
-    /// <c>Image.ResizeRegion</c> takes the resampler as an argument rather than closing over it.</summary>
+    /// <summary>The resampler a resize step uses; null for every other kind. The region transcode needs it because
+    /// its trailing resize is compiled from the step's declaration rather than closed over.</summary>
     internal Resampler? Resampler { get; }
 
     internal ReshapeGeometry Reshape { get; }

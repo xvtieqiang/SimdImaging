@@ -221,7 +221,7 @@ public sealed class ProcessingPlan
     /// <para>For a streamed run the rows are resized as they are produced, so the size change never becomes an
     /// intermediate image; for <see cref="Execute"/> the same-size steps run first and the result is resampled.</para>
     /// <para>In memory the idiomatic form is <c>image.Pipe().Resize(width, height)</c>; this exists so a file pipeline
-    /// (<c>Image.ProcessTo</c>), which has no <c>Image</c> to pipe, can describe the same chain in one pass.</para>
+    /// (<c>ImageTranscode</c>), which has no <c>Image</c> to pipe, can describe the same chain in one pass.</para>
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
     /// <exception cref="InvalidOperationException">The plan already ends with a resize.</exception>

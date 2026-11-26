@@ -373,8 +373,9 @@ public sealed partial class Image
     }
 
     /// <summary>The encoder options a <see cref="SaveOptions"/> implies, with the "wrong format" checks that make a
-    /// silently ignored field impossible. Shared by <see cref="Encode"/> and <c>Image.ProcessTo</c>: two copies of
-    /// this rule would drift, and the drift would show up as a quality or lossless setting that stopped applying.</summary>
+    /// silently ignored field impossible. Shared by <see cref="Encode"/> and the file-side chain in
+    /// <see cref="ImageTranscode"/>: two copies of this rule would drift, and the drift would show up as a quality
+    /// or lossless setting that stopped applying.</summary>
     private static EncodeOptions? BuildEncodeOptions(ImageFormat format, SaveOptions options)
     {
         EncodeOptions? encodeOptions = null;

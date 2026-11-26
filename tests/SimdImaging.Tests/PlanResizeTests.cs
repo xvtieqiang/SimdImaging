@@ -35,7 +35,7 @@ public class PlanResizeTests
     }
 
     [Fact]
-    public void ProcessToWithResize_MatchesTheWholeChain()
+    public void TranscodeWithResize_MatchesTheWholeChain()
     {
         var source = Temp(".png");
         var streamed = Temp(".png");
@@ -45,8 +45,8 @@ public class PlanResizeTests
             using (var image = TestImages.Gradient(320, 200, WorkingFormat.Rgba8))
                 Image.Save(image, source);
 
-            var plan = Chain();
-            var report = Image.ProcessTo(source, plan, streamed);
+            var report = ImageTranscode.From(source).GaussianBlur(1f).Contrast(1.1f).Resize(97, 61)
+                .Run(streamed);
 
             using (var loaded = Image.Load(source))
             using (var filtered = loaded.Apply(new ProcessingPlan().Add(PlanOps.GaussianBlur(1f))
