@@ -65,6 +65,24 @@ public sealed class WorkspacePlanTests
     }
 
     [Fact]
+    public void FormatStepScratch_IsIncludedInTheCompiledWorkspaceReport()
+    {
+        const int width = 128;
+        const int height = 96;
+        var plan = PipelineCompiler.Compile(Recipe(PlanOps.DistanceTransform()), FrameOptions(width, height));
+
+        plan.Backend.ShouldBe(ExecutionBackend.Frame);
+        var scratch = (4L * width * height)
+            + (256L * height)
+            + (16L * Math.Max(width, height))
+            + (16L * width);
+
+        plan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.FormatScratch)
+            .Bytes.ShouldBe(scratch);
+        plan.Workspace.Terms.ShouldContain(term => term.Kind == WorkspaceTermKind.FormatStep);
+    }
+
+    [Fact]
     public void ResizeTerms_MatchTheRowSourceThatWillRun()
     {
         var recipe = Recipe(PlanOps.Invert(), GeometrySteps.Resize(64, 40, Resampler.Bicubic));
