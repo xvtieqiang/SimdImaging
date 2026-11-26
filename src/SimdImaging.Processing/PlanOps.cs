@@ -504,7 +504,9 @@ public static class PlanOps
     /// </summary>
     public static ImageOp ApplyGainMap(float headroom = 4f, float weight = 1f) =>
         Create("apply-gain-map", OpCategory.Composite, WholeSourceFootprint.Instance,
-            WorkspaceModel.Of((width, _, _, _) => 32L * width, WorkspaceScope.WholeImage),
+            WorkspaceModel.Of((width, height, _, _) =>
+            checked((long)width * height * WorkingFormat.Rgba32F.BytesPerPixel() + (32L * width)),
+            WorkspaceScope.WholeImage),
             new KernelImplementations(
                 (_, _, _, _) => throw new NotSupportedException(
                     "'apply-gain-map' changes the working format; run it through a compiled recipe."),
@@ -517,12 +519,12 @@ public static class PlanOps
             outputFormat: WorkingFormat.Rgba32F,
             injectedRect: view => new PixelRect(0, 0, view.Width, view.Height));
 
-    /// <summary>Thresholded bloom. The highlights and the blurred copy are both full frames, so this is a whole-image
-    /// step (Frame only) rather than a banded one.</summary>
+    /// <summary>Thresholded bloom. The highlights and blurred copy are full frames, so the step runs as a
+    /// whole-image operation; its returned output buffer is included by the Global workspace wrapper.</summary>
     public static ImageOp Glow(float threshold = 0.7f, float sigma = 8f, float amount = 0.6f) =>
         Global(nameof(FilterOps.Glow), v => FilterOps.Glow(v, threshold, sigma, amount),
             (width, height, _, format) =>
-                (2L * width * height * format.BytesPerPixel()) + (16L * width * height));
+                FilterOps.GlowPlanWorkspaceBytes(width, height, format, sigma));
 
     /// <summary>Warm or cool shift.</summary>
     /// <param name="amount">Positive warms, negative cools.</param>
@@ -798,7 +800,8 @@ public static class PlanOps
     /// <summary>Bilateral with an explicit spatial sigma; the support is still the radius.</summary>
     public static ImageOp Bilateral(int radius, float sigmaSpace, float sigmaRange) =>
         Neighborhood(nameof(FilterOps.Bilateral), radius,
-            v => FilterOps.Bilateral(v, radius, sigmaSpace, sigmaRange));
+            v => FilterOps.Bilateral(v, radius, sigmaSpace, sigmaRange),
+            (width, _, _, _) => FilterOps.BilateralPlanScratchBytes(width, radius));
 
     /// <summary>Directional blur; its taps span half the length either side.</summary>
     public static ImageOp MotionBlur(int length, float angleDegrees = 0f) =>
@@ -810,9 +813,8 @@ public static class PlanOps
     /// <summary>Guided filter; its window is the radius.</summary>
     public static ImageOp GuidedFilter(int radius, float epsilon = 1e-4f) =>
         Neighborhood("guided", radius, v => GuidedFilterOps.GuidedFilter(v, radius, epsilon),
-            // Five float planes over bandRows + 4·radius rows (the operator widens the band by 2·radius on each
-            // side, so its row count is the estimator's `rows` plus another 2·radius), plus the full-image copy
-            // it makes up front. Both terms are read off GuidedFilterOps, not assumed.
+            // Five float planes over the operator's widened window, plus the result window returned by the
+            // adapter. The row count includes the caller's halo and the guided filter's own two-radius context.
             (width, _, rows, format) =>
                 ((long)(rows + (2 * radius)) * width * 20)
                     + ((long)width * rows * format.BytesPerPixel()),
@@ -854,7 +856,8 @@ public static class PlanOps
 
     /// <summary>Oil paint; its histogram window is the radius.</summary>
     public static ImageOp OilPaint(int radius, int levels = 20) =>
-        Neighborhood(nameof(OilPaintOps.OilPaint), radius, v => OilPaintOps.OilPaint(v, radius, levels));
+        Neighborhood(nameof(OilPaintOps.OilPaint), radius, v => OilPaintOps.OilPaint(v, radius, levels),
+            (width, _, _, _) => FilterOps.OilPaintPlanScratchBytes(width, radius, levels));
 
     /// <summary>
     /// Vignette. It darkens by distance from the image centre, so a band would see its own centre instead — the
