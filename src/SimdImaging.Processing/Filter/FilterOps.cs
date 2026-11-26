@@ -120,6 +120,44 @@ public static class FilterOps
         Math.Max(32, ScratchBudgetBytes / Math.Max(1, width * ScratchBytesPerPixel));
 
     /// <summary>
+    /// Active per-call workspace for the plan adapter: the temporary output frame plus the separable worker's
+    /// FloatScratch arrays, stack tiles and kernel. The generic rows×width estimate is insufficient for tiny
+    /// windows because the fixed planar/vertical buffers do not shrink with the window height.
+    /// </summary>
+    internal static long SeparablePlanWorkspaceBytes(int width, int rows, int radius, WorkingFormat format,
+        bool sharpen = false)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(width);
+        ArgumentOutOfRangeException.ThrowIfNegative(rows);
+        ArgumentOutOfRangeException.ThrowIfNegative(radius);
+
+        var output = checked((long)width * rows * format.BytesPerPixel());
+        if (radius == 0)
+            return output;
+
+        var taps = checked(2 * radius + 1);
+        var ringRows = Math.Min(rows, checked(2 * radius + VerticalTileRows));
+        var floatCount = checked((long)width * 8
+            + (long)ringRows * width * 4
+            + (long)width * 4
+            + (long)width * 4 * VerticalTileRows);
+        var stackBytes = checked((long)VerticalTileRows * taps * sizeof(int)
+            + (long)VerticalTileRows * VerticalBlockFloats * sizeof(float));
+        var kernelBytes = (long)taps * sizeof(float);
+        var total = checked(output + floatCount * sizeof(float) + stackBytes + kernelBytes);
+
+        if (sharpen)
+        {
+            var combineBytes = format == WorkingFormat.Rgba8 && (long)width * rows >= TwoInputLutFloor
+                ? 256L * 256
+                : (long)width * 3 * 4 * sizeof(float);
+            total = checked(total + combineBytes);
+        }
+
+        return total;
+    }
+
+    /// <summary>
     /// Runs a separable kernel as a horizontal pass followed by a vertical one. Work is done in row bands: a
     /// band keeps only <c>bandRows + 2·radius</c> horizontally filtered rows, so 4K needs about 9 MB of scratch
     /// instead of a full float plane (162 MB at σ 3). The recomputed rows are the band's context, and the
