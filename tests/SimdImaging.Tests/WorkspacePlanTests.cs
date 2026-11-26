@@ -256,6 +256,8 @@ public sealed class WorkspacePlanTests
             WorkingFormat.Rgba8, windows: 4, out var undeclared);
         runtimeRegionBytes.ShouldBe((long)4 * 32 * 20 * WorkingFormat.Rgba8.BytesPerPixel() + 2048);
         undeclared.ShouldBe(0);
+        var targetBytes = (long)32 * 20 * WorkingFormat.Rgba8.BytesPerPixel();
+        regionPlan.Workspace.BoundedBytes.ShouldBe(targetBytes + runtimeRegionBytes);
 
         var tilePlan = PipelineCompiler.Compile(recipe, regionOptions with
         {
@@ -268,6 +270,8 @@ public sealed class WorkspacePlanTests
         tilePlan.Backend.ShouldBe(ExecutionBackend.Tile);
         tilePlan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.OperatorScratchPeak)
             .Bytes.ShouldBe(2048);
+        var runtimeTileWindows = (long)4 * 32 * 20 * WorkingFormat.Rgba8.BytesPerPixel();
+        tilePlan.Workspace.BoundedBytes.ShouldBe(targetBytes + runtimeTileWindows + 2048);
     }
 
     private sealed class EmptySource(int width, int height) : IRowSource
