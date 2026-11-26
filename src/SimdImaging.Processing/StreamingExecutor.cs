@@ -2,6 +2,7 @@ using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Fusion;
+using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Processing;
@@ -126,9 +127,17 @@ internal static class StreamingExecutor
         if (refusal != StreamRefusal.None)
             return new StreamResult(refusal, 0, 0, 0) { RefusingStep = refusingStep };
 
+        options = EnsureWorkspace(options);
+        var planBytes = EstimatePlanRowSource(plan, source, options, out var undeclared);
+        var resizeWorkspace = EstimateResizeWorkspace(source, width, height, resampler, options);
+        var copyBytes = checked((long)width * Math.Min(Pipeline.TransferRows, height)
+            * source.Format.BytesPerPixel());
+        WorkingSetBudget.Ensure(checked(planBytes + resizeWorkspace.TotalBytes + copyBytes), undeclared,
+            plan.Steps.Count, options, "The streaming plan, resize and transfer pipeline");
+
         using var rows = new PlanRowSource(plan, source, options);
-        using var resized = new Geometry.ResizeRowSource(rows, width, height, resampler, options);
-        var written = Pipeline.Copy(resized, sink, options.CancellationToken);
+        using var resized = new ResizeRowSource(rows, width, height, resampler, options);
+        var written = Pipeline.Copy(resized, sink, options.CancellationToken, options);
 
         return new StreamResult(StreamRefusal.None, written, Math.Max(1, rows.Bands), 1);
     }
@@ -149,12 +158,59 @@ internal static class StreamingExecutor
         if (refusal != StreamRefusal.None)
             return new StreamResult(refusal, 0, 0, 0) { RefusingStep = refusingStep };
 
+        options = EnsureWorkspace(options);
+        var planBytes = EstimatePlanRowSource(plan, source, options, out var undeclared);
+        var copyBytes = checked((long)source.Width * Math.Min(Pipeline.TransferRows, source.Height)
+            * source.Format.BytesPerPixel());
+        WorkingSetBudget.Ensure(checked(planBytes + copyBytes), undeclared, plan.Steps.Count, options,
+            "The streaming plan and transfer pipeline");
+
         // The pump is a pull source now; this driver is the only thing that writes to the sink. Keeping one
         // direction for every stage is what lets a resize sit between two plans (see PlanRowSource).
         using var rows = new PlanRowSource(plan, source, options);
-        var written = Pipeline.Copy(rows, sink, options.CancellationToken);
+        var written = Pipeline.Copy(rows, sink, options.CancellationToken, options);
 
         return new StreamResult(StreamRefusal.None, written, Math.Max(1, rows.Bands),
             Math.Max(1, RowParallel.LastWorkerCount));
+    }
+
+    private static ExecuteOptions EnsureWorkspace(ExecuteOptions options) =>
+        options.Workspace is not null
+            ? options
+            : options with { Workspace = new WorkspaceManager(options.MaxWorkingBytes) };
+
+    private static long EstimatePlanRowSource(ProcessingPlan plan, IRowSource source, ExecuteOptions options,
+        out int undeclared)
+    {
+        if (plan.Steps.Count == 0)
+        {
+            undeclared = 0;
+            return 0;
+        }
+
+        var halo = 0;
+        foreach (var step in plan.Steps)
+            halo = checked(halo + step.HaloY);
+
+        var bandRows = SequentialBands.For(plan, source.Width, source.Height, source.Format,
+            options.MaxDegreeOfParallelism);
+        var windowRows = (int)Math.Min(source.Height, (long)bandRows + 2L * halo);
+        var windows = plan.Steps.Count > 1 ? 4 : 2;
+        return WorkingSetBudget.Measure(plan.Steps, options, source.Width, source.Height, source.Width,
+            windowRows, source.Format, windows, out undeclared);
+    }
+
+    private static ResizeWorkspace EstimateResizeWorkspace(IRowSource source, int width, int height,
+        Resampler resampler, ExecuteOptions options)
+    {
+        var weightsX = WeightTable.Build(source.Width, width, resampler);
+        var weightsY = WeightTable.Build(source.Height, height, resampler);
+        var tapX = 0;
+        var tapY = 0;
+        var nearest = resampler == Resampler.Nearest && source.Format == WorkingFormat.Rgba8
+                      && Resample.TryNearestTap(weightsX, out tapX)
+                      && Resample.TryNearestTap(weightsY, out tapY);
+        return ResizeWorkspace.Estimate(source.Width, source.Height, width, height, weightsY.Taps,
+            nearest, source.Format, options);
     }
 }
