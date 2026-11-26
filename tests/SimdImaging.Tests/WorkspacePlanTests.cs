@@ -393,8 +393,9 @@ public sealed class WorkspacePlanTests
             if (stride == 0)
                 stride = Width * Format.BytesPerPixel();
             var count = Math.Min(maxRows, Height - _row);
+            var rowBytes = checked(Width * Format.BytesPerPixel());
             for (var y = 0; y < count; y++)
-                view.Row(_row + y).CopyTo(destination.Slice(y * stride, stride));
+                view.Row(_row + y).CopyTo(destination.Slice(y * stride, rowBytes));
             _row += count;
             return count;
         }
