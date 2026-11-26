@@ -163,6 +163,8 @@ public sealed class GeometryContractTests
         Term(WorkspaceTermKind.ResizeBatch).ShouldBe(first.ReadyBytes + second.ReadyBytes, $"terms: {terms}");
         Term(WorkspaceTermKind.ResizeWorkerRows).ShouldBe(first.WorkerRowBytes + second.WorkerRowBytes, $"terms: {terms}");
         Term(WorkspaceTermKind.ResizeSourceRow).ShouldBe(first.SourceRowBytes + second.SourceRowBytes, $"terms: {terms}");
+        Term(WorkspaceTermKind.ResizeWorkerTapScratch).ShouldBe(first.WorkerTapBytes + second.WorkerTapBytes,
+            $"terms: {terms}");
 
         long Term(WorkspaceTermKind kind) => plan.Workspace.Terms.Single(term => term.Kind == kind).Bytes;
     }
