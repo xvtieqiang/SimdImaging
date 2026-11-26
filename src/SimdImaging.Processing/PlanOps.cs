@@ -506,9 +506,7 @@ public static class PlanOps
     /// </summary>
     public static ImageOp ApplyGainMap(float headroom = 4f, float weight = 1f) =>
         Create("apply-gain-map", OpCategory.Composite, WholeSourceFootprint.Instance,
-            WorkspaceModel.Of((width, height, _, _) =>
-            checked((long)width * height * WorkingFormat.Rgba32F.BytesPerPixel() + (32L * width)),
-            WorkspaceScope.WholeImage),
+            WorkspaceModel.Of((width, _, _, _) => 32L * width, WorkspaceScope.WholeImage),
             new KernelImplementations(
                 (_, _, _, _) => throw new NotSupportedException(
                     "'apply-gain-map' changes the working format; run it through a compiled recipe."),
