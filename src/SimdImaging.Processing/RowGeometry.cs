@@ -8,7 +8,7 @@ namespace SimdImaging.Processing;
 internal sealed class FlipRowSource : IRowSource, IDisposable
 {
     private readonly IRowSource _source;
-    private readonly byte[] _row;
+    private byte[] _row;
     private readonly int _rowBytes;
     private readonly int _bytesPerPixel;
     private readonly IDisposable? _workspaceLease;
@@ -48,17 +48,18 @@ internal sealed class FlipRowSource : IRowSource, IDisposable
         if (stride == 0)
             stride = _rowBytes;
 
+        var row = _row;
         var copied = 0;
         while (copied < maxRows)
         {
-            var read = _source.ReadRows(_row, 0, 1);
+            var read = _source.ReadRows(row, 0, 1);
             if (read <= 0)
                 break;
 
             var target = destination.Slice(copied * stride, _rowBytes);
             for (var x = 0; x < Width; x++)
             {
-                _row.AsSpan(x * _bytesPerPixel, _bytesPerPixel)
+                row.AsSpan(x * _bytesPerPixel, _bytesPerPixel)
                     .CopyTo(target.Slice((Width - 1 - x) * _bytesPerPixel, _bytesPerPixel));
             }
 
@@ -73,6 +74,7 @@ internal sealed class FlipRowSource : IRowSource, IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        _row = Array.Empty<byte>();
         _workspaceLease?.Dispose();
     }
 }
@@ -91,7 +93,7 @@ internal sealed class PadRowSource : IRowSource, IDisposable
     private readonly int _bytesPerPixel;
     private readonly int _sourceRowBytes;
     private readonly int _rowBytes;
-    private readonly byte[] _row;
+    private byte[] _row;
     private IDisposable? _workspaceLease;
     private int _outRow;
     private bool _disposed;
@@ -146,6 +148,7 @@ internal sealed class PadRowSource : IRowSource, IDisposable
         if (stride == 0)
             stride = _rowBytes;
 
+        var row = _row;
         var copied = 0;
         while (copied < maxRows && _outRow < Height)
         {
@@ -156,14 +159,14 @@ internal sealed class PadRowSource : IRowSource, IDisposable
             }
             else
             {
-                var read = _source.ReadRows(_row, 0, 1);
+                var read = _source.ReadRows(row, 0, 1);
                 if (read != 1)
                     throw new InvalidDataException(
                         $"The row source ended at output row {_outRow}; the pad needs {_source.Height} source rows.");
 
                 if (_left > 0)
                     DrawOps.FillRow(target[..(_left * _bytesPerPixel)], _left, _color, Format);
-                _row.AsSpan(0, _sourceRowBytes)
+                row.AsSpan(0, _sourceRowBytes)
                     .CopyTo(target.Slice(_left * _bytesPerPixel, _sourceRowBytes));
                 if (_right > 0)
                     DrawOps.FillRow(target[((_left * _bytesPerPixel) + _sourceRowBytes)..], _right, _color, Format);
@@ -181,6 +184,7 @@ internal sealed class PadRowSource : IRowSource, IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        _row = Array.Empty<byte>();
         _workspaceLease?.Dispose();
         _workspaceLease = null;
     }
