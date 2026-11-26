@@ -50,16 +50,19 @@ internal sealed class OperatorStep(int index, ImageOp op, byte[]? lut = null, Pi
 /// </summary>
 internal sealed class GeometryStep : RecipeStep
 {
-    internal GeometryStep(int index, string name, GeometryRule geometry, GeometryKind kind, Resampler? resampler,
-        ReshapeGeometry reshape, WrapRowSource? wrap = null, MapGeometryRegions? mapRegions = null)
-        : base(index, name, geometry)
+    internal GeometryStep(int index, GeometryDescriptor descriptor)
+        : base(index, descriptor.Name, descriptor.Geometry)
     {
-        Kind = kind;
-        Resampler = resampler;
-        Reshape = reshape ?? throw new ArgumentNullException(nameof(reshape));
-        Wrap = wrap;
-        MapRegions = mapRegions;
+        Descriptor = descriptor;
+        Kind = descriptor.Kind;
+        Resampler = descriptor.Resampler;
+        Reshape = descriptor.Reshape ?? throw new ArgumentNullException(nameof(descriptor));
+        Wrap = descriptor.Wrap;
+        MapRegions = descriptor.MapRegions;
     }
+
+    /// <summary>The declaration this step was built from: pass, state, order, determinism, alpha and workspace.</summary>
+    internal GeometryDescriptor Descriptor { get; }
 
     internal GeometryKind Kind { get; }
 
@@ -74,8 +77,9 @@ internal sealed class GeometryStep : RecipeStep
     /// <summary>The inverse region mapping when the step can express one; null means the whole source.</summary>
     internal MapGeometryRegions? MapRegions { get; }
 
-    /// <summary>True when a stream backend can run this step without materialising.</summary>
-    internal bool CanWrap => Wrap is not null;
+    /// <summary>True when a stream backend can run this step without materialising. A row form is necessary but not
+    /// sufficient: a step that declares per-image state or source ordering cannot be replayed by a row pump.</summary>
+    internal bool CanWrap => Descriptor.Requirements.Partition == Partitioning.RowBands;
 }
 
 /// <summary>
@@ -84,9 +88,31 @@ internal sealed class GeometryStep : RecipeStep
 internal delegate SourceRegionSet MapGeometryRegions(PixelRect destination, int sourceWidth, int sourceHeight,
     int destWidth, int destHeight);
 
+/// <summary>
+/// A geometry step's declaration, in the same vocabulary as <see cref="OperatorContract"/>: one source port, a
+/// geometry rule, execution requirements, pass model, pixel semantics and workspace. The execution forms
+/// (<see cref="Reshape"/>, <see cref="Wrap"/>, <see cref="MapRegions"/>) stay next to it but are not part of the
+/// declaration, exactly as kernels are separate from an operator contract.
+/// </summary>
 internal sealed record GeometryDescriptor(string Name, GeometryRule Geometry, ReshapeGeometry Reshape,
     WrapRowSource? Wrap = null, GeometryKind Kind = GeometryKind.Other, Resampler? Resampler = null,
-    MapGeometryRegions? MapRegions = null);
+    MapGeometryRegions? MapRegions = null, PassModel Pass = PassModel.Single, StateScope State = StateScope.None,
+    ExecutionOrder Order = ExecutionOrder.Any, Determinism Determinism = Determinism.CoordinateDeterministic,
+    AlphaPolicy Alpha = AlphaPolicy.Preserve, WorkspaceModel? Workspace = null)
+{
+    /// <summary>The requirements a row pump must honour. State or ordering turn a row-wrappable step into a
+    /// whole-image one, because the pump may interleave calls and cannot replay a previous band.</summary>
+    internal ExecutionRequirements Requirements => new(
+        Wrap is not null && State == StateScope.None && Order == ExecutionOrder.Any
+            ? Partitioning.RowBands
+            : Partitioning.WholeImage,
+        State, Order, ThreadSafety.Concurrent, Determinism);
+
+    /// <summary>What this step holds privately; a step that has not declared it is reported as a lower bound.</summary>
+    internal WorkspaceModel WorkspaceModel => Workspace ?? Contracts.WorkspaceModel.None;
+
+    internal StepRequirements StepRequirements => new(Requirements.Partition, Pass, State, Order, Determinism, Alpha);
+}
 
 /// <summary>The geometry operations the library exposes as steps. The compiler does not need this; the file-side
 /// paths do, to recognise the one geometry step a region pipeline can carry.</summary>
@@ -150,8 +176,7 @@ internal sealed class PipelineRecipeBuilder
     internal PipelineRecipeBuilder Append(GeometryDescriptor geometry)
     {
         ArgumentNullException.ThrowIfNull(geometry);
-        _steps.Add(new GeometryStep(_steps.Count, geometry.Name, geometry.Geometry, geometry.Kind,
-            geometry.Resampler, geometry.Reshape, geometry.Wrap, geometry.MapRegions));
+        _steps.Add(new GeometryStep(_steps.Count, geometry));
         _version++;
         return this;
     }

@@ -9,14 +9,11 @@ internal readonly record struct PortRegion(int Port, PixelRect Region);
 
 /// <summary>The execution requirements a step declared, flattened for the plan explanation.</summary>
 internal readonly record struct StepRequirements(Partitioning Partitioning, PassModel Pass, StateScope State,
-    ExecutionOrder Order, Determinism Determinism)
+    ExecutionOrder Order, Determinism Determinism, AlphaPolicy Alpha)
 {
     internal static StepRequirements Of(OperatorContract contract) => new(contract.Requirements.Partition,
-        contract.Pass, contract.Requirements.State, contract.Requirements.Order, contract.Requirements.Determinism);
-
-    /// <summary>A geometry reshape or a format boundary: one whole-image call, no state, order-free.</summary>
-    internal static StepRequirements Boundary(Partitioning partitioning) => new(partitioning, PassModel.Single,
-        StateScope.None, ExecutionOrder.Any, Determinism.CoordinateDeterministic);
+        contract.Pass, contract.Requirements.State, contract.Requirements.Order, contract.Requirements.Determinism,
+        contract.Semantics.Alpha);
 }
 
 /// <summary>

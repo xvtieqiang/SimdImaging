@@ -50,12 +50,6 @@
   SimdImaging.Abstractions.GainMapParameters.Validate() -> System.Void
   SimdImaging.Abstractions.GainMapParameters.op_Equality(SimdImaging.Abstractions.GainMapParameters left, SimdImaging.Abstractions.GainMapParameters right) -> System.Boolean
   SimdImaging.Abstractions.GainMapParameters.op_Inequality(SimdImaging.Abstractions.GainMapParameters left, SimdImaging.Abstractions.GainMapParameters right) -> System.Boolean
-  SimdImaging.Abstractions.IImageOp.Category : SimdImaging.Abstractions.OpCategory { get; }
-  SimdImaging.Abstractions.IImageOp.Formats : SimdImaging.Abstractions.WorkingFormatMask { get; }
-  SimdImaging.Abstractions.IImageOp.HaloX : System.Int32 { get; }
-  SimdImaging.Abstractions.IImageOp.HaloY : System.Int32 { get; }
-  SimdImaging.Abstractions.IImageOp.MapSourceRect(Sdcb.SimdCodecs.Abstractions.PixelRect destination, System.Int32 sourceWidth, System.Int32 sourceHeight) -> Sdcb.SimdCodecs.Abstractions.PixelRect
-  SimdImaging.Abstractions.IImageOp.Name : System.String { get; }
   SimdImaging.Abstractions.IPixelPool.Name : System.String { get; }
   SimdImaging.Abstractions.IPixelPool.Rent(System.Int32 length) -> System.Buffers.IMemoryOwner<System.Byte>
   SimdImaging.Abstractions.IRegionSink.Format : SimdImaging.Abstractions.WorkingFormat { get; }
@@ -556,8 +550,9 @@
   SimdImaging.PlanStepExplanation.Width : System.Int32 { get; set; }
   SimdImaging.PlanStepExplanation.op_Equality(SimdImaging.PlanStepExplanation? left, SimdImaging.PlanStepExplanation? right) -> System.Boolean
   SimdImaging.PlanStepExplanation.op_Inequality(SimdImaging.PlanStepExplanation? left, SimdImaging.PlanStepExplanation? right) -> System.Boolean
-  SimdImaging.PlanStepRequirements.#ctor(SimdImaging.Processing.Contracts.Partitioning Partitioning, SimdImaging.Processing.Contracts.PassModel Pass, SimdImaging.Processing.Contracts.StateScope State, SimdImaging.Processing.Contracts.ExecutionOrder Order, SimdImaging.Processing.Contracts.Determinism Determinism)
-  SimdImaging.PlanStepRequirements.Deconstruct(SimdImaging.Processing.Contracts.Partitioning& Partitioning, SimdImaging.Processing.Contracts.PassModel& Pass, SimdImaging.Processing.Contracts.StateScope& State, SimdImaging.Processing.Contracts.ExecutionOrder& Order, SimdImaging.Processing.Contracts.Determinism& Determinism) -> System.Void
+  SimdImaging.PlanStepRequirements.#ctor(SimdImaging.Processing.Contracts.Partitioning Partitioning, SimdImaging.Processing.Contracts.PassModel Pass, SimdImaging.Processing.Contracts.StateScope State, SimdImaging.Processing.Contracts.ExecutionOrder Order, SimdImaging.Processing.Contracts.Determinism Determinism, SimdImaging.Processing.Contracts.AlphaPolicy Alpha)
+  SimdImaging.PlanStepRequirements.Alpha : SimdImaging.Processing.Contracts.AlphaPolicy { get; set; }
+  SimdImaging.PlanStepRequirements.Deconstruct(SimdImaging.Processing.Contracts.Partitioning& Partitioning, SimdImaging.Processing.Contracts.PassModel& Pass, SimdImaging.Processing.Contracts.StateScope& State, SimdImaging.Processing.Contracts.ExecutionOrder& Order, SimdImaging.Processing.Contracts.Determinism& Determinism, SimdImaging.Processing.Contracts.AlphaPolicy& Alpha) -> System.Void
   SimdImaging.PlanStepRequirements.Determinism : SimdImaging.Processing.Contracts.Determinism { get; set; }
   SimdImaging.PlanStepRequirements.Equals(SimdImaging.PlanStepRequirements? other) -> System.Boolean
   SimdImaging.PlanStepRequirements.Equals(System.Object? obj) -> System.Boolean
@@ -589,6 +584,7 @@
   SimdImaging.PlanUnmanagedTerm.op_Inequality(SimdImaging.PlanUnmanagedTerm? left, SimdImaging.PlanUnmanagedTerm? right) -> System.Boolean
   SimdImaging.PlanWorkspaceKind.Destination = 1
   SimdImaging.PlanWorkspaceKind.FormatStep = 9
+  SimdImaging.PlanWorkspaceKind.GeometryScratch = 10
   SimdImaging.PlanWorkspaceKind.PerWorkerScratch = 3
   SimdImaging.PlanWorkspaceKind.ResizeBatch = 7
   SimdImaging.PlanWorkspaceKind.ResizeRing = 5
@@ -788,6 +784,9 @@
   SimdImaging.Processing.ColorVisionDeficiency.Deuteranopia = 1
   SimdImaging.Processing.ColorVisionDeficiency.Protanopia = 0
   SimdImaging.Processing.ColorVisionDeficiency.Tritanopia = 2
+  SimdImaging.Processing.Contracts.AlphaPolicy.Premultiplied = 1
+  SimdImaging.Processing.Contracts.AlphaPolicy.Preserve = 0
+  SimdImaging.Processing.Contracts.AlphaPolicy.Recomputes = 2
   SimdImaging.Processing.Contracts.Determinism.CoordinateDeterministic = 0
   SimdImaging.Processing.Contracts.Determinism.OrderDependent = 2
   SimdImaging.Processing.Contracts.Determinism.SeededSequence = 1
@@ -1537,6 +1536,7 @@ enum SimdImaging.Processing.ChromaSubsampling
 enum SimdImaging.Processing.ChromaticAdaptation
 enum SimdImaging.Processing.ColorSpace
 enum SimdImaging.Processing.ColorVisionDeficiency
+enum SimdImaging.Processing.Contracts.AlphaPolicy
 enum SimdImaging.Processing.Contracts.Determinism
 enum SimdImaging.Processing.Contracts.ExecutionOrder
 enum SimdImaging.Processing.Contracts.Partitioning
@@ -1561,7 +1561,6 @@ enum SimdImaging.Processing.TransferCurve
 enum SimdImaging.Processing.WhitePoint
 enum SimdImaging.Processing.YCbCrStandard
 enum SimdImaging.WatermarkPosition
-interface SimdImaging.Abstractions.IImageOp
 interface SimdImaging.Abstractions.IPixelPool
 interface SimdImaging.Abstractions.IRegionSink
 interface SimdImaging.Abstractions.IRegionSource

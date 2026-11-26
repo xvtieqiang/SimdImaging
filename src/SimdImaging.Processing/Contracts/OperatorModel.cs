@@ -96,7 +96,7 @@ internal enum PixelDomain : byte
 }
 
 /// <summary>What an operator does with the alpha channel.</summary>
-internal enum AlphaPolicy : byte
+public enum AlphaPolicy : byte
 {
     /// <summary>Alpha passes through untouched.</summary>
     Preserve = 0,

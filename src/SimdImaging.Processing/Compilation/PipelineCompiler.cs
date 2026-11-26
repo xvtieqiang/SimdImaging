@@ -245,7 +245,7 @@ internal static class PipelineCompiler
                     ports.Add(new PortRegion(0, rect));
                 infos.Add(new CompiledStepInfo(state.RecipeIndex, geometry.Name, true, state.OutputWidth,
                     state.OutputHeight, state.OutputFormat, ports, set.Area, outputArea,
-                    StepRequirements.Boundary(geometry.CanWrap ? Partitioning.RowBands : Partitioning.WholeImage)));
+                    geometry.Descriptor.StepRequirements));
                 region = set;
             }
             else
@@ -253,9 +253,10 @@ internal static class PipelineCompiler
                 var ports = new List<PortRegion>();
                 foreach (var rect in region.Regions)
                     ports.Add(new PortRegion(0, rect));
+                var formatStep = (OperatorStep)recipe.Steps[state.RecipeIndex];
                 infos.Add(new CompiledStepInfo(state.RecipeIndex, "format change", false, state.OutputWidth,
                     state.OutputHeight, state.OutputFormat, ports, region.Area, region.Area,
-                    StepRequirements.Boundary(Partitioning.WholeImage)));
+                    StepRequirements.Of(formatStep.Operator.Contract)));
             }
         }
 

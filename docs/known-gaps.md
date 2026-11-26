@@ -382,7 +382,7 @@ M5 的出口条件要求的是「全部出数 + 输的写清原因」，据此�
 | 回退与报告 | `PlanObserver` 存在 → 强制逐步骤（`ObserverPresent`）；`AllowFusion = false` → `AllowFusionDisabled`；链中有整图步骤 → `CategoryBoundary`；空链 → `EmptyPlan`。`PlanReport` 只在 `Diagnostics = true` 时构造（段/回退原因/worker 数/band 数/池租借/ticks），诊断关闭时不建对象、不读 `Stopwatch`。`Segments[i].FirstStep` 始终是**原始**步骤下标（折叠后的执行步会映射回去） |
 | LUT 折叠 | `ProcessingPlan.AddPointLut(name, 1024 字节表)`：连续表步骤按 `T_AB[c][v] = T_B[c][T_A[c][v]]` 折叠成一张、单遍执行。构造性恒等（逐步执行本来就在字节域量化），`PointLutCompositionTests` 用真实点算子取表验证。**Rgba8 only**：其它格式在 kernel 入口抛 `NotSupportedException` |
 | 内存模型 | 融合段 = 1 张整图输出 + 每 worker 2 张 band 窗口；逐步骤 = 每步 1 张整图（活动集 2 张）。`MaxWorkingBytes` 用前者估算并在执行前抛 `InvalidOperationException`（消息含预算与估算值），估算不是测量。窗口按 worker 租、按「全局最大 windowRows」租（band 0 更短），kernel 在 worker 抛时输出与窗口都在 `finally` 释放 |
-| 仍未做 | 批处理并发（`MaxConcurrentImages` / `ImageBatchRunner` 没有调用方，未引入）；几何算子进同尺寸 Plan（`Add` 仍拒绝）；几何已作为 recipe 一等步骤由编译器切段（2026-11-26）；Rgba16/Rgba32F 的 LUT 折叠；融合段的 SIMD；`IImageOp` 已由 `ImageOp` 实现（2026-11-26），`PlanStep` 引用算子定义而不是复制字段；契约内部的 footprint 仍只由编译器消费，带泵/区域执行器继续用 `HaloX/HaloY`。**halo 必须等于算子真实支撑**：给小时融合与逐步骤本来就会给出不同字节，这不是等价性测试的覆盖范围 |
+| 仍未做 | 批处理并发（`MaxConcurrentImages` / `ImageBatchRunner` 没有调用方，未引入）；几何算子进同尺寸 Plan（`Add` 仍拒绝）；几何已作为 recipe 一等步骤由编译器切段（2026-11-26）；Rgba16/Rgba32F 的 LUT 折叠；融合段的 SIMD；`IImageOp` 已于 2026-11-26 退役（全仓无消费者），`ImageOp` 是唯一算子定义，`PlanStep` 引用它而不是复制字段；契约内部的 footprint 仍只由编译器消费，带泵/区域执行器继续用 `HaloX/HaloY`。**halo 必须等于算子真实支撑**：给小时融合与逐步骤本来就会给出不同字节，这不是等价性测试的覆盖范围 |
 | ✅ 已判定（未达标） | 「点算子融合后分配 = 0」（M2 出口条件）：2026-11-15 在融合路径上重测，稳态仍 ≈4.3 KiB/op（`AddPointLut` LUT 折叠、§1.3 字面尺）/ ≈6.0 KiB/op（进程级），**未达标但已出数**。见 §「M2『点算子融合后分配』重测与判定」 |
 
 ## M11 高级照片算法 I（完成，2026-11-14）
@@ -1289,14 +1289,16 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   带 `Region` 的转码仍走 `RegionExecutor`、没有编译计划可解释；
   `Image.Apply/ApplyWithOptions/ProcessRegion` 已统一到 Compiler（区域经 `CompiledPlanExecutor.ExecuteRegion`），
   `ProcessTo` 与 `ResizeRegion` 仍走旧 `ProcessingPlan`/行泵路径。
-- **P0 契约收尾（部分完成，2026-11-26）**：`OperatorContract` 已覆盖所有算子步；`ContractConformanceTests` 逐工厂校验
-  格式、footprint、halo、pass、分区与 workspace，代表八算子中的 Invert/GaussianBlur/Pixelate/Equalize/Noise 在列，
-  Composite/Blend 在 `CompositeStepTests`。审查中发现并修复了两处真实语义偏差：Pixelate 与
-  Composite/Blend/DrawImage 实际会重算 alpha，却声明 `AlphaPolicy.Preserve`；现在声明 `Recomputes`，并由
-  `RepresentativeSemanticsTests` 用像素行为（2×2 块 alpha 平均）守护，不是只改一个枚举值。**仍未完成**：几何步
-  （Warp/SeamCarve/Resize/Crop/Pad/Flip）只有 `GeometryDescriptor`，没有 `ExecutionRequirements`/`PassModel`/
-  `PixelSemantics`/`WorkspaceModel`；`IImageOp` 仍是死接口（仅 `ImageOp` 实现，全仓无消费），`MapSourceRect` 不在执行
-  链路上。下一步应把几何描述符提升为契约、退役 `IImageOp`，而不是重写 Compiler。
+- **P0 契约收尾（模型完成，代表算子已核验；2026-11-26）**：`OperatorContract` 覆盖所有算子步；
+  `ContractConformanceTests` 逐工厂校验格式、footprint、halo、pass、分区与 workspace，代表八算子中的
+  Invert/GaussianBlur/Pixelate/Equalize/Noise 在列，Composite/Blend 在 `CompositeStepTests`。审查中发现并修复了
+  两处真实语义偏差：Pixelate 与 Composite/Blend/DrawImage 实际会重算 alpha，却声明 `AlphaPolicy.Preserve`；现在声明
+  `Recomputes`，并由 `RepresentativeSemanticsTests` 用像素行为（2×2 块 alpha 平均）守护。几何步现在也使用同一套
+  词表：`GeometryDescriptor` 带 `PassModel`/`StateScope`/`ExecutionOrder`/`Determinism`/`AlphaPolicy`/`WorkspaceModel`，
+  编译器据此做流式分类、解释和工作空间报告（SeamCarve 声明为 `WholeFrameAlgorithm` + `PerImage` + workspace
+  `Undeclared`，计划因此正确标为下界）；`IImageOp` 已退役，`ImageOp` 是唯一算子定义。**仍未逐一核验**：纯置换/画布
+  类几何（Tile、ResizeCanvas、RoundCorners、Trim、EntropyCrop）沿用默认 `Preserve`/`Single`，尚无像素级语义测试；
+  几何的 `PixelDomain` 也没有声明（目前只有 alpha 策略）。
 - **Tile 后端（P5 部分完成）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。公开入口：
   `Image.ProcessTiles` 的缓冲与 Sink 两个重载、`Image.ProcessTilesTo(IRegionSource, Stream, …)`（编码器端 sink：

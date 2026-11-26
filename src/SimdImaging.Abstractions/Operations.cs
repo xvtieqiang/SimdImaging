@@ -1,5 +1,3 @@
-using Sdcb.SimdCodecs.Abstractions;
-
 namespace SimdImaging.Abstractions;
 
 /// <summary>What an operator needs from its surroundings: this is what lets the executor decide whether it can
@@ -9,7 +7,7 @@ public enum OpCategory : byte
     /// <summary>Each output pixel depends on the same input pixel only.</summary>
     Point,
 
-    /// <summary>Each output pixel reads a rectangle of <see cref="IImageOp.HaloX"/> × <see cref="IImageOp.HaloY"/>
+    /// <summary>Each output pixel reads a rectangle of <c>HaloX</c> × <c>HaloY</c>
     /// around it (convolution, median, morphology).</summary>
     Neighborhood,
 
@@ -45,33 +43,4 @@ public enum WorkingFormatMask : byte
 
     /// <summary>All three.</summary>
     All = Rgba8 | Rgba16 | Rgba32F,
-}
-
-/// <summary>
-/// One image operation. Implementations are immutable descriptors: they hold parameters, never buffers, and
-/// expose enough geometry for a planner to fuse, tile and parallelize them without knowing what they do.
-/// </summary>
-public interface IImageOp
-{
-    /// <summary>A stable name, used in <c>PlanReport</c> and test names (<c>Resize</c>, <c>GaussianBlur</c>).</summary>
-    string Name { get; }
-
-    /// <summary>What the executor may assume about the operator's data flow.</summary>
-    OpCategory Category { get; }
-
-    /// <summary>The working formats this operator implements. Asking for another must throw
-    /// <see cref="NotSupportedException"/> at plan time, not fall back to another depth.</summary>
-    WorkingFormatMask Formats { get; }
-
-    /// <summary>Columns of source read on each side of a destination pixel; 0 for <see cref="OpCategory.Point"/>.</summary>
-    int HaloX { get; }
-
-    /// <summary>Rows of source read on each side of a destination pixel; 0 for <see cref="OpCategory.Point"/>.</summary>
-    int HaloY { get; }
-
-    /// <summary>
-    /// The source rectangle a destination rectangle reads. Must include the halo, so a tiled executor can read
-    /// exactly one region per output tile. Returns <paramref name="destination"/> for point-wise operators.
-    /// </summary>
-    PixelRect MapSourceRect(PixelRect destination, int sourceWidth, int sourceHeight);
 }

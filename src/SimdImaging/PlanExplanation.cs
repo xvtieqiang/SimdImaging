@@ -98,6 +98,9 @@ public enum PlanWorkspaceKind : byte
 
     /// <summary>A format-changing step's output frame.</summary>
     FormatStep = 9,
+
+    /// <summary>Scratch a geometry step declares (seam solving, for example).</summary>
+    GeometryScratch = 10,
 }
 
 /// <summary>One input port's source rectangle in a <see cref="PlanStepExplanation"/>.</summary>
@@ -135,7 +138,7 @@ public sealed record PlanSectionExplanation(PlanSectionKind Kind, int RecipeInde
 
 /// <summary>The execution requirements a step declared, exposed so a caller can see why a backend was chosen.</summary>
 public sealed record PlanStepRequirements(Partitioning Partitioning, PassModel Pass, StateScope State,
-    ExecutionOrder Order, Determinism Determinism);
+    ExecutionOrder Order, Determinism Determinism, AlphaPolicy Alpha);
 
 /// <summary>
 /// What the compiler derived for one step: its output geometry, the source rectangles each input port reads, and
@@ -192,6 +195,7 @@ public sealed record PlanExplanation(PlanBackend Backend, PlanRefusals Refusals,
                     WorkspaceTermKind.ResizeStaging => PlanWorkspaceKind.ResizeStaging,
                     WorkspaceTermKind.ResizeBatch => PlanWorkspaceKind.ResizeBatch,
                     WorkspaceTermKind.ResizeWorkerRows => PlanWorkspaceKind.ResizeWorkerRows,
+                    WorkspaceTermKind.GeometryScratch => PlanWorkspaceKind.GeometryScratch,
                     _ => PlanWorkspaceKind.FormatStep,
                 }, term.Bytes, term.Note))
                 .ToArray(),
@@ -211,7 +215,8 @@ public sealed record PlanExplanation(PlanBackend Backend, PlanRefusals Refusals,
                 info.SourceRegions.Select(port => new PlanSourceRegion(port.Port, port.Region)).ToArray(),
                 info.SourceArea, info.OutputArea,
                 new PlanStepRequirements(info.Requirements.Partitioning, info.Requirements.Pass,
-                    info.Requirements.State, info.Requirements.Order, info.Requirements.Determinism)))
+                    info.Requirements.State, info.Requirements.Order, info.Requirements.Determinism,
+                    info.Requirements.Alpha)))
             .ToArray(),
         compiled.Explanation.ToArray());
 }

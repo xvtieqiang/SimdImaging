@@ -22,7 +22,8 @@ internal static class GeometrySteps
             (source, pool, executeOptions) => new ResizeRowSource(source, width, height, resampler,
                 executeOptions ?? execute), Kind: GeometryKind.Resize, Resampler: resampler,
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
-                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)));
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)),
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor Resize(int width, int height, ResizeMode mode, Anchor anchor,
         Resampler resampler, RgbaColor background)
@@ -33,7 +34,7 @@ internal static class GeometrySteps
             : null;
         return new($"resize {width}x{height} {mode}", new FixedSizeRule(width, height),
             (view, pool) => Canvas.Resize(view, width, height, resampler, mode, anchor, background, pool),
-            MapRegions: map);
+            MapRegions: map, Alpha: AlphaPolicy.Recomputes);
     }
 
     internal static GeometryDescriptor Crop(PixelRect region) =>
@@ -122,7 +123,9 @@ internal static class GeometrySteps
                     ? (Math.Max(1, width - count), height)
                     : (width, Math.Max(1, height - count)),
                 $"remove {count} seams"),
-            (view, pool) => SeamCarving.RemoveSeams(view, axis, count, pool));
+            (view, pool) => SeamCarving.RemoveSeams(view, axis, count, pool),
+            Pass: PassModel.WholeFrameAlgorithm, State: StateScope.PerImage, Order: ExecutionOrder.SourceOrder,
+            Determinism: Determinism.OrderDependent, Workspace: WorkspaceModel.Undeclared);
 
     internal static GeometryDescriptor InsertSeams(SeamAxis axis, int count) =>
         new($"insert {count} seams", new RelativeRule(
@@ -130,11 +133,15 @@ internal static class GeometrySteps
                     ? (width + count, height)
                     : (width, height + count),
                 $"insert {count} seams"),
-            (view, pool) => SeamCarving.InsertSeams(view, axis, count, pool));
+            (view, pool) => SeamCarving.InsertSeams(view, axis, count, pool),
+            Pass: PassModel.WholeFrameAlgorithm, State: StateScope.PerImage, Order: ExecutionOrder.SourceOrder,
+            Determinism: Determinism.OrderDependent, Workspace: WorkspaceModel.Undeclared);
 
     internal static GeometryDescriptor SeamCarve(int width, int height) =>
         new($"carve {width}x{height}", new FixedSizeRule(width, height),
-            (view, pool) => SeamCarving.CarveTo(view, width, height, pool));
+            (view, pool) => SeamCarving.CarveTo(view, width, height, pool),
+            Pass: PassModel.WholeFrameAlgorithm, State: StateScope.PerImage, Order: ExecutionOrder.SourceOrder,
+            Determinism: Determinism.OrderDependent, Workspace: WorkspaceModel.Undeclared);
 
     internal static GeometryDescriptor Pad(int margin, RgbaColor background) =>
         Pad(margin, margin, margin, margin, background);
@@ -154,7 +161,8 @@ internal static class GeometrySteps
         new($"affine {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Mapping.Transform(view, forward, width, height, background, pool),
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) =>
-                MapAffine(forward, destination, sourceWidth, sourceHeight, support: 1));
+                MapAffine(forward, destination, sourceWidth, sourceHeight, support: 1),
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor AffineWithOptions(AffineMatrix forward, int width, int height,
         Resampler resampler, SampleOptions options, RgbaColor background) =>
@@ -164,24 +172,28 @@ internal static class GeometrySteps
             MapRegions: options.AaMode == SampleAaMode.Elliptical
                 ? null
                 : (destination, sourceWidth, sourceHeight, _, _) =>
-                    MapAffine(forward, destination, sourceWidth, sourceHeight, Support(resampler)));
+                    MapAffine(forward, destination, sourceWidth, sourceHeight, Support(resampler)),
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor Warp(int width, int height, PixelWarp map, Resampler resampler,
         RgbaColor background) =>
         new($"warp {width}x{height}", new FixedSizeRule(width, height),
-            (view, pool) => Sampling.Warp(view, width, height, map, resampler, background, pool));
+            (view, pool) => Sampling.Warp(view, width, height, map, resampler, background, pool),
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor WarpWithOptions(int width, int height, PixelWarp map, Resampler resampler,
         SampleOptions options, RgbaColor background) =>
         new($"warp {width}x{height}", new FixedSizeRule(width, height),
-            (view, pool) => Sampling.WarpWithOptions(view, width, height, map, resampler, options, background, pool));
+            (view, pool) => Sampling.WarpWithOptions(view, width, height, map, resampler, options, background, pool),
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor Perspective(ReadOnlySpan<float> homography, int width, int height,
         RgbaColor background)
     {
         var matrix = homography.ToArray();
         return new($"perspective {width}x{height}", new FixedSizeRule(width, height),
-            (view, pool) => Mapping.Perspective(view, matrix, width, height, background, pool));
+            (view, pool) => Mapping.Perspective(view, matrix, width, height, background, pool),
+            Alpha: AlphaPolicy.Recomputes);
     }
 
     internal static GeometryDescriptor PerspectiveWithOptions(ReadOnlySpan<float> homography, int width,
@@ -190,7 +202,8 @@ internal static class GeometrySteps
         var matrix = homography.ToArray();
         return new($"perspective {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Mapping.PerspectiveWithOptions(view, matrix, width, height, resampler, options,
-                background, pool));
+                background, pool),
+            Alpha: AlphaPolicy.Recomputes);
     }
 
     internal static GeometryDescriptor ResizeWithOptions(int width, int height, Resampler resampler,
@@ -198,7 +211,8 @@ internal static class GeometrySteps
         new($"resize {width}x{height}", new FixedSizeRule(width, height),
             (view, pool) => Resample.ResizeWithOptions(view, width, height, resampler, options, background, pool),
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
-                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)));
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)),
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor ResizeToWidth(int width, Resampler resampler) =>
         new($"resize to width {width}", new RelativeRule(
@@ -208,7 +222,8 @@ internal static class GeometrySteps
                 Math.Max(1, (int)MathF.Round((float)view.Height * width / view.Width)), resampler,
                 ResizeMode.Stretch, Anchor.Centre, default, pool),
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
-                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)));
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)),
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor ResizeToHeight(int height, Resampler resampler) =>
         new($"resize to height {height}", new RelativeRule(
@@ -218,7 +233,8 @@ internal static class GeometrySteps
                 Math.Max(1, (int)MathF.Round((float)view.Width * height / view.Height)), height, resampler,
                 ResizeMode.Stretch, Anchor.Centre, default, pool),
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
-                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)));
+                ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight, Support(resampler)),
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor Thumbnail(int maxWidth, int maxHeight, Resampler resampler,
         float sharpenAmount) =>
@@ -241,7 +257,8 @@ internal static class GeometrySteps
             },
             MapRegions: (destination, sourceWidth, sourceHeight, destWidth, destHeight) =>
                 ScaleRegion(destination, sourceWidth, sourceHeight, destWidth, destHeight,
-                    Support(resampler) + 1));
+                    Support(resampler) + 1),
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor Rotate(float degrees, RgbaColor background) =>
         new($"rotate {degrees}", RotateRule(degrees),
@@ -254,7 +271,8 @@ internal static class GeometrySteps
             {
                 var (_, _, forward) = Image.RotationCanvas(sourceWidth, sourceHeight, degrees);
                 return MapAffine(forward, destination, sourceWidth, sourceHeight, support: 1);
-            });
+            },
+            Alpha: AlphaPolicy.Recomputes);
 
     internal static GeometryDescriptor RotateWithOptions(float degrees, Resampler resampler, SampleOptions options,
         RgbaColor background) =>
@@ -271,7 +289,8 @@ internal static class GeometrySteps
                 {
                     var (_, _, forward) = Image.RotationCanvas(sourceWidth, sourceHeight, degrees);
                     return MapAffine(forward, destination, sourceWidth, sourceHeight, Support(resampler));
-                });
+                },
+            Alpha: AlphaPolicy.Recomputes);
 
     private static RelativeRule RotateRule(float degrees) =>
         new((width, height) =>

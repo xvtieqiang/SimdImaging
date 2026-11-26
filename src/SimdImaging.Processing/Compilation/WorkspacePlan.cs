@@ -17,6 +17,7 @@ internal enum WorkspaceTermKind : byte
     ResizeBatch = 7,
     ResizeWorkerRows = 8,
     FormatStep = 9,
+    GeometryScratch = 10,
 }
 
 internal readonly record struct WorkspaceTerm(WorkspaceTermKind Kind, long Bytes, string Note);
@@ -94,12 +95,20 @@ internal static class WorkspacePlanner
         var widest = options.SourceFormat;
         var finalFormat = options.SourceFormat;
         var formatTerms = new List<WorkspaceTerm>();
+        var geometryUndeclared = 0;
+        var geometryScratch = 0L;
         foreach (var step in recipe.Steps)
         {
             if (step is GeometryStep geometry)
             {
                 if (geometry.Geometry.SizeKnown)
                     (width, height) = geometry.Geometry.Map(width, height);
+
+                var declared = geometry.Descriptor.WorkspaceModel;
+                if (!declared.IsDeclared)
+                    geometryUndeclared++;
+                else if (geometry.Geometry.SizeKnown && declared.Estimate is { } estimateGeometry)
+                    geometryScratch += estimateGeometry(width, height, height, options.SourceFormat);
                 continue;
             }
 
@@ -136,13 +145,16 @@ internal static class WorkspacePlanner
                 "whole-image operator scratch"));
         }
 
+        if (geometryScratch > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.GeometryScratch, geometryScratch, "geometry scratch"));
+
         if (sections.Any(section => section.Kind == CompiledSectionKind.Geometry))
         {
             unmanaged.Add(new UnmanagedTerm("geometry intermediates",
                 "a geometry step's reshape buffer is released before the next section and is not in MemoryEstimator"));
         }
 
-        return new WorkspacePlan(terms, unmanaged, estimate.UndeclaredSteps);
+        return new WorkspacePlan(terms, unmanaged, estimate.UndeclaredSteps + geometryUndeclared);
     }
 
     private static WorkspacePlan EstimateStream(PipelineRecipe recipe, IReadOnlyList<PlanStep> steps,
@@ -185,6 +197,12 @@ internal static class WorkspacePlanner
                 $"{perWorker} x {workers} workers"));
 
         AddResizeTerms(recipe, options, terms);
+
+        foreach (var step in recipe.Steps)
+        {
+            if (step is GeometryStep { Descriptor.WorkspaceModel.IsDeclared: false })
+                undeclared++;
+        }
 
         unmanaged.Add(new UnmanagedTerm("decoder and encoder rows",
             "the row reader and encoder own their buffers; ProcessReport says whether either streamed"));

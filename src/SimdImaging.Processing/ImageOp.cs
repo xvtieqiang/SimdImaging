@@ -23,7 +23,7 @@ namespace SimdImaging.Processing;
 /// reads it, instead of each keeping its own copy of the same five fields.
 /// </para>
 /// </remarks>
-public sealed class ImageOp : IImageOp
+public sealed class ImageOp
 {
     internal ImageOp(OperatorContract contract, KernelImplementations kernels)
     {
@@ -59,14 +59,6 @@ public sealed class ImageOp : IImageOp
 
     /// <summary>Rows read above and below the destination rectangle.</summary>
     public int HaloY => Contract.HaloY;
-
-    /// <summary>The working formats the operator supports. Read through <see cref="IImageOp"/>; a plan whose source
-    /// format is not in the mask is refused before it runs.</summary>
-    WorkingFormatMask IImageOp.Formats => Contract.Formats;
-
-    /// <summary>The source rectangle this operator must read to fill <paramref name="destination"/>.</summary>
-    PixelRect IImageOp.MapSourceRect(PixelRect destination, int sourceWidth, int sourceHeight) =>
-        Contract.Footprint.MapSourceRect(destination, sourceWidth, sourceHeight);
 
     /// <summary>
     /// The operator as "write these rows into that destination", when it has that form.

@@ -166,26 +166,6 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         return this;
     }
 
-    /// <summary>
-    /// Ends the current pass, runs a whole-image operator over its result, and starts a fresh pass on that. It is
-    /// what lets the pipeline call a view-to-buffer operator directly instead of calling back into the facade.
-    /// </summary>
-    private ImagePipeline Reshape(Func<PixelView, WorkingBuffer> reshape)
-    {
-        ObjectDisposedException.ThrowIf(_finished, this);
-
-        // A whole-image operator that is not a plan step is an explicit barrier: flush the recipe into an image,
-        // run the operator, and continue from its result. Geometry steps do not come through here any more — they
-        // stay in the recipe until ToImage, so the compiler decides the boundary.
-        var input = Flush();
-        var reshaped = input.ReplaceBuffer(reshape(input[0].Pixels.View));
-        if (!ReferenceEquals(input, _source))
-            input.Dispose();
-
-        _current = reshaped;
-        return this;
-    }
-
     /// <summary>The same operator as the facade, as a pipeline step.</summary>
     public ImagePipeline DistanceTransform(float threshold = 0.5f) =>
         Step(PlanOps.DistanceTransform(threshold));

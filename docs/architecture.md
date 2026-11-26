@@ -99,7 +99,7 @@ AGENTS.md 写明：JPEG 编解码、WebP 解码、PNG 编解码**已调到世界
   ├─ SimdImaging                    门面：Load / Save / Mutate / Pipe
   │    ├─ SimdImaging.Drawing       P1 起：形状 / 路径 / 渐变 / 抗锯齿
   │    ├─ SimdImaging.Processing    全部算子与 SIMD 内核（清单见 operators.md）
-  │    └─ SimdImaging.Abstractions  Image / WorkingBuffer / IImageOp
+  │    └─ SimdImaging.Abstractions  Image / WorkingBuffer / PixelView / IPixelPool
   │
   ├─ 边界：一次 PixelConverter + RasterImage
   │
@@ -124,7 +124,7 @@ src/
     Kernels/    # 向量内核 + 标量孪生
     Simd/       # 档位探测与分派
     Memory/     # 池、行带、块
-  SimdImaging.Abstractions/         # 契约：WorkingBuffer / PixelView / IPixelPool / IImageOp / 选项
+  SimdImaging.Abstractions/         # 基础类型：WorkingBuffer / PixelView / IPixelPool / 选项
   SimdImaging.Processing/           # M1 起：算子（Geometry/Color/Filters/Composite/Quantize/Analysis）
   SimdImaging.Drawing/              # P1 起：形状/路径；描边与路径填充 P2
   SimdImaging/                      # Image / ImageFrame / Load / Save / Encode（M0 已实现）
@@ -325,15 +325,14 @@ public enum OpCategory : byte
     Composite,      // 双输入
 }
 
-// 公开的只读视图。ImageOp 实现它；数值来自内部的 OperatorContract。
-public interface IImageOp
+// ImageOp 是唯一算子定义；它的只读属性转发到内部 OperatorContract，
+// 不再另设 IImageOp 接口（2026-11-26 移除：全仓无消费者）。
+public sealed class ImageOp
 {
-    string Name { get; }
-    OpCategory Category { get; }
-    WorkingFormatMask Formats { get; }        // 支持哪些工作格式
-    int HaloX { get; }                        // Point=0；Gaussian=r
-    int HaloY { get; }
-    PixelRect MapSourceRect(PixelRect dest, int srcWidth, int srcHeight);
+    public string Name { get; }
+    public OpCategory Category { get; }
+    public int HaloX { get; }
+    public int HaloY { get; }
 }
 ```
 
@@ -619,7 +618,7 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 
 | 阶段 | 能力 |
 |---|---|
-| v1（M1–M3） | 整图执行。`MapSourceRect` 曾只在 `IImageOp` 上声明、全仓零实现；2026-11-26 起由 `ImageOp` 的 footprint 真正提供（identity / halo / whole-source / block-aligned），但执行器仍只读 `HaloX/HaloY`，footprint 的消费从 P1 编译器开始 |
+| v1（M1–M3） | 整图执行。`MapSourceRect` 曾只在已删除的 `IImageOp` 上声明、全仓零实现；2026-11-26 起由 `IInputFootprint.MapSourceRegions` 真正提供（identity / halo / whole-source / block-aligned），编译器据此推导区域；带泵执行器仍只读 `HaloX/HaloY` |
 | P1（M4） | 行带流式：只对 `Neighborhood` / `Separable` 打开，halo = 核半径；内存从 O(H) 降到 O(band + halo) |
 | P2 · 已交付一半（M17） | **矩形执行**：任意源矩形 → 窗口 → `RunWindow` → 内圈，见 §6.6。源只有 TIFF 段级实现 |
 | P2 · 未做 | `Geometric`（尺寸变化）与 `Global` 两遍（先统计后处理），仍受 `MaxWorkingBytes` 约束 |
@@ -630,10 +629,13 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 
 `PipelineRecipe` 是不可变的步骤表：`OperatorStep` 与 `GeometryStep` 并列，几何步带两种执行形式（`Reshape` 与可选的 `Wrap`）。`PipelineCompiler.Compile(recipe, CompileOptions)` 只做判定、不执行，输出 `CompiledExecutionPlan`：
 
-- **格式**：任一步的 `Formats` 不覆盖源格式 → `NotSupportedException`，消息带步骤名（`IImageOp.Formats` 第一次有消费者）。
+- **格式**：任一步的 `Formats` 不覆盖源格式 → `NotSupportedException`，消息带步骤名（`OperatorContract.Formats` 的消费者）。
 - **分段**：算子连续段与几何步各自成 `CompiledSection`；算子段喂给现有 `ProcessingPlan`，几何段喂给现有几何调用。
 - **融合**：与 `ProcessingPlan` 共用 `FusionDecision.ShouldFuse`（同一条规则、同一处代码）。
-- **后端**：Tile 请求 → `TileRefused`（首个真实阻塞：无区域写 Sink / 块对齐 / Global / 无 Tile 内核）；Region 请求且源有 `RandomRegion`、无几何 → Region；全部算子段可流、几何步都有 `Wrap`、Sink 可写行 → Stream；否则 Frame。拒绝原因复用 `StreamRefusal` / `RegionRefusal`，不新增平行词汇。
+- **几何契约**：`GeometryDescriptor` 与算子共享同一套要求词表（`PassModel` / `StateScope` / `ExecutionOrder` /
+  `Determinism` / `AlphaPolicy` / `WorkspaceModel`）；`GeometryStep.CanWrap` 由 `Requirements.Partition` 推出，
+  `PerImage` 状态或 `SourceOrder` 会否决 `Wrap`；未声明 workspace 的几何步计入计划下界。
+- **后端**：Tile 请求 → `TileRefused`（首个真实阻塞：无区域写 Sink / 块对齐 / Global / 无 Tile 内核）；Region 请求且源有 `RandomRegion`、无几何 → Region；全部算子段可流、几何步的 `Requirements.Partition == RowBands`、Sink 可写行 → Stream；否则 Frame。拒绝原因复用 `StreamRefusal` / `RegionRefusal`，不新增平行词汇。
 - **解释**：每个决定一行 `Explanation`，测试直接断言这些行。
 - **Workspace**：`WorkspacePlan` 汇总 `Source` / `Destination` / `Window` / `PerWorker` / `WholeImage` / `Resize*`
   各项，并列出未纳管项（权重表、FloatScratch 常驻、像素池保留、编解码器缓冲）。Frame 项来自 `MemoryEstimator`，
@@ -1099,7 +1101,7 @@ sourcePeak   ≈ 一个段缓冲（复用）
 - `ProcessingPlan.Add` 第 191 行拒绝 `Geometric`；`PlanOps` 没有任何几何工厂。
 - `Resize.cs:219` 用 `source.Width/Height` 建 `WeightTable`；`Resize.cs:402/412` 以 view 坐标索引与钳制；
   行号是绝对目标行（`:353`、`:362`），没有原点参数。
-- `IImageOp.MapSourceRect` 在 2026-11-26 前全仓零实现；现在由 `ImageOp` 的 footprint 提供（见 §5.4），
+- 已删除的 `IImageOp.MapSourceRect` 在移除前全仓零实现；现在由 `IInputFootprint.MapSourceRegions` 提供（见 §5.4），
   但带泵与区域执行器仍只用 `HaloX/HaloY`——footprint 的消费者是 P1 编译器。
 - `Resize` 的并行度来自目标行带（`RowParallel.ForBands`），不是行内并行——这决定了「顺序喂料」不能直接复用它的并行结构。
 
