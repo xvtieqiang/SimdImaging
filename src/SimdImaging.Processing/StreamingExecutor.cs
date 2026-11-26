@@ -94,7 +94,8 @@ internal static class StreamingExecutor
                 var requirements = step.Definition.Contract.Requirements;
                 if (requirements.Partition != Partitioning.RowBands ||
                     requirements.State is not StateScope.None || requirements.Order is not ExecutionOrder.Any ||
-                    requirements.Threading == ThreadSafety.SingleThread)
+                    requirements.Threading == ThreadSafety.SingleThread ||
+                    requirements.Determinism != Determinism.CoordinateDeterministic)
                     refusal = StreamRefusal.StatefulStep;
             }
 
