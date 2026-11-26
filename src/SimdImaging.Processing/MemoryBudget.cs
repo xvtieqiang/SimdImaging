@@ -169,26 +169,37 @@ public static class MemoryEstimator
         var undeclared = 0;
         foreach (var step in steps)
         {
-            if (step.Scratch is not { } scratch)
+            var workspace = step.Definition.Contract.Workspace;
+            if (!workspace.IsDeclared)
             {
                 undeclared++;
                 continue;
             }
 
-            // The declared scope is part of the contract, not a hint: a step that says its scratch is held once
-            // for the whole image must not be multiplied by the worker count even if its category is Point.
-            var isWholeImage = step.Definition.Contract.Workspace.IsSingleCopy(
-                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage);
-            if (isWholeImage)
+            var wholeImageInvocation =
+                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage;
+            var rows = wholeImageInvocation
+                ? height
+                : steps.Count > 1 && !(allowFusion && FusionPlanner.IsBandable(step))
+                    ? height
+                    : Math.Min(height, bandRows + (2 * step.HaloY));
+
+            // The partition contract says how often the kernel is called; WorkspaceModel says which of its
+            // allocations are per worker, whole-image, or per call. A Global kernel can still allocate per worker
+            // internally, so Category must not silently turn PerWorker into a single copy.
+            if (workspace.HasWholeImageEstimate ||
+                (wholeImageInvocation && workspace.PerCallEstimate is not null))
             {
-                wholeImage = Math.Max(wholeImage, scratch(width, height, height, format));
-                continue;
+                wholeImage = Math.Max(wholeImage,
+                    workspace.EstimateWholeImage(width, height, format));
             }
 
-            var rows = steps.Count > 1 && !(allowFusion && FusionPlanner.IsBandable(step))
-                ? height
-                : Math.Min(height, bandRows + (2 * step.HaloY));
-            perWorker = Math.Max(perWorker, scratch(width, height, rows, format));
+            if (workspace.HasPerWorkerEstimate ||
+                (!wholeImageInvocation && workspace.PerCallEstimate is not null))
+            {
+                perWorker = Math.Max(perWorker,
+                    workspace.EstimatePerWorker(width, height, rows, format));
+            }
         }
 
         // The caller holds the source; the executor holds `rented`. Everything beyond the destination is
