@@ -26,16 +26,22 @@ public sealed partial class Image
         ExecuteOptions? options = null, IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(plan);
         var execute = options ?? new ExecuteOptions();
-        // This overload rents the whole frame, so it reserves it before the rent: TileExecutor reserves the one
-        // tile it hands to the per-rectangle work, and the region executor counts only its windows, so nothing is
-        // charged twice and a refused reservation leaves nothing allocated.
+        // Compile and validate before renting the full-frame destination. Compilation is where MaxWorkingBytes
+        // rejects a plan; doing it after this rent made that refusal too late.
+        var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
+        var targetBytes = TargetBuffer.Bytes(source.Width, source.Height, source.Format);
+        if (execute.MaxWorkingBytes > 0 && targetBytes > execute.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"The tiled destination needs {targetBytes} bytes, above ExecuteOptions.MaxWorkingBytes = {execute.MaxWorkingBytes}.");
         using var targetLease = TargetBuffer.Reserve(execute, source.Width, source.Height, source.Format,
             "tiled destination");
         var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         try
         {
-            ProcessTiles(source, new BufferRegionSink(destination), plan, tileWidth, tileHeight, execute, pool);
+            CompiledPlanExecutor.ExecuteTiles(compiled, source, new BufferRegionSink(destination), tileWidth,
+                tileHeight, execute, pool);
             return destination;
         }
         catch
@@ -136,6 +142,10 @@ public sealed partial class Image
     private static CompiledExecutionPlan CompileTiles(IRegionSource source, ProcessingPlan plan, int tileWidth,
         int tileHeight, ExecuteOptions execute)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tileWidth);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tileHeight);
+        tileWidth = Math.Min(tileWidth, source.Width);
+        tileHeight = Math.Min(tileHeight, source.Height);
         var recipe = new PipelineRecipeBuilder();
         foreach (var step in plan.Steps)
             recipe.Append(step.Definition, step.Lut, step.Secondary);
