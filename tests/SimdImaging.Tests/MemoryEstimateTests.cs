@@ -465,11 +465,12 @@ public class MemoryEstimateTests : IDisposable
         estimate.HasEstimatedTerms.ShouldBeTrue();
         estimate.Workers.ShouldBe(4);
 
-        // A single neighbourhood step is still banded: ProcessingPlan.ExecuteWithOptions only checks the category,
-        // never the step count. The estimator used to assume otherwise and charge the operator for the whole
-        // image, which over-reports by the band ratio.
+        // The default fusion window is not the non-fused worker band height. With degree four the default
+        // stepwise policy creates four worker-sized bands; the adapter sees that band plus its two-sided halo.
         var bandRows = ProcessingPlan.DefaultBandRows;
-        var rows = Math.Min(1080, bandRows + (2 * 4));
+        var stepwiseRows = ProcessingPlan.ResolveStepwiseRows(1080, bandRows, 4,
+            useDefaultPolicy: true);
+        var rows = Math.Min(1080, stepwiseRows + (2 * 4));
         estimate.PerWorkerBytes.ShouldBe(RichardsonLucyOps.ScratchBytes(1920, rows, WorkingFormat.Rgba8));
 
         estimate.PeakBytes.ShouldBe(estimate.OutputBytes * 2 + (estimate.PerWorkerBytes * 4));
