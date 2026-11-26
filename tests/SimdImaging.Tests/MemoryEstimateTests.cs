@@ -299,7 +299,7 @@ public class MemoryEstimateTests : IDisposable
     {
         var singleThread = new ImageOp(
             OperatorContract.Create("single-worker-scratch", OpCategory.Neighborhood, WorkingFormatMask.All,
-                IdentityFootprint.Instance, WorkspaceModel.Of((_, _, _, _) => 2000),
+                IdentityFootprint.Instance, WorkspaceModel.Of((_, _, _, _) => 32000),
                 requirements: ExecutionRequirements.RowBands with { Threading = ThreadSafety.SingleThread }),
             new KernelImplementations((source, destination, rect, _) =>
             {
@@ -321,10 +321,12 @@ public class MemoryEstimateTests : IDisposable
         var estimate = MemoryEstimator.Estimate(32, 64, WorkingFormat.Rgba8, plan.Steps,
             bandRows: 64, allowFusion: false, degree: 4);
 
-        estimate.PerWorkerPeakBytes.ShouldBe(2000);
+        const long full = 32L * 64 * WorkingFormat.Rgba8.BytesPerPixel();
+        estimate.PerWorkerPeakBytes.ShouldBe(32000);
         estimate.WholeImageScratchBytes.ShouldBe(4000);
-        estimate.OperatorScratchPeakBytes.ShouldBe(4000);
-        estimate.OperatorScratchBytes.ShouldBe(4000);
+        estimate.OperatorScratchPeakBytes.ShouldBe(32000);
+        estimate.OperatorScratchBytes.ShouldBe(32000);
+        estimate.PeakBytes.ShouldBe(Math.Max((2 * full) + 32000, (3 * full) + 4000));
     }
     [Fact]
     public void PointAdapterWorkspace_IncludesItsMaterialisedBandResult()
