@@ -745,14 +745,17 @@ public sealed class ProcessingPlan
     /// <summary>
     /// Bands for an unfused segment: enough to keep every worker busy, no finer than a few rows each.
     /// </summary>
-    internal int StepwiseRowsFor(int height, int bandRows, int degree)
+    internal int StepwiseRowsFor(int height, int bandRows, int degree) =>
+        ResolveStepwiseRows(height, bandRows, degree, BandRows == DefaultBandRows);
+
+    internal static int ResolveStepwiseRows(int height, int bandRows, int degree, bool useDefaultPolicy)
     {
         // The explicit degree-one path emits the configured band height directly. Degree zero is different:
         // it uses the current default degree and follows the normal worker-sized split.
         if (degree == 1)
             return bandRows;
 
-        var bands = StepwiseBandCountFor(height, bandRows, degree, BandRows == DefaultBandRows);
+        var bands = StepwiseBandCountFor(height, bandRows, degree, useDefaultPolicy);
         return (height + bands - 1) / bands;
     }
 
