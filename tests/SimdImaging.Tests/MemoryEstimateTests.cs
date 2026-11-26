@@ -63,6 +63,23 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
+    public void StreamingResizeWorkspace_CapsWorkersToMaximumActiveBatchRows()
+    {
+        var workspace = ResizeWorkspace.Estimate(
+            sourceWidth: 8,
+            sourceHeight: 1024,
+            destWidth: 8,
+            destHeight: 1024,
+            tapsY: 300,
+            nearest: false,
+            format: WorkingFormat.Rgba8,
+            options: new ExecuteOptions { MaxDegreeOfParallelism = 1024 });
+
+        workspace.Workers.ShouldBe(ResizeWorkspace.MaxChunkRows);
+        workspace.WorkerTapBytes.ShouldBe((long)ResizeWorkspace.MaxChunkRows * 300
+            * (sizeof(int) + sizeof(float)));
+    }
+    [Fact]
     public void ResizeWorkspaceRefusal_HappensBeforeDestinationRent()
     {
         using var source = WorkingBuffer.Rent(64, 64, WorkingFormat.Rgba8);
