@@ -188,7 +188,10 @@ public static class GuidedFilterOps
 
         // Eight image planes per worker is what running bands in parallel costs: 17.7 MB each at 4K with
         // bandRows 128, so the worker count is capped by a byte budget rather than by core count.
-        var perWorkerBytes = (8L * capacity * sizeof(float)) + ((long)((radius * 2 + 1) * width) * sizeof(float));
+        // Each ProcessBands worker owns six decoded input/guide planes and six coefficient/work planes. Include
+        // the persistent row, prefix, ring and local decode rows when applying the aggregate scratch cap.
+        var fixedFloats = ((19L + (2L * radius)) * width) + 1;
+        var perWorkerBytes = ((12L * capacity) + fixedFloats) * sizeof(float);
         var workers = Math.Min(RowParallel.Degree, bandCount);
         if (workers > 1 && workers * perWorkerBytes > ParallelScratchBytes)
             workers = (int)Math.Max(1, ParallelScratchBytes / perWorkerBytes);
@@ -367,6 +370,28 @@ public static class GuidedFilterOps
             RowParallel.ForBands(bandCount, ProcessBands, workers, default);
 
         return destination;
+    }
+
+    /// <summary>
+    /// Workspace of the plan's cross-guided adapter. The adapter invokes this as one whole-image call but keeps
+    /// one band-sized set of 12 float planes, a ring and its row/prefix buffers alive. It uses one worker because
+    /// the plan adapter enters the nested-execution scope before calling this kernel.
+    /// </summary>
+    internal static long CrossGuidedPlanWorkspaceBytes(int width, int height, WorkingFormat format, int radius,
+        int bandRows)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bandRows);
+
+        var capacityRows = Math.Min(height, checked(bandRows + (4 * radius)));
+        var capacity = checked((long)capacityRows * width);
+        var fixedFloats = checked(((19L + (2L * radius)) * width) + 1);
+        var planesAndRows = checked((12L * capacity) + fixedFloats);
+        var scratchBytes = checked(planesAndRows * sizeof(float));
+        var returnedBufferBytes = checked((long)width * height * format.BytesPerPixel());
+        return checked(scratchBytes + returnedBufferBytes);
     }
 
     /// <summary>Bytes of working set the parallel band path may hold across all its workers.</summary>
