@@ -43,16 +43,19 @@ internal static class FusedExecutor
             {
                 // One window pair per WORKER (not per band): a worker's bands reuse its buffers.
                 var window = WorkingBuffer.Rent(width, maxWindowRows, source.Format, pool);
-                var next = WorkingBuffer.Rent(width, maxWindowRows, source.Format, pool);
+                WorkingBuffer? next = null;
                 try
                 {
+                    // The second rent can fail; keep the first rent inside the try so it is returned even when
+                    // the pair cannot be completed.
+                    next = WorkingBuffer.Rent(width, maxWindowRows, source.Format, pool);
                     for (var b = start; b < end; b++)
                         RunBand(source, output.View, steps, first, count, b, bandRows, haloTotal,
                             window.View, next.View);
                 }
                 finally
                 {
-                    next.Dispose();
+                    next?.Dispose();
                     window.Dispose();
                 }
             }, degree, cancellation);
