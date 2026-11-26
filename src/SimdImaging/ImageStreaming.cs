@@ -161,7 +161,7 @@ public sealed partial class Image
         int writtenRows;
         try
         {
-            writtenRows = Pipeline.Copy(chained, sink, cancellationToken);
+            writtenRows = Pipeline.Copy(chained, sink, cancellationToken, options.Execute);
         }
         finally
         {
