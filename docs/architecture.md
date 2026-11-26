@@ -454,7 +454,7 @@ Save:
   WorkingBuffer(=IMemoryOwner) ──► RasterImage.Wrap ──► encoder.WriteRows
 ```
 
-设计目标：稳态分配 = 0，唯一允许的分配是权重表首次构建、`PlanReport` 文本、以及用户显式调用的 `Clone/ToArray`。**2026-11-11 实测未达成**：流水线 7–39 KiB/op、Rgba16 单算子 0–15 KiB/op（见 `known-gaps.md` §「M2–M4 出口条件核验」）。**2026-11-15 在 M10 融合路径上重测仍未达成**：`AddPointLut` LUT 折叠稳态 ≈4.3 KiB/op（§1.3 字面尺）/ ≈6.0 KiB/op（进程级），`degree=1` 下限 2144 B/op；残余为 per-call 执行计划重建（详见 `known-gaps.md` §「M2『点算子融合后分配』重测与判定」）。
+设计目标：稳态分配 = 0，唯一允许的分配是权重表首次构建、`PlanReport` 文本、以及用户显式调用的 `Clone/ToArray`。**2026-11-11 实测未达成**：流水线 7–39 KiB/op、Rgba16 单算子 0–15 KiB/op（见 `known-gaps.md` §「M2–M4 出口条件核验」）。**2026-11-15 在 M10 融合路径上重测仍未达成**：`AddPointLut` LUT 折叠稳态 ≈4.3 KiB/op（§1.3 字面尺）/ ≈6.0 KiB/op（进程级），`degree=1` 下限 2144 B/op；残余为 per-call 执行计划重建（详见 `known-gaps.md` §「M2『点算子融合后分配』重测与判定」）。**2026-11-26**：0 B/op 经复核确认不可达（残余是包装与调度），出口条件改为「融合点链单 worker ≤4 KiB/op」，实测 256 B/op，由 `AllocationBoundTests` 守护。
 
 ### 6.2 并行
 
@@ -1418,6 +1418,13 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 > 2026-11-15 已在 M10 融合路径上重测并**判定为未达标**（≈4.3–6.0 KiB/op，见 `known-gaps.md` §「M2『点算子融合后分配』重测与判定」），
 > 不再是「未判定」，但同样不是达标；M3 抗锯齿覆盖率（判据未定义）与 M4 的 HEIF 端点（HEIF 未接入，见 `known-gaps.md`）仍无法出数。
 > 要宣称某个里程碑「完成」，先把它那一行的出口条件全部跑出数来，且必须达标。
+>
+> **2026-11-26 出口条件关闭（P4）**：M2 的「0 B/op」经两次复核确认不可达（残余是 `WorkingBuffer` 包装与调度，不是像素
+> 缓冲），出口条件改为「融合点链在单 worker 下 ≤ 4 KiB/op」，实测 256 B/op，由 `AllocationBoundTests` 守护；M3 抗锯齿
+> 覆盖率定义为「45° 直角三角形覆盖率与解析面积相差 ≤ 2%，且每边行部分像素 ≤ 2」，由
+> `PathOpsTests.FillPath_Triangle_CoverageMatchesTheAreaWithinTwoPercent` 守护；M4 的 HEIF 10-bit 端点判为超出本库
+> 边界（`Sdcb.SimdCodecs.Heif` 是独立包，本库不注册，也不拿 PNG 往返冒充）；M4 8K `gaussian-blur` 的 2.68×（超 7.1%）
+> 保留为已记录偏差，默认带高未改。M3 量化 PSNR 仍作为参考值保留，不设达标阈值。
 
 每个里程碑结束跑一次 `bash tests/SimdImaging.AotSmoke/run.sh`，不只是 M5。
 

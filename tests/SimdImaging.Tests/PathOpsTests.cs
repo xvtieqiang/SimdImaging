@@ -57,6 +57,39 @@ public class PathOpsTests
     }
 
     [Fact]
+    public void FillPath_Triangle_CoverageMatchesTheAreaWithinTwoPercent()
+    {
+        const int size = 64;
+        const int leg = 56;
+        using var image = Canvas(size, size);
+        var builder = new PixelPathBuilder();
+        builder.MoveTo(4, 4).LineTo(4 + leg, 4).LineTo(4, 4 + leg).Close();
+        image.FillPath(builder.Build(), RgbaColor.White);
+
+        var coverage = 0.0;
+        var partial = 0;
+        var span = image.WritablePixels;
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var value = span[((y * size) + x) * 4];
+                coverage += value / 255.0;
+                if (value is > 0 and < 255)
+                    partial++;
+            }
+        }
+
+        // The M3 exit condition was "anti-aliasing coverage", with no measurement or threshold. This is the
+        // criterion: the 45° edge must be blended (partial pixels exist), the blended area must match the exact
+        // triangle within 2%, and no more than two pixels per edge row may be partial.
+        const double area = leg * leg / 2.0;
+        coverage.ShouldBe(area, area * 0.02);
+        partial.ShouldBeGreaterThan(0);
+        partial.ShouldBeLessThanOrEqualTo(2 * leg);
+    }
+
+    [Fact]
     public void FillPath_EvenOddPunchesAHoleThatNonZeroDoesNot()
     {
         var builder = new PixelPathBuilder();

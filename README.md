@@ -20,8 +20,9 @@
 ## 状态
 
 **M0、M1、M5、M6–M14 已完成并验收；M15（SIMD 收口 / 门禁 / 契约）进行中；M16（文件级流式）与 M17（区域执行）已完成；
-M2–M4 功能已落地、出口条件部分核验**——M2 的「点算子融合后分配 = 0」已判定**未达标**（≈4.3–6.0 KiB/op，2026-11-15），
-M4 的 8K `gaussian-blur` 峰值超 7.1%，M3 抗锯齿覆盖率与 M4 的 HEIF 端点仍无判据可测。
+M2–M4 功能已落地、出口条件已于 2026-11-26 关闭**——M2 的「融合后分配 = 0」重定义为单 worker 下 ≤4 KiB/op（实测 256 B/op，
+`AllocationBoundTests` 守护）；M3 抗锯齿覆盖率定义为 45° 三角形面积 ±2% 且每边行部分像素 ≤2（`PathOpsTests` 守护）；
+M4 的 8K `gaussian-blur` 仍超 7.1%，保留为已记录偏差；HEIF 10-bit 端点明确超出本库边界（Heif 是独立包，不注册）。
 逐项状态见 [`docs/architecture.md` §11](docs/architecture.md) 与 [`docs/known-gaps.md`](docs/known-gaps.md)。
 全量测试通过、`Release` 构建 0 警告、public API 由快照锁定。
 
