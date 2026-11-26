@@ -102,6 +102,30 @@ public sealed class BudgetEnforcementTests
     }
 
     [Fact]
+    public void TileBudget_CombinesTargetAndRegionWindows()
+    {
+        using var image = TestImages.Gradient(16, 16, WorkingFormat.Rgba8);
+        var source = new ViewRegionSource(image[0].Pixels.View);
+        var plan = new ProcessingPlan().Add(PlanOps.Invert());
+
+        // One 16x16 target tile (1024 bytes) and two 16x16 windows (2048 bytes) are resident together.
+        Should.Throw<InvalidOperationException>(() =>
+            Image.ProcessTiles(source, new DiscardSink(16, 16), plan, 16, 16,
+                new ExecuteOptions { MaxWorkingBytes = 2500, MaxDegreeOfParallelism = 1 }));
+    }
+
+    [Fact]
+    public void TileBudget_UsesTileFootprintInsteadOfWholeFrame()
+    {
+        using var image = TestImages.Gradient(512, 512, WorkingFormat.Rgba8);
+        var source = new ViewRegionSource(image[0].Pixels.View);
+        var plan = new ProcessingPlan().Add(PlanOps.Invert());
+
+        Image.ProcessTiles(source, new DiscardSink(512, 512), plan, 16, 16,
+            new ExecuteOptions { MaxWorkingBytes = 4096, MaxDegreeOfParallelism = 1 });
+    }
+
+    [Fact]
     public void WithinTheBudget_EverythingRuns()
     {
         using var image = TestImages.Gradient(32, 32, WorkingFormat.Rgba8);
