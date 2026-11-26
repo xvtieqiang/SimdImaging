@@ -190,6 +190,38 @@ public sealed class WorkspacePlanTests
     }
 
 
+
+    [Fact]
+    public void EmptyFramePlan_ReservesCopyDestinationAndHonorsTheLimit()
+    {
+        const int width = 32;
+        const int height = 24;
+        var bytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
+        var plan = PipelineCompiler.Compile(PipelineRecipe.Empty, FrameOptions(width, height) with
+        {
+            ObserveSteps = true,
+        });
+        plan.Backend.ShouldBe(ExecutionBackend.Frame);
+        plan.Workspace.BoundedBytes.ShouldBe(bytes);
+
+        using var source = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
+        var manager = new WorkspaceManager(bytes);
+        using var result = CompiledPlanExecutor.ExecuteFrame(plan, source[0].Pixels.View,
+            options: new ExecuteOptions { MaxWorkingBytes = bytes, Workspace = manager });
+
+        result.View.Width.ShouldBe(width);
+        result.View.Height.ShouldBe(height);
+        manager.PeakBytes.ShouldBe(bytes);
+        manager.OutstandingBytes.ShouldBe(0);
+
+        var refusedManager = new WorkspaceManager();
+        Should.Throw<InvalidOperationException>(() => CompiledPlanExecutor.ExecuteFrame(plan,
+            source[0].Pixels.View,
+            options: new ExecuteOptions { MaxWorkingBytes = bytes - 1, Workspace = refusedManager }));
+        refusedManager.PeakBytes.ShouldBe(0);
+        refusedManager.OutstandingBytes.ShouldBe(0);
+    }
+
     [Fact]
     public void RegionAndTileScratch_UseTheLargestSequentialOperatorPeak()
     {
