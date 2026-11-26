@@ -330,7 +330,7 @@ internal static class WorkspacePlanner
         var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
         var tileBytes = TargetBuffer.Bytes(width, height, options.SourceFormat);
         var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
-        var workers = Math.Max(1, degree > 0 ? degree : RowParallel.Degree);
+        var workers = RowParallel.ResolveWorkers(windowWidth, windowHeight, degree);
         terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, tileBytes, "one resident destination tile"));
         if (windowBytes > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.Window, windowBytes,
@@ -353,7 +353,6 @@ internal static class WorkspacePlanner
         IReadOnlyList<SectionState> states, CompileOptions options, List<WorkspaceTerm> terms,
         List<UnmanagedTerm> unmanaged)
     {
-        var workers = RowParallel.ResolveWorkers(windowWidth, windowHeight, options.Execute.MaxDegreeOfParallelism);
         var bandRowsOption = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
 
         // Every operator run has its own width, height and format; a plan after a resize must be estimated at the
@@ -416,8 +415,13 @@ internal static class WorkspacePlanner
                     scratch(state.InputWidth, state.InputHeight, windowRows, state.InputFormat));
             }
 
-            perWorker += sectionPerWorker;
-            wholeImage += sectionWholeImage;
+            // Each row-source stage has its own dimensions and its own persistent reservation. Its
+            // per-worker scratch is therefore multiplied by the workers that stage can actually run,
+            // not by one guessed worker count shared by every stage in the chain.
+            var sectionWorkers = RowParallel.ResolveWorkers(state.InputWidth, windowRows,
+                options.Execute.MaxDegreeOfParallelism);
+            perWorker = checked(perWorker + checked(sectionPerWorker * sectionWorkers));
+            wholeImage = checked(wholeImage + sectionWholeImage);
         }
 
         if (windowBytes == 0)
@@ -433,8 +437,8 @@ internal static class WorkspacePlanner
 
         if (perWorker > 0)
         {
-            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, perWorker * workers,
-                $"{perWorker} x {workers} workers across {sections} sections"));
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.PerWorkerScratch, perWorker,
+                $"summed per-stage worker scratch across {sections} sections"));
         }
 
         if (wholeImage > 0)
