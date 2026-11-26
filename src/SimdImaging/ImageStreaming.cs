@@ -148,6 +148,9 @@ public sealed partial class Image
         var chained = chain(sourceRows);
         try
         {
+            // Rent the final copy buffer as well as every row stage before the encoder can write its header.
+            using var transfer = Pipeline.RentTransferBuffer(chained, options.Execute);
+
             // The encoder session is opened only after both output geometry and the engine-managed working set have
             // been validated. Codec-owned encoder buffers remain outside WorkspaceManager.
             var encodeOptions = BuildEncodeOptions(format, save);
@@ -158,7 +161,7 @@ public sealed partial class Image
             var frame = session.AddFrame(outputWidth, outputHeight, pixelFormat, reader.Info.ColorEncoding,
                 metadata ?? ImageMetadata.Empty, null);
             var sink = new CodecRowSink(frame, cancellationToken);
-            var writtenRows = Pipeline.Copy(chained, sink, cancellationToken, options.Execute);
+            var writtenRows = Pipeline.Copy(chained, sink, cancellationToken, transfer);
 
             var report = new ProcessReport(ProcessMode.Streamed, StreamRefusal.None, reader.IsStreaming,
                 session.IsStreaming, outputWidth, outputHeight, writtenRows, metadata is not null);
