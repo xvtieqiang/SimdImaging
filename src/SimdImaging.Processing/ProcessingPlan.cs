@@ -549,14 +549,7 @@ public sealed class ProcessingPlan
         // or forbids concurrent calls; the stepwise path below honours those requirements explicitly.
         var fusionAllowed = options.AllowFusion && observe is null &&
             _steps.All(step =>
-            {
-                var requirements = step.Definition.Contract.Requirements;
-                return requirements.Partition == Partitioning.RowBands &&
-                    requirements.State == StateScope.None &&
-                    requirements.Order == ExecutionOrder.Any &&
-                    requirements.Threading == ThreadSafety.Concurrent &&
-                    requirements.Determinism == Determinism.CoordinateDeterministic;
-            });
+                !step.Definition.Contract.Requirements.RequiresWholeImageInvocation);
 
         // Decided before the shape is built, not per segment: the segments are cut for one execution mode, and a
         // segment of several steps has no step-by-step form — the else branch runs its first step only.
