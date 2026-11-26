@@ -87,6 +87,48 @@ public class ProcessingPlanLeakTests
     }
 
     [Fact]
+    public void Execute_FusedHaloChain_IsByteIdenticalAcrossBandHeightsAndWorkerCounts()
+    {
+        using var source = WorkingBuffer.Rent(Width, Height, WorkingFormat.Rgba8);
+        new Random(77123).NextBytes(source.View.Span);
+        var plan = new ProcessingPlan { BandRows = 2 }
+            .Add("vertical-a", OpCategory.Neighborhood, VerticalThreeForTest, haloY: 1)
+            .Add("vertical-b", OpCategory.Neighborhood, VerticalThreeForTest, haloY: 1);
+
+        using var reference = plan.ExecuteWithOptions(source.View,
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 1 });
+        var expected = reference.View.Span.ToArray();
+
+        foreach (var bandRows in new[] { 1, 2, 3, 5, 16 })
+        foreach (var degree in new[] { 1, 2, 4 })
+        {
+            using var actual = plan.ExecuteWithOptions(source.View,
+                new ExecuteOptions
+                {
+                    ForceFusion = true,
+                    BandRows = bandRows,
+                    MaxDegreeOfParallelism = degree,
+                });
+            actual.View.Span.ToArray().ShouldBe(expected,
+                $"fused halo chain changed with bandRows={bandRows}, degree={degree}");
+        }
+    }
+
+    private static void VerticalThreeForTest(PixelView source, PixelView destination,
+        PixelRect destinationRect, PixelRect _)
+    {
+        for (var y = destinationRect.Y; y < destinationRect.Y + destinationRect.Height; y++)
+        for (var x = destinationRect.X; x < destinationRect.X + destinationRect.Width; x++)
+        for (var channel = 0; channel < 4; channel++)
+        {
+            var sum = 0;
+            for (var offset = -1; offset <= 1; offset++)
+                sum += source.Row(Math.Clamp(y + offset, 0, source.Height - 1))[x * 4 + channel];
+            destination.Row(y)[x * 4 + channel] = (byte)(sum / 3);
+        }
+    }
+
+    [Fact]
     public void Execute_GlobalKernelThrows_ReleasesPendingAndPreviousFrames()
     {
         var pool = new CountingPool();
