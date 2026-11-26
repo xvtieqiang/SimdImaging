@@ -238,7 +238,6 @@ public sealed partial class Image
             _frame = frame;
             _bandCapacity = bandRows;
             _bandRows = Math.Min(bandRows, height);
-            _filled = new int[bandRows];
             _cancellation = cancellationToken;
 
             var bytes = (long)width * _bandRows * format.BytesPerPixel();
@@ -249,6 +248,7 @@ public sealed partial class Image
             _lease = options.Workspace?.Reserve(bytes, "tile encoder band");
             try
             {
+                _filled = new int[bandRows];
                 _band = WorkingBuffer.Rent(width, _bandRows, format, pool);
             }
             catch
