@@ -2007,6 +2007,20 @@ public static class FilterOps
         return checked(11L * width * sizeof(float));
     }
 
+    /// <summary>Per-worker row-ring scratch plus the generated kernel arrays used by GaussianSharpen's
+    /// two-dimensional convolution. The result window is counted by the Neighborhood adapter.</summary>
+    internal static long GaussianSharpenPlanScratchBytes(int width, int rows, int radius)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(radius);
+        var side = checked(2 * radius + 1);
+        var stride = checked((long)width * 4);
+        var workerRows = checked((long)(side + 2) * stride * sizeof(float));
+        var kernel = checked(((long)side + ((long)side * side)) * sizeof(float));
+        return checked(workerRows + kernel);
+    }
+
     /// <summary>Per-worker arrays used by the row-shift AverageOffsets family (MotionBlur/BokehBlur).</summary>
     internal static long AverageOffsetsPlanScratchBytes(int width, int maxDy, int offsetCount)
     {
@@ -2089,7 +2103,7 @@ public static class FilterOps
         var stride = checked((long)width * 4);
 
         if (radius == 1)
-            return checked(5L * stride * sizeof(float));
+            return checked(4L * stride * sizeof(float));
 
         if (format == WorkingFormat.Rgba8)
         {
