@@ -85,10 +85,29 @@ internal static class RowParallel
             _nesting--;
     }
 
-    internal static int Degree => _nesting > 0
-        ? 1
+    internal static int Degree => ResolveDegree(0);
+
+    /// <summary>One resolution rule for execution and every workspace estimate. Zero means inherit the active
+    /// pump/test override, then fall back to the machine; nested row loops always execute inline.</summary>
+    internal static int ResolveDegree(int degreeOverride) =>
+        _nesting > 0 ? 1
+        : degreeOverride > 0 ? degreeOverride
         : _pumpDegree > 0 ? _pumpDegree
-        : DegreeOverride > 0 ? DegreeOverride : Environment.ProcessorCount;
+        : DegreeOverride > 0 ? DegreeOverride
+        : Environment.ProcessorCount;
+
+    /// <summary>The number of workers <see cref="For"/> can actually launch for this geometry.</summary>
+    internal static int ResolveWorkers(int width, int height, int degreeOverride)
+    {
+        if (height <= 0 || width <= 0)
+            return 1;
+        var degree = ResolveDegree(degreeOverride);
+        var workersByRows = Math.Max(1, (height + Math.Max(1, RowsPerWorker) - 1) /
+            Math.Max(1, RowsPerWorker));
+        if (degree <= 1 || (long)width * height < MinWorkPixels)
+            return 1;
+        return Math.Min(degree, workersByRows);
+    }
 
     /// <summary>Same fixed-band rule for work already divided into coarse bands (blur / resize), where the
     /// band count is small but each band is expensive. Each worker owns its scratch for all its bands.</summary>
@@ -100,7 +119,7 @@ internal static class RowParallel
     /// because a skipped band would return a partially written image that looks successful.</summary>
     internal static void ForBands(int count, Action<int, int> body, int degreeOverride, CancellationToken cancellation)
     {
-        var degree = _nesting > 0 ? 1 : degreeOverride > 0 ? degreeOverride : Environment.ProcessorCount;
+        var degree = ResolveDegree(degreeOverride);
         if (degree <= 1 || count <= 1)
         {
             cancellation.ThrowIfCancellationRequested();
@@ -140,11 +159,9 @@ internal static class RowParallel
         // A loop entered from inside a band worker runs inline, so it says nothing about how many workers the image
         // was given — and writing 1 here would overwrite the count the band split just reported.
         var nested = _nesting > 0;
-        var degree = nested ? 1 : Math.Max(1, degreeOverride);
-        const long minWorkPixels = MinWorkPixels;
-        var perWorker = Math.Max(1, RowsPerWorker);
-        var workers = Math.Min(degree, Math.Max(1, (height + perWorker - 1) / perWorker));
-        if (degree <= 1 || (long)width * height < minWorkPixels || workers <= 1)
+        var degree = ResolveDegree(degreeOverride);
+        var workers = ResolveWorkers(width, height, degreeOverride);
+        if (degree <= 1 || workers <= 1)
         {
             cancellation.ThrowIfCancellationRequested();
             if (!nested)
