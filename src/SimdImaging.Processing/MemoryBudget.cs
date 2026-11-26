@@ -178,30 +178,24 @@ public static class MemoryEstimator
         // receives the band widened by its own halo and every later step's halo (Point adapters consume the
         // destination rows, so they only include later halos).
         var fusedSegments = allowFusion && steps.Count > 1 ? FusionPlanner.Segment(steps) : null;
+        var segmentCount = fusedSegments?.Count ?? steps.Count;
+        var segmentRentedBytes = new long[segmentCount];
+        var segmentScratchPeaks = new long[segmentCount];
         var rented = full;
-        if (steps.Count > 1)
+        for (var index = 0; index < segmentCount; index++)
         {
-            if (fusedSegments is null)
-            {
-                // Stepwise execution keeps the prior full-frame result alive while the next destination is filled.
-                rented = checked(2L * full);
-            }
-            else
-            {
-                for (var index = 0; index < fusedSegments.Count; index++)
-                {
-                    var (first, count) = fusedSegments[index];
-                    var segment = count > 1
-                        ? FusedExecutor.EstimateSegmentBytes(width, height, format, steps, first, count,
-                            bandRows, degree)
-                        : full;
+            var (first, count) = fusedSegments is null ? (index, 1) : fusedSegments[index];
+            var segment = count > 1
+                ? FusedExecutor.EstimateSegmentBytes(width, height, format, steps, first, count,
+                    bandRows, degree)
+                : full;
 
-                    if (index > 0)
-                        segment = checked(segment + full);
+            // Every segment after the first reads the preceding owned full-frame result while producing its own.
+            if (index > 0)
+                segment = checked(segment + full);
 
-                    rented = Math.Max(rented, segment);
-                }
-            }
+            segmentRentedBytes[index] = segment;
+            rented = Math.Max(rented, segment);
         }
 
         // Scratch is counted by the invocation shape, not by a blanket multiplier:
@@ -265,12 +259,18 @@ public static class MemoryEstimator
             // combine both scopes only within the same step before comparing its peak with other steps.
             var stepScratchPeak = checked(stepWholeImage + checked(stepPerWorker * stepWorkers));
             operatorScratchPeak = Math.Max(operatorScratchPeak, stepScratchPeak);
+            var segmentIndex = SegmentIndex(fusedSegments, stepIndex);
+            segmentScratchPeaks[segmentIndex] = Math.Max(segmentScratchPeaks[segmentIndex], stepScratchPeak);
         }
 
         // The caller holds the source; the executor holds `rented`. Everything beyond the destination is
         // scratch, and the operator terms sit on top of both.
         var planScratch = Math.Max(0, rented - full);
-        var peak = checked(full + rented + operatorScratchPeak);
+        // The segment holding the largest intermediate/window set need not be the segment holding the largest
+        // operator scratch. Compare complete simultaneous peaks per segment instead of adding two unrelated maxima.
+        var peak = segmentCount == 0 ? checked(2L * full) : 0L;
+        for (var index = 0; index < segmentCount; index++)
+            peak = Math.Max(peak, checked(full + segmentRentedBytes[index] + segmentScratchPeaks[index]));
         return new MemoryEstimate(full, full, planScratch, perWorker, workers, peak)
         {
             PerWorkerPeakBytes = perWorkerPeak,
@@ -307,6 +307,22 @@ public static class MemoryEstimator
         }
 
         return (int)Math.Min(height, (long)stepwiseRows + (2L * step.HaloY));
+    }
+
+    private static int SegmentIndex(IReadOnlyList<(int First, int Count)>? segments, int stepIndex)
+    {
+        if (segments is null)
+            return stepIndex;
+
+        for (var index = 0; index < segments.Count; index++)
+        {
+            var (first, count) = segments[index];
+            if (stepIndex >= first && stepIndex < first + count)
+                return index;
+        }
+
+        throw new ArgumentOutOfRangeException(nameof(stepIndex), stepIndex,
+            "The step is not part of the execution segmentation.");
     }
 
     private static bool IsFusedStep(IReadOnlyList<(int First, int Count)>? segments, int stepIndex)
