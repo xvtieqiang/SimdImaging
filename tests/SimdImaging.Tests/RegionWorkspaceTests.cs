@@ -62,7 +62,7 @@ public sealed class RegionWorkspaceTests
             File.WriteAllBytes(source, TiffFixture.Strips(64, 48, PixelFormat.Rgb24, pixels));
 
             const long targetBytes = 32L * 24 * 4;
-            var pool = new CountingPool();
+            var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
             var workspace = new WorkspaceManager(limitBytes: targetBytes + 1);
             var options = TranscodeOptions.Default with
             {
