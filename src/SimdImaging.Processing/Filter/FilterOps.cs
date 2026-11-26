@@ -2090,7 +2090,9 @@ public static class FilterOps
         var combineBytes = format == WorkingFormat.Rgba8 && (long)width * height >= TwoInputLutFloor
             ? 256L * 256
             : (long)width * 3 * 4 * sizeof(float);
-        return checked(highlightBytes + blurBytes + combineBytes);
+        // The highlight pass owns one float row per active worker before the blur starts.
+        var highlightRow = checked((long)width * 4 * sizeof(float));
+        return checked(highlightBytes + blurBytes + combineBytes + highlightRow);
     }
 
     /// <summary>Per-worker scratch for the plan adapter's median result. The returned band buffer is
