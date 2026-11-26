@@ -98,6 +98,10 @@ internal sealed class WorkspaceModel
 
     internal bool IsDeclared => Estimate is not null;
 
+    internal bool HasPerWorkerEstimate => PerWorkerEstimate is not null;
+
+    internal bool HasWholeImageEstimate => WholeImageEstimate is not null;
+
     /// <summary>Scratch owned once by a worker, including per-call scratch on a banded invocation.</summary>
     internal long EstimatePerWorker(int width, int height, int rows, WorkingFormat format) =>
         checked((PerWorkerEstimate?.Invoke(width, height, rows, format) ?? 0L)
