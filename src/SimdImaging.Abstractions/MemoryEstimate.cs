@@ -23,7 +23,7 @@ namespace SimdImaging.Abstractions;
 /// <param name="PlanScratchBytes">Band windows and intermediate buffers the executor itself rents.</param>
 /// <param name="PerWorkerBytes">The largest declared per-worker scratch among all steps, for one worker.</param>
 /// <param name="Workers">The largest worker count used by any step with per-worker scratch.</param>
-/// <param name="PeakBytes">The estimate: buffers plus the maximum simultaneous per-worker scratch peak and whole-image scratch.</param>
+/// <param name="PeakBytes">The estimate: buffers plus the maximum combined operator scratch held by one invocation.</param>
 public readonly record struct MemoryEstimate(
     long InputBytes,
     long OutputBytes,
@@ -39,9 +39,17 @@ public readonly record struct MemoryEstimate(
     public long PerWorkerPeakBytes { get; init; }
 
     /// <summary>
-    /// Scratch shared by one whole-image invocation. Held once, not once per worker.
+    /// The largest whole-image scratch declaration among operator calls. It may belong to a different step from
+    /// <see cref="PerWorkerPeakBytes"/>; these two component maxima are not necessarily additive.
     /// </summary>
     public long WholeImageScratchBytes { get; init; }
+
+    /// <summary>
+    /// Maximum combined operator scratch held by one operator invocation: its actual per-worker allocation peak
+    /// plus any whole-image allocation held by that same invocation. This is the value included in
+    /// <see cref="PeakBytes"/> and <see cref="OperatorScratchBytes"/>.
+    /// </summary>
+    public long OperatorScratchPeakBytes { get; init; }
 
     /// <summary>
     /// Steps that declared no scratch. While this is non-zero the estimate is a lower bound: the executor cannot
@@ -55,9 +63,13 @@ public readonly record struct MemoryEstimate(
     /// <summary>The buffers alone, without any operator scratch.</summary>
     public long BufferBytes => InputBytes + OutputBytes + PlanScratchBytes;
 
-    /// <summary>The operator scratch this estimate accounts for, banded and whole-image alike.</summary>
+    /// <summary>The maximum combined scratch held by one operator invocation.</summary>
     public long OperatorScratchBytes =>
-        (PerWorkerPeakBytes > 0 || PerWorkerBytes == 0
-            ? PerWorkerPeakBytes
-            : PerWorkerBytes * Math.Max(1, Workers)) + WholeImageScratchBytes;
+        OperatorScratchPeakBytes > 0 ||
+        (PerWorkerPeakBytes == 0 && PerWorkerBytes == 0 && WholeImageScratchBytes == 0)
+            ? OperatorScratchPeakBytes
+            : Math.Max(OperatorScratchPeakBytes,
+                (PerWorkerPeakBytes > 0 || PerWorkerBytes == 0
+                    ? PerWorkerPeakBytes
+                    : PerWorkerBytes * Math.Max(1, Workers)) + WholeImageScratchBytes);
 }
