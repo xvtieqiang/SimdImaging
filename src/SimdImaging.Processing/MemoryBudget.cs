@@ -114,8 +114,12 @@ public static class MemoryEstimator
     public static MemoryEstimate Estimate(PixelView source, ProcessingPlan plan, int degree = 0)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        var fusionAllowed = plan.Steps.All(step =>
+            !step.Definition.Contract.Requirements.RequiresWholeImageInvocation);
+        var fuse = fusionAllowed && FusionDecision.ShouldFuse(
+            plan.Steps, source.Width, source.Height, source.Format.BytesPerPixel());
         return Estimate(source.Width, source.Height, source.Format, plan.Steps, plan.BandRows,
-            allowFusion: true, degree);
+            allowFusion: fuse, degree);
     }
 
     /// <summary>Estimates a plan from geometry alone, without an image in hand.</summary>
