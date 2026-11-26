@@ -96,6 +96,21 @@ public class GuidedFilterTests
     }
 
     [Fact]
+    public void CrossGuidedWorkspace_SeparatesWorkerScratchFromReturnedFrame()
+    {
+        const int width = 96;
+        const int height = 96;
+        const int radius = 3;
+        const int bandRows = 32;
+        var op = PlanOps.GuidedBy(radius, bandRows: bandRows);
+        var scratch = GuidedFilterOps.CrossGuidedPlanPerWorkerScratchBytes(width, height, radius, bandRows);
+        var returned = GuidedFilterOps.CrossGuidedPlanReturnedBufferBytes(width, height, WorkingFormat.Rgba8);
+
+        op.Scratch!(width, height, height, WorkingFormat.Rgba8).ShouldBe(scratch + returned);
+        op.Contract.Workspace.HasPerWorkerEstimate.ShouldBeTrue();
+        op.Contract.Workspace.HasWholeImageEstimate.ShouldBeTrue();
+    }
+    [Fact]
     public void TheCrossFilterMatchesADirectWindowReference()
     {
         const int width = 7;
