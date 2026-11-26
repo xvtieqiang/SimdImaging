@@ -211,6 +211,7 @@ public static class MemoryEstimator
         long perWorker = 0;
         long perWorkerPeak = 0;
         long wholeImage = 0;
+        long operatorScratchPeak = 0;
         var undeclared = 0;
         for (var stepIndex = 0; stepIndex < steps.Count; stepIndex++)
         {
@@ -239,34 +240,42 @@ public static class MemoryEstimator
             // The partition contract says how often the kernel is called; WorkspaceModel says which of its
             // allocations are per worker, whole-image, or per call. A Global kernel can still allocate per worker
             // internally, so Category must not silently turn PerWorker into a single copy.
+            var stepWholeImage = 0L;
             if (workspace.HasWholeImageEstimate ||
                 (wholeImageInvocation && workspace.PerCallEstimate is not null))
             {
-                wholeImage = Math.Max(wholeImage,
-                    workspace.EstimateWholeImage(width, height, format));
+                stepWholeImage = workspace.EstimateWholeImage(width, height, format);
+                wholeImage = Math.Max(wholeImage, stepWholeImage);
             }
 
+            var stepPerWorker = 0L;
             if (workspace.HasPerWorkerEstimate ||
                 (!wholeImageInvocation && workspace.PerCallEstimate is not null))
             {
                 workers = Math.Max(workers, stepWorkers);
 
                 // Whole-image operators may run their own RowParallel loops. Their concurrency is independent
-                // of ProcessingPlan.BandRows, which only configures the outer row-band executor.
-                var stepScratch = workspace.EstimatePerWorker(width, height, rows, format);
-                perWorker = Math.Max(perWorker, stepScratch);
-                perWorkerPeak = Math.Max(perWorkerPeak, checked(stepScratch * stepWorkers));
+                // of the stepwise band split; WholeImage scratch itself is still counted once.
+                stepPerWorker = workspace.EstimatePerWorker(width, height, rows, format);
+                perWorker = Math.Max(perWorker, stepPerWorker);
+                perWorkerPeak = Math.Max(perWorkerPeak, checked(stepPerWorker * stepWorkers));
             }
+
+            // Steps execute sequentially. Their scratch peaks are alternatives, not simultaneous allocations;
+            // combine both scopes only within the same step before comparing its peak with other steps.
+            var stepScratchPeak = checked(stepWholeImage + checked(stepPerWorker * stepWorkers));
+            operatorScratchPeak = Math.Max(operatorScratchPeak, stepScratchPeak);
         }
 
         // The caller holds the source; the executor holds `rented`. Everything beyond the destination is
         // scratch, and the operator terms sit on top of both.
         var planScratch = Math.Max(0, rented - full);
-        var peak = checked(full + rented + perWorkerPeak + wholeImage);
+        var peak = checked(full + rented + operatorScratchPeak);
         return new MemoryEstimate(full, full, planScratch, perWorker, workers, peak)
         {
             PerWorkerPeakBytes = perWorkerPeak,
             WholeImageScratchBytes = wholeImage,
+            OperatorScratchPeakBytes = operatorScratchPeak,
             UndeclaredSteps = undeclared,
         };
     }
