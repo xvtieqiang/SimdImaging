@@ -35,6 +35,9 @@ public enum RegionRefusal : byte
 
     /// <summary>A step declares order-dependent or per-call state, which a rectangle walk cannot reproduce.</summary>
     StatefulStep,
+
+    /// <summary>A step requires a whole-image invocation or forbids concurrent band execution.</summary>
+    ExecutionRequirements,
 }
 
 /// <summary>What <see cref="ProcessingPlan.TryExecuteRegion"/> did.</summary>
