@@ -108,6 +108,37 @@ public sealed class TileEncoderTests
         }
     }
 
+
+    [Fact]
+    public void ProcessTilesTo_PathBudgetRefusal_PreservesExistingDestination()
+    {
+        var source = Path.Combine(Path.GetTempPath(), $"simd-tile-{Guid.NewGuid():N}.tif");
+        var destination = Path.Combine(Path.GetTempPath(), $"simd-tile-{Guid.NewGuid():N}.png");
+        var original = new byte[] { 5, 13, 17, 29 };
+        try
+        {
+            File.WriteAllBytes(source, TiffFixture.Strips(37, 23, PixelFormat.Rgb24, Pattern(37, 23)));
+            File.WriteAllBytes(destination, original);
+            using var region = Image.OpenRegionSource(source);
+            var plan = new ProcessingPlan().Add(PlanOps.Invert());
+
+            Should.Throw<InvalidOperationException>(() => Image.ProcessTilesTo(source, destination, plan,
+                16, 12, new TranscodeOptions
+                {
+                    Execute = new ExecuteOptions { Workspace = new WorkspaceManager(limitBytes: 1) },
+                }));
+
+            File.ReadAllBytes(destination).ShouldBe(original);
+            Directory.GetFiles(Path.GetDirectoryName(destination)!, $".{Path.GetFileNameWithoutExtension(destination)}.*.png")
+                .ShouldBeEmpty("the failed tile transcode must remove its sibling temporary output");
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
+
     [Fact]
     public void ProcessTilesTo_RefusesAWholeImageStep()
     {
