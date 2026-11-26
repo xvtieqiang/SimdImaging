@@ -162,9 +162,35 @@ public sealed partial class Image
         options ??= TranscodeOptions.Default;
         using var source = TiffRegionSource.Open(sourcePath, options.Region?.PageIndex ?? 0,
             options.Region?.Format, options.Region?.MaxSegmentBytes ?? (64L << 20));
-        using var destination = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        return ProcessTilesTo(source, destination, FormatFromExtension(Path.GetExtension(destinationPath)), plan,
-            tileWidth, tileHeight, options.Execute, options.Save, options.Region?.Pool, cancellationToken);
+        return WriteTileOutputAtomically(destinationPath, temporaryPath =>
+        {
+            using var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None);
+            return ProcessTilesTo(source, destination, FormatFromExtension(Path.GetExtension(destinationPath)),
+                plan, tileWidth, tileHeight, options.Execute, options.Save, options.Region?.Pool, cancellationToken);
+        });
+    }
+
+
+    /// <summary>Preserves an existing destination when tile compilation, workspace admission or encoding fails.</summary>
+    private static T WriteTileOutputAtomically<T>(string destinationPath, Func<string, T> write)
+    {
+        var fullPath = Path.GetFullPath(destinationPath);
+        var directory = Path.GetDirectoryName(fullPath)!;
+        var extension = Path.GetExtension(fullPath);
+        var name = Path.GetFileNameWithoutExtension(fullPath);
+        var temporaryPath = Path.Combine(directory, $".{name}.{Guid.NewGuid():N}{extension}");
+        try
+        {
+            var result = write(temporaryPath);
+            File.Move(temporaryPath, fullPath, overwrite: true);
+            return result;
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
     }
 
     private static CompiledExecutionPlan CompileTiles(IRegionSource source, ProcessingPlan plan, int tileWidth,
