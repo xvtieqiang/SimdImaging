@@ -276,7 +276,8 @@ public sealed partial class Image
             _bandRows = Math.Min(bandRows, height);
             _cancellation = cancellationToken;
 
-            var bytes = (long)width * _bandRows * format.BytesPerPixel();
+            var bytes = checked((long)width * _bandRows * format.BytesPerPixel()
+                + (long)bandRows * sizeof(int));
             if (options.MaxWorkingBytes > 0 && bytes > options.MaxWorkingBytes)
                 throw new InvalidOperationException(
                     $"The encoder band ({width}x{_bandRows} {format}) needs {bytes} bytes, above " +
