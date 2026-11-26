@@ -30,7 +30,8 @@ internal sealed class CropRowSource : IRowSource, IDisposable
         ExecuteOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(source);
-        if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > source.Width || y + height > source.Height)
+        if (x < 0 || y < 0 || width <= 0 || height <= 0 ||
+            (long)x + width > source.Width || (long)y + height > source.Height)
             throw new ArgumentException(
                 $"The crop ({x},{y},{width},{height}) does not lie inside {source.Width}x{source.Height}.");
 
@@ -40,7 +41,7 @@ internal sealed class CropRowSource : IRowSource, IDisposable
         _width = width;
         _height = height;
         _bytesPerPixel = source.Format.BytesPerPixel();
-        _rowBytes = width * _bytesPerPixel;
+        _rowBytes = checked(width * _bytesPerPixel);
         options ??= new ExecuteOptions();
         var bandRows = (int)Math.Min(256L, (long)height + 1);
         var bytes = checked((long)source.Width * bandRows * _bytesPerPixel);
