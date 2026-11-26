@@ -804,7 +804,7 @@ Resize 取各自最大 ring，不再只算第一个。执行期把几何/格式�
 - `SourceRegionSet` 表示一组源矩形，带 `Area`、`BoundingBox`、`Count`；`Normalize` 合并相接/重叠矩形，超过上限
   （默认 32）时收敛为总包围盒；`Clamp` 裁到图像内。
 - `IInputFootprint.MapSourceRegions` 取代单一 `MapSourceRect` 作为推导入口；Identity / Halo / WholeSource /
-  BlockAligned / Fixed 五种。
+  BlockAligned 四种（Fixed 已随闭包式第二输入一起删除）。
 - 几何步带 `MapRegions`：Resize（按缩放比例 + 重采样核支持半径）、Crop（偏移）、Pad（负偏移）、
   FlipHorizontal / FlipVertical（镜像）、Rotate90 / Rotate180（换轴 + 镜像）、Transpose / RotateFlip（8 种
   四分之一转组合，逐组合反推）、Affine 与任意角 Rotate（反变换四个角 + 核支持半径，实测保守 1–2 像素）。
