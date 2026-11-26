@@ -34,6 +34,7 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
     private readonly WeightTable _weightsX;
     private readonly WeightTable _weightsY;
     private readonly CancellationToken _cancellation;
+    private readonly int _degree;
 
     // Nearest keeps the whole-image path's point-sampling fast path; every other filter takes the separable one.
     private readonly bool _nearest;
@@ -70,6 +71,7 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
         _srcRowBytes = checked(_sourceWidth * _format.BytesPerPixel());
         _destStride = checked(width * 4);
         _cancellation = options.CancellationToken;
+        _degree = options.MaxDegreeOfParallelism > 0 ? options.MaxDegreeOfParallelism : RowParallel.Degree;
 
         _weightsX = WeightTable.Build(_sourceWidth, width, resampler);
         _weightsY = WeightTable.Build(_sourceHeight, height, resampler);
@@ -278,7 +280,7 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
             {
                 FloatScratch.Return(floatRow);
             }
-        });
+        }, _degree, _cancellation);
     }
 
     /// <summary>Produces destination rows <c>[start, start + count)</c> into the ready batch.</summary>
@@ -306,7 +308,7 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
             {
                 FloatScratch.Return(outputRow);
             }
-        });
+        }, _degree, _cancellation);
 
         _readyCount += count;
     }
