@@ -69,7 +69,7 @@ public sealed partial class Image
 
         var execute = options ?? new ExecuteOptions();
         var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
-        CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, tileOptions, pool);
+        CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, execute, pool);
     }
 
     /// <summary>
