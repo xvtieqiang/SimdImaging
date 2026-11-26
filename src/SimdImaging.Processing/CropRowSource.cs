@@ -18,6 +18,7 @@ internal sealed class CropRowSource : IRowSource, IDisposable
     private readonly int _bytesPerPixel;
     private readonly int _rowBytes;
     private readonly WorkingBuffer _band;
+    private IDisposable? _workspaceLease;
 
     private int _loaded;    // rows consumed from the inner source
     private int _bandRows;  // valid rows in the band
@@ -25,7 +26,8 @@ internal sealed class CropRowSource : IRowSource, IDisposable
     private int _served;    // rows handed out
     private bool _disposed;
 
-    public CropRowSource(IRowSource source, int x, int y, int width, int height, IPixelPool? pool = null)
+    public CropRowSource(IRowSource source, int x, int y, int width, int height, IPixelPool? pool = null,
+        ExecuteOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > source.Width || y + height > source.Height)
@@ -39,7 +41,25 @@ internal sealed class CropRowSource : IRowSource, IDisposable
         _height = height;
         _bytesPerPixel = source.Format.BytesPerPixel();
         _rowBytes = width * _bytesPerPixel;
-        _band = WorkingBuffer.Rent(source.Width, Math.Min(256, height + 1), source.Format, pool);
+        options ??= new ExecuteOptions();
+        var bandRows = (int)Math.Min(256L, (long)height + 1);
+        var bytes = checked((long)source.Width * bandRows * _bytesPerPixel);
+        if (options.MaxWorkingBytes > 0 && bytes > options.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"The crop row window needs {bytes} bytes, above ExecuteOptions.MaxWorkingBytes = " +
+                $"{options.MaxWorkingBytes}.");
+
+        _workspaceLease = options.Workspace?.Reserve(bytes, "crop row window");
+        try
+        {
+            _band = WorkingBuffer.Rent(source.Width, bandRows, source.Format, pool);
+        }
+        catch
+        {
+            _workspaceLease?.Dispose();
+            _workspaceLease = null;
+            throw;
+        }
     }
 
     public int Width => _width;
@@ -112,5 +132,7 @@ internal sealed class CropRowSource : IRowSource, IDisposable
             return;
         _disposed = true;
         _band.Dispose();
+        _workspaceLease?.Dispose();
+        _workspaceLease = null;
     }
 }
