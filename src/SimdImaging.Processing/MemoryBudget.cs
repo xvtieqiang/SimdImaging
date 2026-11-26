@@ -240,6 +240,7 @@ public static class MemoryEstimator
         var peak = checked(full + rented + perWorkerPeak + wholeImage);
         return new MemoryEstimate(full, full, planScratch, perWorker, workers, peak)
         {
+            PerWorkerPeakBytes = perWorkerPeak,
             WholeImageScratchBytes = wholeImage,
             UndeclaredSteps = undeclared,
         };
