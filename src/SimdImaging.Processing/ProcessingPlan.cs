@@ -631,11 +631,7 @@ public sealed class ProcessingPlan
 
                     var requirements = step.Definition.Contract.Requirements;
                     if (step.Category is OpCategory.Global or OpCategory.Composite ||
-                        requirements.Partition != Partitioning.RowBands ||
-                        requirements.State != StateScope.None ||
-                        requirements.Order != ExecutionOrder.Any ||
-                        requirements.Threading != ThreadSafety.Concurrent ||
-                        requirements.Determinism != Determinism.CoordinateDeterministic)
+                        requirements.RequiresWholeImageInvocation)
                     {
                         // Whole-image steps run once on the caller, but their kernels may use RowParallel internally.
                         // Match the configured degree used by the workspace estimator.
