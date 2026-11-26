@@ -21,7 +21,7 @@ namespace SimdImaging.Abstractions;
 /// <param name="InputBytes">The source pixels handed to the pipeline.</param>
 /// <param name="OutputBytes">The image the pipeline returns.</param>
 /// <param name="PlanScratchBytes">Band windows and intermediate buffers the executor itself rents.</param>
-/// <param name="PerWorkerBytes">The largest declared scratch among banded steps, for one worker.</param>
+/// <param name="PerWorkerBytes">The largest declared per-worker scratch among all steps, for one worker.</param>
 /// <param name="Workers">The largest worker count used by any step with per-worker scratch.</param>
 /// <param name="PeakBytes">The estimate: buffers plus the maximum simultaneous per-worker scratch peak and whole-image scratch.</param>
 public readonly record struct MemoryEstimate(
@@ -33,14 +33,14 @@ public readonly record struct MemoryEstimate(
     long PeakBytes)
 {
     /// <summary>
-    /// Scratch shared by one whole-image invocation. Held once, not once per worker.
-    /// </summary>
-    /// <summary>
     /// The maximum simultaneous per-worker scratch after applying each step's actual worker count. This can differ
     /// from <c>PerWorkerBytes × Workers</c> when different steps use different degrees of concurrency.
     /// </summary>
     public long PerWorkerPeakBytes { get; init; }
 
+    /// <summary>
+    /// Scratch shared by one whole-image invocation. Held once, not once per worker.
+    /// </summary>
     public long WholeImageScratchBytes { get; init; }
 
     /// <summary>
