@@ -17,9 +17,10 @@ internal enum WorkspaceTermKind : byte
     ResizeStaging = 6,
     ResizeBatch = 7,
     ResizeWorkerRows = 8,
-    FormatStep = 9,
-    GeometryScratch = 10,
-    SectionTransition = 11,
+    ResizeSourceRow = 9,
+    FormatStep = 10,
+    GeometryScratch = 11,
+    SectionTransition = 12,
 }
 
 internal readonly record struct WorkspaceTerm(WorkspaceTermKind Kind, long Bytes, string Note);
@@ -315,11 +316,12 @@ internal static class WorkspacePlanner
     {
         var width = options.SourceWidth;
         var height = options.SourceHeight;
-        long ring = 0, staging = 0, batch = 0, worker = 0;
+        long ring = 0, staging = 0, batch = 0, worker = 0, sourceRow = 0;
         var ringNote = string.Empty;
         var stagingNote = string.Empty;
         var batchNote = string.Empty;
         var workerNote = string.Empty;
+        var sourceRowNote = string.Empty;
 
         foreach (var step in recipe.Steps)
         {
@@ -363,6 +365,12 @@ internal static class WorkspacePlanner
                     worker = workspace.WorkerRowBytes;
                     workerNote = $"{workspace.Workers} workers";
                 }
+
+                if (workspace.SourceRowBytes > sourceRow)
+                {
+                    sourceRow = workspace.SourceRowBytes;
+                    sourceRowNote = $"{width}-pixel source row";
+                }
             }
 
             width = destWidth;
@@ -378,5 +386,7 @@ internal static class WorkspacePlanner
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeBatch, batch, batchNote));
         if (worker > 0)
             terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeWorkerRows, worker, workerNote));
+        if (sourceRow > 0)
+            terms.Add(new WorkspaceTerm(WorkspaceTermKind.ResizeSourceRow, sourceRow, sourceRowNote));
     }
 }
