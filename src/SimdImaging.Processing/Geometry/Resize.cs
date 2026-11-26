@@ -408,8 +408,8 @@ public static class Resample
         var bandCount = (height + bandHeight - 1) / bandHeight;
         var workers = Math.Max(1, Math.Min(Math.Max(1, degree), bandCount));
         var ringRows = Math.Min(source.Height, tapsY + 2);
-        // VerticalRow uses two fixed stack buffers up to 256 taps, then rents the exact tap-sized
-        // int/float arrays from ArrayPool. They are live for one worker while it processes its rows.
+        // VerticalRow uses fixed stack buffers up to the stack threshold, then one exact int/float array
+        // pair per worker, reused across that worker's output rows.
         var tapScratch = tapsY <= VerticalStackTapLimit
             ? (long)VerticalStackTapLimit * (sizeof(int) + sizeof(float))
             : (long)tapsY * (sizeof(int) + sizeof(float));
