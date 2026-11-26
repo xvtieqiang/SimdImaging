@@ -311,7 +311,7 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
                     var dy = start + k;
                     Resample.VerticalRow(ring, _ringRows, _sourceHeight, _destWidth, dy, _weightsY, outputRow!,
                         tapRows, tapWeights);
-                    Pixels.WriteRowUnpremultiplied(outputRow, _destWidth, _format, bandView.Row(outBase + k));
+                    Pixels.WriteRowUnpremultiplied(outputRow!, _destWidth, _format, bandView.Row(outBase + k));
                 }
             }
             finally
