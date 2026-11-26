@@ -124,16 +124,14 @@ public static class FilterOps
     /// FloatScratch arrays, stack tiles and kernel. The generic rows×width estimate is insufficient for tiny
     /// windows because the fixed planar/vertical buffers do not shrink with the window height.
     /// </summary>
-    internal static long SeparablePlanWorkspaceBytes(int width, int rows, int radius, WorkingFormat format,
-        bool sharpen = false)
+    internal static long SeparablePlanWorkerScratchBytes(int width, int rows, int radius,
+        WorkingFormat format, bool sharpen = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(width);
         ArgumentOutOfRangeException.ThrowIfNegative(rows);
         ArgumentOutOfRangeException.ThrowIfNegative(radius);
-
-        var output = checked((long)width * rows * format.BytesPerPixel());
         if (radius == 0)
-            return output;
+            return 0;
 
         var taps = checked(2 * radius + 1);
         var ringRows = Math.Min(rows, checked(2 * radius + VerticalTileRows));
@@ -144,7 +142,7 @@ public static class FilterOps
         var stackBytes = checked((long)VerticalTileRows * taps * sizeof(int)
             + (long)VerticalTileRows * VerticalBlockFloats * sizeof(float));
         var kernelBytes = (long)taps * sizeof(float);
-        var total = checked(output + floatCount * sizeof(float) + stackBytes + kernelBytes);
+        var total = checked(floatCount * sizeof(float) + stackBytes + kernelBytes);
 
         if (sharpen)
         {
@@ -156,6 +154,37 @@ public static class FilterOps
 
         return total;
     }
+
+    internal static long SeparablePlanWorkspaceBytes(int width, int rows, int radius, WorkingFormat format,
+        bool sharpen = false) =>
+        checked((long)width * rows * format.BytesPerPixel()
+            + SeparablePlanWorkerScratchBytes(width, rows, radius, format, sharpen));
+
+    /// <summary>Glow's frame-lifetime allocations, excluding its worker-private rows and final returned image.</summary>
+    internal static long GlowPlanWholeImageScratchBytes(int width, int height, WorkingFormat format)
+    {
+        var frameBytes = checked((long)width * height * format.BytesPerPixel());
+        var tableBytes = format == WorkingFormat.Rgba8 && (long)width * height >= TwoInputLutFloor
+            ? 256L * 256
+            : 0L;
+        return checked((2L * frameBytes) + tableBytes); // threshold highlights + blurred highlights + optional LUT
+    }
+
+    /// <summary>Glow's worker-private allocations: separable blur planes plus the highlight and combine rows.</summary>
+    internal static long GlowPlanWorkerScratchBytes(int width, int height, WorkingFormat format, float sigma)
+    {
+        var radius = Math.Max(1, (int)MathF.Ceiling(3f * sigma));
+        var blurScratch = SeparablePlanWorkerScratchBytes(width, height, radius, format);
+        var highlightRow = (long)width * 4 * sizeof(float);
+        var combineRows = format == WorkingFormat.Rgba8 && (long)width * height >= TwoInputLutFloor
+            ? 0L
+            : 2L * width * 4 * sizeof(float);
+        return checked(blurScratch + highlightRow + combineRows);
+    }
+
+    internal static long GlowPlanWorkspaceBytes(int width, int height, WorkingFormat format, float sigma) =>
+        checked(GlowPlanWholeImageScratchBytes(width, height, format)
+            + GlowPlanWorkerScratchBytes(width, height, format, sigma));
 
     /// <summary>
     /// Runs a separable kernel as a horizontal pass followed by a vertical one. Work is done in row bands: a
