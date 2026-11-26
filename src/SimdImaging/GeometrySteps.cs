@@ -40,7 +40,8 @@ internal static class GeometrySteps
     internal static GeometryDescriptor Crop(PixelRect region) =>
         new($"crop {region.Width}x{region.Height}", new FixedSizeRule(region.Width, region.Height),
             (view, pool) => Transforms.Crop(view, region, pool),
-            (source, pool, _) => new CropRowSource(source, region.X, region.Y, region.Width, region.Height, pool),
+            (source, pool, execute) => new CropRowSource(source, region.X, region.Y, region.Width, region.Height,
+                pool, execute),
             Kind: GeometryKind.Crop,
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
                 new PixelRect(destination.X + region.X, destination.Y + region.Y, destination.Width,
@@ -73,7 +74,7 @@ internal static class GeometrySteps
     internal static GeometryDescriptor FlipHorizontal() =>
         new("flip-horizontal", GeometryRule.SameSize,
             (view, pool) => Transforms.FlipHorizontal(view, pool),
-            (source, pool, _) => new FlipRowSource(source), Kind: GeometryKind.FlipHorizontal,
+            (source, pool, execute) => new FlipRowSource(source, execute), Kind: GeometryKind.FlipHorizontal,
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
                 new PixelRect(sourceWidth - (destination.X + destination.Width), destination.Y,
                     destination.Width, destination.Height)).Clamp(sourceWidth, sourceHeight),
@@ -170,7 +171,7 @@ internal static class GeometrySteps
                 (width, height) => (width + left + right, height + top + bottom),
                 $"pad {left},{top},{right},{bottom}"),
             (view, pool) => Transforms.Pad(view, left, top, right, bottom, background, pool),
-            (source, pool, _) => new PadRowSource(source, left, top, right, bottom, background),
+            (source, pool, execute) => new PadRowSource(source, left, top, right, bottom, background, execute),
             Kind: GeometryKind.Pad,
             Semantics: PixelSemantics.EncodedInteger,
             MapRegions: (destination, sourceWidth, sourceHeight, _, _) => SourceRegionSet.Of(
