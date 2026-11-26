@@ -119,7 +119,6 @@ public sealed class TileEncoderTests
         {
             File.WriteAllBytes(source, TiffFixture.Strips(37, 23, PixelFormat.Rgb24, Pattern(37, 23)));
             File.WriteAllBytes(destination, original);
-            using var region = Image.OpenRegionSource(source);
             var plan = new ProcessingPlan().Add(PlanOps.Invert());
 
             Should.Throw<InvalidOperationException>(() => Image.ProcessTilesTo(source, destination, plan,
