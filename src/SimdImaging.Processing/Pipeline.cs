@@ -63,13 +63,17 @@ internal static class Pipeline
                 $"ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
 
         var lease = options.Workspace?.Reserve(bytes, "pipeline transfer buffer");
+        WorkingBuffer? buffer = null;
         try
         {
-            var buffer = WorkingBuffer.Rent(source.Width, rows, source.Format);
-            return new PipelineTransferBuffer(buffer, lease, rows);
+            buffer = WorkingBuffer.Rent(source.Width, rows, source.Format);
+            var transfer = new PipelineTransferBuffer(buffer, lease, rows);
+            buffer = null;
+            return transfer;
         }
         catch
         {
+            buffer?.Dispose();
             lease?.Dispose();
             throw;
         }
