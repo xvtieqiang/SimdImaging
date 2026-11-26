@@ -254,6 +254,24 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
+    public void Estimate_DefaultDegreeHonorsTheSameOverrideAsExecution()
+    {
+        var previous = RowParallel.DegreeOverride;
+        try
+        {
+            RowParallel.DegreeOverride = 2;
+            var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8,
+                [new PlanStep(PlanOps.Invert())], bandRows: 64, allowFusion: false, degree: 0);
+
+            estimate.Workers.ShouldBe(2);
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previous;
+        }
+    }
+
+    [Fact]
     public void Estimate_OverflowsLoudlyRatherThanWrapping()
     {
         Should.Throw<OverflowException>(() =>
