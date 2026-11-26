@@ -1967,6 +1967,70 @@ public static class FilterOps
         }
     }
 
+    /// <summary>Scratch for the 3×3 direct-write median adapter. The output belongs to the executor.</summary>
+    internal static long Median3x3PlanScratchBytes(int width, WorkingFormat format)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        if (format == WorkingFormat.Rgba8 && Vector128.IsHardwareAccelerated)
+            return 0;
+
+        // One three-row float block and one output float row per worker.
+        return checked(4L * width * 4 * sizeof(float));
+    }
+
+    /// <summary>Scratch for the direct-write gradient adapters (Sobel/Prewitt/Scharr). GradientInto
+    /// has one outer and one per-worker luma ring, plus input and output float rows.</summary>
+    internal static long GradientPlanScratchBytes(int width)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        return checked(14L * width * sizeof(float));
+    }
+
+    /// <summary>Scratch for the direct-write 3×3 morphology adapters.</summary>
+    internal static long Morph3x3PlanScratchBytes(int width)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        return checked(5L * width * 4 * sizeof(float));
+    }
+
+    /// <summary>Scratch for the separable 3×3 convolution adapter.</summary>
+    internal static long Convolve3x3PlanScratchBytes(int width)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        return checked((16L * width * 4 * sizeof(float)) + (9L * sizeof(float)));
+    }
+
+    /// <summary>Per-worker arrays used by Laplacian's luma-ring implementation.</summary>
+    internal static long LaplacianPlanScratchBytes(int width)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        return checked(11L * width * sizeof(float));
+    }
+
+    /// <summary>Per-worker arrays used by the row-shift AverageOffsets family (MotionBlur/BokehBlur).</summary>
+    internal static long AverageOffsetsPlanScratchBytes(int width, int maxDy, int offsetCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxDy);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(offsetCount);
+        var windowRows = checked(2 * maxDy + 1);
+        var stride = checked((long)width * 4);
+        return checked(((long)(windowRows + 2) * stride * sizeof(float))
+            + ((long)offsetCount * 2 * sizeof(int)));
+    }
+
+    /// <summary>Additional scratch used by ConvolveBanded beyond its full float window plane.</summary>
+    internal static long ConvolveBandedPlanScratchBytes(int width, int rows, int kernelWeights)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
+        ArgumentOutOfRangeException.ThrowIfNegative(kernelWeights);
+        // Full float window plane + sum row + row-cache + current row + copied kernel.
+        return checked(((long)rows * width * 16)
+            + (3L * width * 4 * sizeof(float))
+            + ((long)kernelWeights * sizeof(float)));
+    }
+
     /// <summary>Per-worker scratch for the oil-paint ring and its histogram state. The result band is
     /// accounted separately by the Neighborhood adapter.</summary>
     internal static long OilPaintPlanScratchBytes(int width, int radius, int levels)
