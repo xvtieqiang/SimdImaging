@@ -177,8 +177,8 @@ public static class MemoryEstimator
 
             // The declared scope is part of the contract, not a hint: a step that says its scratch is held once
             // for the whole image must not be multiplied by the worker count even if its category is Point.
-            var isWholeImage = step.Category is OpCategory.Global or OpCategory.Composite
-                || step.Definition.Contract.Workspace.Scope == WorkspaceScope.WholeImage;
+            var isWholeImage = step.Definition.Contract.Workspace.IsSingleCopy(
+                step.Definition.Contract.Requirements.Partition == Partitioning.WholeImage);
             if (isWholeImage)
             {
                 wholeImage = Math.Max(wholeImage, scratch(width, height, height, format));
