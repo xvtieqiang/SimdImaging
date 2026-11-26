@@ -379,9 +379,10 @@ public static class Resample
     internal static long EstimateWorkingBytes(PixelView source, int width, int height, int tapsY, bool nearest,
         int degree)
     {
+        var input = checked((long)source.Width * source.Height * source.Format.BytesPerPixel());
         var output = checked((long)width * height * source.Format.BytesPerPixel());
         if (nearest)
-            return output;
+            return checked(input + output);
 
         var stride = checked(width * 4);
         var budgetRows = Math.Max(tapsY + 2, (int)(ScratchBudgetBytes / Math.Max(1L, (long)stride * 4)));
@@ -394,7 +395,7 @@ public static class Resample
         var workers = Math.Max(1, Math.Min(Math.Max(1, degree), bandCount));
         var ringRows = Math.Min(source.Height, tapsY + 2);
         var perWorker = checked(((long)source.Width * 4 + stride + (long)stride * ringRows) * sizeof(float));
-        return checked(output + workers * perWorker);
+        return checked(input + output + workers * perWorker);
     }
 
 internal static bool TryNearestTap(WeightTable table, out int offset)
