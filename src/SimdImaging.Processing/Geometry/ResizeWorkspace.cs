@@ -89,7 +89,9 @@ internal readonly record struct ResizeWorkspace(
         var tapBytesPerWorker = tapsY <= Resample.VerticalStackTapLimit
             ? (long)Resample.VerticalStackTapLimit * (sizeof(int) + sizeof(float))
             : (long)tapsY * (sizeof(int) + sizeof(float));
-        var workerTapBytes = checked((long)workers * tapBytesPerWorker);
+        // Tap arrays are used only by Emit, whose ready batch bounds concurrent vertical workers.
+        var tapWorkers = Math.Min(workers, readyRows);
+        var workerTapBytes = checked((long)tapWorkers * tapBytesPerWorker);
         var fixedBytes = checked(readyBytes + sourceRowBytes + workerRowBytes + workerTapBytes);
         var rowFloats = (long)destStride * sizeof(float);
         var ringBase = (long)(tapsY + 2) * rowFloats;
