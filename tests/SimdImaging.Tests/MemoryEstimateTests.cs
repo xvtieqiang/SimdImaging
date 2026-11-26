@@ -102,6 +102,115 @@ public class MemoryEstimateTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(2, 160, 96, WorkingFormat.Rgba16)]
+    [InlineData(4, 96, 64, WorkingFormat.Rgba32F)]
+    public void MorphWorkspace_AccountsForLiveFramesAndWorkingFormat(
+        int radius, int width, int rows, WorkingFormat format)
+    {
+        var frameBytes = (long)width * rows * format.BytesPerPixel();
+        var primitive = PlanOps.Morph(radius).Scratch!(width, rows, rows, format);
+        primitive.ShouldBeGreaterThanOrEqualTo(frameBytes * 4);
+
+        var opening = PlanOps.Morph(radius, SimdImaging.Abstractions.Morphology.Open)
+            .Scratch!(width, rows, rows, format);
+        opening.ShouldBeGreaterThanOrEqualTo(frameBytes * 5);
+    }
+
+    [Fact]
+    public void MorphRadiusOne_AccountsForTheThreeRowFloatRing()
+    {
+        const int width = 48;
+        const int rows = 24;
+        const int radius = 1;
+        var frameBytes = (long)width * rows * WorkingFormat.Rgba8.BytesPerPixel();
+        var declared = PlanOps.Morph(radius).Scratch!(width, rows, rows, WorkingFormat.Rgba8);
+        var perWorkerFloatBytes = 5L * width * 4 * sizeof(float);
+
+        declared.ShouldBeGreaterThanOrEqualTo(frameBytes + perWorkerFloatBytes);
+    }
+
+    [Fact]
+    public void GuidedByWorkspace_CoversTheCrossGuidedWorkerPlanes()
+    {
+        const int width = 96;
+        const int height = 96;
+        const int radius = 3;
+        const int bandRows = 32;
+        using var source = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba8);
+        using var guide = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba8);
+        var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
+        var op = PlanOps.GuidedBy(radius, bandRows: bandRows);
+        var declared = op.Scratch!(width, height, height, WorkingFormat.Rgba8);
+        var previousDegree = RowParallel.DegreeOverride;
+
+        try
+        {
+            RowParallel.DegreeOverride = 1;
+            MemoryBudget.Trim();
+            FloatScratch.ResetForTests();
+
+            using var result = GuidedFilterOps.GuidedFilter(source.View, guide.View, radius,
+                bandRows: bandRows, pool: pool);
+
+            declared.ShouldBeGreaterThanOrEqualTo(pool.PeakBytes + FloatScratch.PeakLiveBytes,
+                $"declared {declared}, destination {pool.PeakBytes}, active scratch {FloatScratch.PeakLiveBytes}");
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previousDegree;
+            MemoryBudget.ResetForTests();
+        }
+    }
+
+    [Fact]
+    public void DehazeWorkspace_IncludesItsReturnedFrame()
+    {
+        const int width = 96;
+        const int height = 64;
+        using var source = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba16);
+        var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
+        var op = PlanOps.Dehaze(patchRadius: 2, refineRadius: 0);
+        var declared = op.Scratch!(width, height, height, WorkingFormat.Rgba16);
+        var previousDegree = RowParallel.DegreeOverride;
+
+        try
+        {
+            RowParallel.DegreeOverride = 1;
+            MemoryBudget.Trim();
+            FloatScratch.ResetForTests();
+
+            using var result = DehazeOps.Dehaze(source.View, patchRadius: 2, refineRadius: 0, pool: pool);
+
+            declared.ShouldBeGreaterThanOrEqualTo(pool.PeakBytes + FloatScratch.PeakLiveBytes,
+                $"declared {declared}, destination {pool.PeakBytes}, active scratch {FloatScratch.PeakLiveBytes}");
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previousDegree;
+            MemoryBudget.ResetForTests();
+        }
+    }
+
+    [Fact]
+    public void LocalLaplacianWorkspace_IsFormatAwareAndIncludesTheRgba16LookupTable()
+    {
+        const int width = 64;
+        const int height = 48;
+        const int levels = 3;
+        const int samples = 32;
+
+        var rgba8 = LocalLaplacianOps.ScratchBytes(width, height, WorkingFormat.Rgba8, levels, samples);
+        var rgba16 = LocalLaplacianOps.ScratchBytes(width, height, WorkingFormat.Rgba16, levels, samples);
+        var expectedDifference =
+            ((long)samples * (65536 - 256) * sizeof(float)) +
+            ((long)width * height * (WorkingFormat.Rgba16.BytesPerPixel() -
+                WorkingFormat.Rgba8.BytesPerPixel()));
+
+        (rgba16 - rgba8).ShouldBe(expectedDifference);
+        rgba16.ShouldBeGreaterThan(rgba8);
+    }
+
     [Fact]
     public void Estimate_CountsDeclaredOperatorScratch()
     {
