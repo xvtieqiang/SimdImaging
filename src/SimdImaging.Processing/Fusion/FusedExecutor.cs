@@ -86,7 +86,7 @@ internal static class FusedExecutor
             haloTotal += steps[first + i].HaloY;
 
         var bandCount = (height + bandRows - 1) / bandRows;
-        var workers = Math.Max(1, Math.Min(degree > 0 ? degree : Environment.ProcessorCount, bandCount));
+        var workers = Math.Max(1, Math.Min(RowParallel.ResolveDegree(degree), bandCount));
         var windowRows = Math.Min(height, bandRows + 2 * haloTotal);
         var windowBytes = (long)width * windowRows * bytesPerPixel;
         return (long)width * height * bytesPerPixel + 2 * workers * windowBytes;
