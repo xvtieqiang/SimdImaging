@@ -206,7 +206,7 @@ public static class MemoryEstimator
     private static int Workers(int height, int bandRows, int degree)
     {
         var bands = Math.Max(1, (height + bandRows - 1) / bandRows);
-        var cap = degree > 0 ? degree : Environment.ProcessorCount;
+        var cap = RowParallel.ResolveDegree(degree);
         return Math.Max(1, Math.Min(cap, bands));
     }
 }
