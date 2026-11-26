@@ -71,7 +71,7 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
         var maxWindowRows = Math.Min(_height, _bandRows + (2 * _haloTotal));
         var windows = steps.Count > 1 ? 4 : 2;
         var estimate = WorkingSetBudget.Measure(steps, options, _width, _height, _width, maxWindowRows,
-            source.Format, windows, extraBytes: 0, out var undeclared);
+            source.Format, windows, out var undeclared);
         WorkingSetBudget.Ensure(estimate, undeclared, steps.Count, options, "Streaming");
 
         // Reserve before the allocations: a reservation refused after them would leave the buffers nobody can

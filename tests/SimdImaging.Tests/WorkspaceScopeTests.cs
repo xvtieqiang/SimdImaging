@@ -65,9 +65,9 @@ public sealed class WorkspaceScopeTests
 
         // The stream and region executors measure through WorkingSetBudget, which must apply the same rule.
         var perWorkerBudget = WorkingSetBudget.Measure([new PlanStep(perWorker)], options, 64, 256, 64, 64,
-            WorkingFormat.Rgba8, windows: 2, extraBytes: 0, out _);
+            WorkingFormat.Rgba8, windows: 2, out _);
         var wholeImageBudget = WorkingSetBudget.Measure([new PlanStep(wholeImage)], options, 64, 256, 64, 64,
-            WorkingFormat.Rgba8, windows: 2, extraBytes: 0, out _);
+            WorkingFormat.Rgba8, windows: 2, out _);
 
         (perWorkerBudget - wholeImageBudget).ShouldBe((1024 * 4) - 1024,
             "the scope must change the multiplier on every path, not only in MemoryEstimator");

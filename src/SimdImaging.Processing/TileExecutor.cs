@@ -1,5 +1,6 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Internal;
 
 namespace SimdImaging.Processing;
 
@@ -7,6 +8,12 @@ namespace SimdImaging.Processing;
 /// Runs a same-format plan one rectangle at a time, reading each tile's halo from an <see cref="IRegionSource"/>
 /// and writing the tile to an <see cref="IRegionSink"/>. The per-tile work is exactly what
 /// <see cref="RegionExecutor"/> already does; this type adds the walk over tiles and the sink contract.
+/// <para>
+/// The walk rents the tile, so the walk reserves it — once, before the rent, at the size of one tile. The region
+/// executor receives the tile as its destination and counts only the windows it rents, so the tile appears in the
+/// account exactly once. The reservation is held for the whole walk because one tile is resident throughout; the
+/// per-tile rent is smaller only at the right and bottom edges, which the full-tile figure covers.
+/// </para>
 /// </summary>
 internal static class TileExecutor
 {
@@ -32,13 +39,13 @@ internal static class TileExecutor
         if (source.Format != sink.Format)
             throw new ArgumentException($"The sink is {sink.Format}, the source is {source.Format}.");
 
-        var tileBytes = (long)tileWidth * tileHeight * source.Format.BytesPerPixel();
+        var tileBytes = TargetBuffer.Bytes(tileWidth, tileHeight, source.Format);
         if (options.MaxWorkingBytes > 0 && tileBytes > options.MaxWorkingBytes)
             throw new InvalidOperationException(
                 $"A {tileWidth}x{tileHeight} tile needs {tileBytes} bytes, above " +
                 $"ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
 
-        using var workspaceLease = options.Workspace?.Reserve(tileBytes, "tile");
+        using var targetLease = TargetBuffer.Reserve(options, tileWidth, tileHeight, source.Format, "tile destination");
         var refusal = RegionExecutor.Classify(plan.Steps, plan.HasResize, out var refusingStep);
         if (refusal != RegionRefusal.None)
             throw new InvalidOperationException(

@@ -1,7 +1,7 @@
 # 实测结果存档
 
-本文件是各基准模式的**结论与关键数字**，按主题分组；原始报告在 `benchmarks/results/`，逐日的工作记录在
-`docs/report-<日期>.md`。跑法见 [`../benchmarks/README.md`](../benchmarks/README.md)。
+本文件是各基准模式的**结论与关键数字**，按主题分组；原始输出不保留，过程进提交历史。
+跑法见 [`../benchmarks/README.md`](../benchmarks/README.md)。
 
 > 门禁的里程碑沿革（M8–M15 每次 AOT 冒烟新增算子后的 body SHA）不在这里维护：它属于提交历史，
 > 用 `git log -- tests/SimdImaging.AotSmoke` 可查。这里只保留**现在还成立的规矩与数字**。

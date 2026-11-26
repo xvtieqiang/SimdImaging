@@ -2,6 +2,7 @@ using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Compilation;
+using SimdImaging.Processing.Internal;
 
 namespace SimdImaging;
 
@@ -220,6 +221,11 @@ public sealed partial class Image
                 "Load + Apply instead.");
 
         var layout = source.Layout;
+        // The target is this method's allocation, so this method reserves it — before the rent, never after:
+        // RegionExecutor is handed the view and reserves only the windows it rents, so the rectangle is charged
+        // exactly once, and a reservation above the account's limit leaves no buffer behind.
+        using var targetLease = TargetBuffer.Reserve(options.Execute, region.Width, region.Height, source.Format,
+            "region destination");
         var buffer = WorkingBuffer.Rent(region.Width, region.Height, source.Format, options.Region?.Pool);
         try
         {

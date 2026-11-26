@@ -297,8 +297,10 @@ public sealed class ProcessingPlan
     /// Runs the plan over <paramref name="region"/> only, reading through <paramref name="source"/>: the
     /// two-dimensional counterpart of <see cref="Execute"/>. The result is byte-identical to
     /// <c>Execute(whole).Slice(region)</c> for every pixel of the region.
-    /// <para>Nothing is written when the plan is refused. Memory is four windows plus the destination, and does not
-    /// grow with the source's width or height.</para>
+    /// <para>Nothing is written when the plan is refused. Memory is the windows plus the operators' declared
+    /// scratch, and does not grow with the source's width or height. The destination is the caller's: this call does
+    /// not rent it, so it is not part of the estimate or the reservation — the facade and the tile walk reserve the
+    /// targets they rent.</para>
     /// </summary>
     /// <exception cref="ArgumentException">The region is empty or lies outside the source, or the destination is not
     /// the region's size or format.</exception>

@@ -1,7 +1,8 @@
 # SimdImaging 架构设计（v0.1）
 
-> 状态：**设计契约 + 实施记录（2026-11-25）**。M0、M1、M6–M14 已完成并验收，M15 进行中，M16（文件级流式）、M17（区域执行）与 M18（几何进入执行模型）已完成（§6.5 / §6.6 / §6.7），M5 验收未启动，
-> M2–M4 功能已落地但出口条件仅部分核验。§11 中带「已完成」与实测数字的行是记录，未标记的行仍是待兑现的设计。
+> 状态：**设计契约 + 实施记录（2026-11-26）**。M0、M1、M5、M6–M14 与 M16–M18 已完成并验收，M15 进行中；
+> M2–M4 的功能已落地、出口条件于 2026-11-26 关闭（口径见 §11 的 2026-11-26 说明）。§11 中带「已完成」与实测数字的行是记录，
+> 未标记的行仍是待兑现的设计。
 > 底层依赖：`Sdcb.SimdCodecs` 2.1.x，**NuGet 包**，版本锁在 `Directory.Packages.props`。仓库不持有、也不构建任何外部源码。
 > 算子清单见 [`operators.md`](operators.md)。
 
@@ -44,7 +45,7 @@
 | 3 | 峰值内存 | 8K 图 ≤ 2.5× 单帧 | `GC.GetTotalMemory` + WorkingSet |
 | 4 | 位深保真 | 10/16 bit 全链路不塌到 8 bit | 16-bit PNG / TIFF 往返端点误差 0。原本的 10-bit HEIF 端点**测不了**：HEIF 是独立包且需手动注册，本库不接入（`known-gaps.md`） |
 | 5 | 确定性 | 四档 SIMD 逐字节一致（**设计目标**） | CI 强制三档；AVX-512 在卷积内核实现，正确性经软件模拟验证，吞吐待硬件，见 `known-gaps.md` |
-| 6 | 色彩 | ICC→ICC **与 4.1.3 对拍**，不只比"有没有" | ΔE2000 ≤ 1（矩阵/TRC），≤ 2（CLUT）。**尺子已在 M13 落地**（`ColorDifference`，Sharma 34 组参考全过）；对 4.1.3 的同图对拍仍被许可密钥挡着（§10） |
+| 6 | 色彩 | ICC→ICC **有独立的数值验证**，不只比"有没有" | ΔE2000 ≤ 1（矩阵/TRC），≤ 2（CLUT）。**尺子已在 M13 落地**（`ColorDifference`，Sharma 34 组参考全过）；与 4.1.3 的同图对拍**不可行**（其 profile→profile 转换 API 不公开），改为自洽验证：恒等 ΔE 0.000、sRGB→P3→sRGB 往返最大 ΔE 0.654（见 `known-gaps.md` 评估记录） |
 | 7 | AOT | 全库 NativeAOT + 零 trim 警告作为构建门禁；4.x 仍在补 AOT 种子 | publish + `warnaserror` |
 
 读法：第 1 条是唯一"可能输"的，所以它进基准而不是承诺。第 4、5、7 条是结构性的——4.x 的处理管线建在 `Image<TPixel>` 上，位深由像素类型决定，跨档位一致与全库 AOT 都不是它的契约。第 6 条从"人无我有"降级为"人对人更准"：4.x 的 ICC 是 v4.0 的新特性，我们必须在 ΔE 上赢，不能只靠"支持 ICC"这句话。
@@ -280,8 +281,8 @@ public readonly struct PixelView   // 算子唯一认识的形态
 - **按行给 stride，不按整块连续假设。** 所有内核签名都是 `(src, srcStride, dst, dstStride, widthPx)`，天然支持子视图与分块。
 - **`WorkingBuffer` 直接实现 `IMemoryOwner<byte>`**，这是零拷贝交给 `RasterImage.Wrap` 的开关。
 - **类型名叫 `WorkingBuffer`，不叫 `PixelBuffer`**：`Sdcb.SimdCodecs.Abstractions` 2.0 自带一个 `PixelBuffer`（codec 侧，native layout，按 `PixelFormat` 而非 `WorkingFormat`），而每个碰像素的文件都同时 `using` 两个命名空间。2026-11-11 从其 2.0.0 包切换时改名，而不是在每个文件写 `using` 别名——别名的代价是每个新文件都要记得加，改名只付一次。
-- 池：M0 只有 `ArrayPixelPool`（默认，`ArrayPool<byte>.Shared` 分桶）。`NativePixelPool`（`NativeMemory.AlignedAlloc`，64B 对齐）与 `NullPixelPool` 到 M1 再加——先让接口稳定，再补实现。测试里用一个计数池断言租/还各一次。
-- 池参数：`MaxRetainedBytes`（默认 256 MB）、`ClearOnReturn`（默认 false）、`PreferNativeAbove`（默认 8 MB）。
+- 池：目前只有 `ArrayPixelPool`（默认，`ArrayPool<byte>.Shared` 分桶；大于 4 MiB 的请求走 1 MiB 粒度、每档最多保留 2 块）。
+  `NativePixelPool` 与 `NullPixelPool` 未提供——没有调用方，接口 `IPixelPool` 已足够表达它们。测试里用一个计数池断言租/还各一次。
 
 ### 5.3 图像与帧
 
@@ -620,8 +621,8 @@ halo」用的，拿它切逐步路径会切出几带、只用几个核。
 |---|---|
 | v1（M1–M3） | 整图执行。`MapSourceRect` 曾只在已删除的 `IImageOp` 上声明、全仓零实现；2026-11-26 起由 `IInputFootprint.MapSourceRegions` 真正提供（identity / halo / whole-source / block-aligned），编译器据此推导区域；`RegionExecutor` 也按 footprint 反推窗口，带泵执行器仍只读 `HaloX/HaloY` |
 | P1（M4） | 行带流式：只对 `Neighborhood` / `Separable` 打开，halo = 核半径；内存从 O(H) 降到 O(band + halo) |
-| P2 · 已交付一半（M17） | **矩形执行**：任意源矩形 → 窗口 → `RunWindow` → 内圈，见 §6.6。源只有 TIFF 段级实现 |
-| P2 · 未做 | `Geometric`（尺寸变化）与 `Global` 两遍（先统计后处理），仍受 `MaxWorkingBytes` 约束 |
+| P2 · 已交付（M17 + Tile） | **矩形执行**：任意源矩形 → 窗口 → `RunWindow` → 内圈（§6.6）；**tile 走查**按矩形多次调用同一执行器并写 `IRegionSink`（§6.3.2）。源只有 TIFF 段级实现 |
+| P2 · 部分 | `Geometric` 已进入编译段（行局部几何可流式，其余物化）；`Global` 两遍（先统计后处理）未做，仍受 `MaxWorkingBytes` 约束 |
 
 分块的验收不是"能跑"，是**输出与整图执行逐字节相同**。这一条会让不少 op 在 P1 阶段被判定为"不能分块"，那是正确结果，不是失败。
 
@@ -675,7 +676,9 @@ Tile 的验收是逐字节：`TileExecutionTests` 在 3 种格式、3 组 tile �
 像素一次。公开入口是 `Image.ProcessTiles(source, plan, tileW, tileH)`（返回缓冲）、
 `Image.ProcessTiles(source, sink, plan, …)`（写自定义 Sink），以及 `Image.ProcessTilesTo(...)`（直接编码，见下）。可 tile
 性由契约的 `Requirements.SupportsTiles` 显式声明：Point / 局部 Neighborhood 为 true，Global / Composite / 整图 / 块对齐
-为 false，编译器按声明拒绝。内存侧有 `TileExecution_HoldsWellUnderOneFrame` 钉住「一块 tile + halo」的峰值。
+为 false，编译器按声明拒绝。内存侧有 `TileExecution_HoldsWellUnderOneFrame` 钉住「一块 tile + halo」的峰值；
+`ATileWalk_CountsTheTargetTileOnce` 用恰好「一块 tile + 两个窗口」的限额钉住目标 tile 只记一次（由走查预留，
+`RegionExecutor` 不再重复计入）。
 
 公开的文件级区域源是 `Image.OpenRegionSource(path, RegionOptions)`（返回可释放的 `ImageRegionSource`，目前只有
 TIFF 布局可读），可以直接喂给 `ProcessTiles` / `ProcessTilesTo`。
@@ -685,8 +688,8 @@ TIFF 布局可读），可以直接喂给 `ProcessTiles` / `ProcessTilesTo`。
 `StreamFrameEncoder.WriteRows`，最后 `Complete()` 断言没有截断。它不解码整图，只多一条宽的带（`width × tileHeight`
 × bpp，计入 Workspace 与 `MaxWorkingBytes`），报告 `ProcessMode.Tiled`、`PeakWorkingBytes` 与
 `PredictedWorkingBytes`。路径重载 `ProcessTilesTo(path, path, …)` 用 `TiffRegionSource` 打开可区域读取的 TIFF；计划里
-的几何步（含尾部 resize）会进入 recipe 并被编译器以 `NotTileable` 拒绝，而不是被静默忽略。tile 吞吐有两个基准条目（`tile invert 512x512` / `tile gaussian 512x512`，4K 源），
-尚未录入版本化基线。
+的几何步（含尾部 resize）会进入 recipe 并被编译器以 `NotTileable` 拒绝，而不是被静默忽略。tile 吞吐有两个基准条目（`tile invert 512x512` / `tile gaussian 512x512`，4K 源），已录入
+`benchmarks/baselines/windows-10.0.19045-x64-16-m16-tile.json`（阈值 30% / 35%，见 `measurements.md`）。
 
 ### 6.3.3 代表算子闭环（P2）
 
@@ -794,6 +797,12 @@ orientation 复位（§6.3.10）。
 Resize 取各自最大 ring，不再只算第一个。执行期把几何/格式过渡帧、Region 窗口与 Scratch 也 `Reserve` 到同一个
 `WorkspaceManager`，所以 `PeakWorkingBytes` 覆盖这些此前漏掉的缓冲。
 
+目标缓冲区（区域矩形、每块 tile、tile 缓冲重载返回的整帧）统一到「谁租用谁预留，且在租用**之前**」：
+`Image.ProcessRegion`、`Image.ProcessTiles` 的缓冲重载和 `TileExecutor` 都经 `TargetBuffer` 在
+`WorkingBuffer.Rent` 之前预留；`RegionExecutor` 只计它自己租的窗口，不再把目标算进 estimate。此前区域是「先分配
+后预留」（限额不满足时矩形已经分配完才抛），tile 则被走查记一次、又被矩形执行器记一次（限额恰好为「一块 tile +
+窗口」时会按两块 tile 拒绝）。
+
 这仍然是**逐段预留 + 峰值账户**，不是单一分配器，也没有 spool：各段串行，前一段释放后下一段才开始；调用方仍能
 在运行前替换 `WorkspaceManager`。
 
@@ -812,7 +821,7 @@ Resize 取各自最大 ring，不再只算第一个。执行期把几何/格式�
   也仍保守返回整图。
 - 每个 `OperatorStep` 的端口分别推导：主输入用算子 footprint；注入式第二输入用 `PlanStep.SecondaryRegion`
   （算子声明如何从视图得到端口矩形：Composite/Blend 是 `(x, y, w, h)`，DrawImage/ApplyGainMap/GuidedFilter 是
-  整个 overlay），闭包式第二输入仍用 `InputPort.Footprint`。
+  整个 overlay）。闭包式第二输入及其重载已于 2026-11-26 删除，`InputPort.Footprint` 只作为契约模型保留。
 - 编译器把每步的 `CompiledStepInfo`（输出尺寸/格式、各端口源矩形、读取面积、放大比）放进
   `CompiledExecutionPlan`，并写进 `Explanation`。
 - `RegionCost` 汇总整条链的源读取面积 / 输出面积；`CompileOptions.MaxRegionReadAmplification` 超限时把 Region
@@ -830,7 +839,8 @@ Resize 取各自最大 ring，不再只算第一个。执行期把几何/格式�
 - `AutoOrient` 不再是 `Geometry` barrier：它按当前方向追加一个 GeometryStep，pipeline 在包装结果时把 orientation
   置为 Normal。至此所有 view 算子都在计划/几何/格式步里。
 - `WorkspaceManager`（公开）是执行期预留账户：`Reserve(bytes, name)` 返回租约，记录并发峰值并在超过 limit 时拒绝。
-  `ExecuteOptions.Workspace` 传入；计划、流窗口+Scratch、resize ring、tile、Region 窗口、几何/格式过渡帧各自预留；
+  `ExecuteOptions.Workspace` 传入；计划、流窗口+Scratch、resize ring、tile 与 Region 窗口、编码带、几何/格式过渡帧，
+  以及各入口自己租的目标缓冲区（`TargetBuffer`）各自预留；
   `ImageTranscode` 使用调用方给的账户，没有就为本次运行自建一个，`ProcessReport` 带 `PeakWorkingBytes` 与
   `PredictedWorkingBytes`（编译期上界）。`WorkspaceScope.WholeImage` 会改变乘法，不再只由 Category 推断。
   三条路径读同一套口径：`MemoryEstimator`（Frame）、`WorkingSetBudget`（Stream/Region 运行时）与
@@ -1054,11 +1064,14 @@ q 离视图边 ≥ halo 时算子内 clamp 不作用于 q；距离不足的那�
 ```
 windows      = 步数 > 1 ? 4 : 2                       // 源窗 + 输出窗（+ 两步 ping-pong ×2）
 windowBytes  = min(W, R.Width+2Hx) · min(H, bandRows+2Hy) · bpp
-estimate     = windows·windowBytes + R 的字节 + perWorkerScratch·workers
+estimate     = windows·windowBytes + perWorkerScratch·workers   // 只算执行器自己租的窗口
+target       = R.Width · R.Height · bpp                         // 租它的人在 Rent 之前预留
 sourcePeak   ≈ 一个段缓冲（复用）
 ```
-与图像总尺寸无关：`windowBytes` 只含 R 与 halo。`ExecuteOptions.MaxWorkingBytes` 事前拒绝，规则与带泵同文；
-`RegionOptions.MaxSegmentBytes` 事前拒绝单段过大的页。实测见 §6.6.5。
+与图像总尺寸无关：`windowBytes` 只含 R 与 halo。目标矩形不在 `RegionExecutor` 的 estimate 里：`Image.ProcessRegion`
+在 `Rent` 之前经 `TargetBuffer` 预留，tile 走查预留它自己的一块 tile，`ProcessingPlan.TryExecuteRegion` 的
+destination 是调用方的。占用峰值仍是「目标 + 窗口 + scratch」，但每一项只记一次。
+`ExecuteOptions.MaxWorkingBytes` 事前拒绝，规则与带泵同文；`RegionOptions.MaxSegmentBytes` 事前拒绝单段过大的页。实测见 §6.6.5。
 
 窗口高度的上界不能由首带探测得到：页面顶部会把上侧 halo 钳掉，首带反而最矮。`RegionExecutor` 改用与
 `PlanRowSource` 相同的公式 `min(bandRows, region.Height) + 2ΣHaloY`（再钳到页高）；区域后端只接受 identity /
@@ -1070,7 +1083,7 @@ constant-halo footprint，所以它与 footprint 推导等价。`ProcessRegion_A
 
 | 条件 | 结果 |
 |---|---|
-| 计划含 `Global` / `Composite` / 读整图步（Mirror·Wrap 卷积） | `RegionRefusal.{GlobalStep, CompositeStep, StepNeedsWholeSource}`，目标一个字节都不写 |
+| 计划含 `Global` / `Composite` / 读整图步（Mirror·Wrap 卷积）/ 声明 per-call 或 source-order 状态 | `RegionRefusal.{GlobalStep, CompositeStep, StepNeedsWholeSource, StatefulStep}`，目标一个字节都不写 |
 | 非 TIFF | `NotSupportedException` |
 | TIFF 4/2 样本（`ExtraSamples` 不可见） | `NotSupportedException`，消息点名 `ExtraSamples` |
 | Palette / CMYK / YCbCr / CIE Lab / 透明掩码 | `NotSupportedException`（`TiffColor` internal，颜色转换是 codec 的私有定义） |
@@ -1095,15 +1108,14 @@ constant-halo footprint，所以它与 footprint 推导等价。`ProcessRegion_A
 
 `Image.Load(path, Region)` 的 TIFF 快路径（`Load` 没有「原生/物化」报告位，且它的元数据来自整文件解码）；
 4 通道 / Palette / CMYK（等 `TiffPageLayout` 暴露 `ExtraSamples`）；`Geometric` 分块；`Global` 两遍；多输入；
-把结果写回文件的某个矩形（没有区域 sink）。**区域结果不带 ICC/Exif**：codec 文档写明元数据需要读整个文件，
+把 Region 的结果直接写回文件（`IRegionSink` 目前只由 tile 走查驱动，Region 入口返回内存图）。**区域结果不带 ICC/Exif**：codec 文档写明元数据需要读整个文件，
 读它等于放弃这条路的全部意义；需要时用 `SaveOptions.Metadata` 附上。
 
-### 6.7 几何进入执行模型（M18，第一切片已落地）
+### 6.7 几何进入执行模型（M18，已落地）
 
-现状：`ProcessingPlan.Add` 对 `Geometric` 直接抛，几何算子唯一的通道是 `ImagePipeline.Reshape` 的整图执行；
-区域执行只能配同尺寸计划。也就是说 §6.5 的三种源能力对几何算子全部无效。
-
-要让它成立，缺的是三件事，缺一不可：
+现状：`ProcessingPlan.Add` 对 `Geometric` 直接抛；几何算子走 `ImagePipeline.Reshape`（整图）或编译器切出的
+`GeometryStep`——行局部几何（Crop / Pad / FlipHorizontal / Resize）已有 `Wrap` 形式，能进拉式链，其余只能整图。
+当时要让计划本身携带尺寸变换，缺的是三件事，缺一不可：
 
 1. **尺寸变换**：`PlanStep` 要能声明「这一步把 w×h 变成 w'×h'」，`Execute` 的输出尺寸由链累积；带泵与区域的
    sink 必须**在解码前**知道输出尺寸（编码器 `AddFrame` 要 w/h）。这会改动 `ProcessingPlan` 的对外形状，
@@ -1124,7 +1136,7 @@ constant-halo footprint，所以它与 footprint 推导等价。`ProcessRegion_A
   但带泵与区域执行器仍只用 `HaloX/HaloY`——footprint 的消费者是 P1 编译器。
 - `Resize` 的并行度来自目标行带（`RowParallel.ForBands`），不是行内并行——这决定了「顺序喂料」不能直接复用它的并行结构。
 
-#### 6.7.2 第一个切片（已落地）
+#### 6.7.2 第一切片（已落地）
 
 `ImageTranscode.From(sourcePath).Resize(width, height, resampler)`：**只有一步 resize**，不碰 plan。
 
@@ -1132,7 +1144,8 @@ constant-halo footprint，所以它与 footprint 推导等价。`ProcessRegion_A
 - 内存：ring（`taps + chunk + 2` 行目标宽浮点）+ staging（`chunk` 行源字节）+ 输出批 + 一行源 + 每 worker 一行浮点，
   与源高度无关；预算是一个账本，超出时先缩 chunk 再拒绝（见 §6.7.3）。
 - 判据：8K→1080p 峰值 ≤ 64 MiB，吞吐 ≥ `Resize` 的 0.8×；达不到就说明并行喂料没做对，先修它再谈 plan。
-- 通过后再做尺寸变换与 plan 接线（M18 主体）。
+- 尺寸变换与 plan 接线随后落地：`ProcessingPlan.Resize` 让计划以缩放结尾，`Apply` 把它编译成几何段；
+  链上任意位置的缩放走「计划 → 缩放 → 计划」的拉式串联（见 §6.7.3）。
 
 #### 6.7.3 实测（2026-11-25，第一切片）
 
@@ -1187,7 +1200,7 @@ Region 执行器产出（与 `Load → 处理 → Crop` 逐字节相同），随
 `Rotate90` / `Transpose` / `Affine` / `Perspective` 需要整行重排或随机访问，前向流不可做。异步入口（`RunAsync` / `SaveAsync` / `ToImageAsync`）是把同步
 管线放到线程池，不是重叠 IO。
 
-仍未做：多级缩放（两次 resize 连用）、Pad/FlipHorizontal 的流式版、Affine/Perspective。
+仍未做：多级缩放（两次 resize 连用）、Affine/Perspective 的行流式形式。
 
 ---
 
@@ -1385,26 +1398,24 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 
 完全照 SimdCodecs 的规矩：
 
-- **同进程 A/B**：`baseline` 命令用 `git worktree` 编出上一提交的库，和当前代码在同一进程里跑。跨会话的数字不算基线（机器状态能差 10%+）。
+- **同进程 A/B**：参照实现与本库在同一个进程里交替计时（`SimdImaging.Comparison`）。跨会话的绝对值不算基线（机器状态能差 10%+）；需要多轮时用 `repeat.sh` 取中位。
 - **端到端才算数**：单独内核快 5× 不代表算子快——SimdCodecs 记录过一个"向量化色彩转换在真实管线里慢 42%"的案例。
-- **按消融归因**：`--ablate` 关掉某一阶段看差额，不用采样 profiler。
+- **按消融归因**：关掉某一阶段看差额，不用采样 profiler。
 - **先正确后计时**：输出不对的基准拒绝计时。
-- **记录机器**：CPU / OS / .NET 版本 / `Vector256/512.IsHardwareAccelerated` 每次写进结果文件。
+- **记录机器**：CPU / OS / .NET 版本 / `Vector256/512.IsHardwareAccelerated` 随每次结果记录；版本化基线存 `benchmarks/baselines/*.json`，由 `gates.sh --perf` 判定。
 
-三个基准项目，入口命令一致（`matrix` / `ab` / `baseline` / `--ablate`）：
+工作区里的四个基准工程：
 
-| 项目 | 场景 | 参照实现 |
-|---|---|---|
-| `SimdImaging.Resize.Benchmarks` | 16 种重采样器 × 上/下采样 × 8/16 bit；4K→1080p、1080p→4K、1/8 缩略图 | ImageSharp 4.1.3、SkiaSharp、Magick.NET |
-| `SimdImaging.Filters.Benchmarks` | Gaussian/Box/Median/Morphology/Convolve × 半径矩阵；合成 16 种 blend | ImageSharp 4.1.3、SkiaSharp |
-| `SimdImaging.Pipeline.Benchmarks` | 真实链路：load→resize→blur→sharpen→composite→quantize→save；8K 峰值内存；稳态分配 | ImageSharp 4.1.3（同链路） |
+| 项目 | 场景 |
+|---|---|
+| `SimdImaging.Comparison` | 对 ImageSharp 4.1.3 的算子对拍：`surface` / `parity` / `perf` / `perf16` / `perf32` / `matrix` / `perfpipe` / `icc` / `realworld` / `cores` |
+| `SimdImaging.Benchmarks` | 本库自测：`mem` / `peakmem` / `fusion` / `chainab` / `seamprofile` / `disposecheck` / `nlm-ablate` / `batch`，以及默认轮次里的 tile 吞吐（`tile invert` / `tile gaussian`）；模式列表见 `benchmarks/README.md` |
+| `SimdImaging.ColdStart` | 冷启动与首调用成本 |
+| `SimdImaging.Comparison.AotOracle` | AOT 产物作为黑盒参照 |
 
-报告模板：`benchmarks/<项目>/results/<日期>-<机器>.md`，含正确性门、耗时、MP/s、alloc/op、峰值内存、消融表。
+原始输出不保留（过程进提交历史）；结论与数字写在 `docs/measurements.md`，门禁规则见 `benchmarks/README.md`。
 
-**许可证前提（必须先确认）**：据 SimdCodecs 的依赖注释（2026-11），ImageSharp **3.2.0 与 4.x 在构建期校验 Six Labors 许可密钥**；3.1.12 是最后一个免密钥可构建的版本。所以"和 4.1.3 同进程 A/B"这条在拿到合法密钥之前跑不起来。三条路，按优先级：
-1. 拿密钥，直接对 4.1.3（唯一能兑现 §1.3 承诺的路径）；
-2. 无密钥时退到 3.1.12，报告里明确写"基线是 3.1.12，不是 4.x"，不冒充；
-3. 用其官方工具/预编译二进制做黑盒参考，只出趋势不出同比。
+**许可证前提**：ImageSharp 4.x 在构建期校验 Six Labors 许可密钥，本仓库的密钥放在 git-ignored 的 `docs/sixlabors.lic`，对比工程按路径引用（`SixLaborsLicenseFile`），所以 4.1.3 的同进程 A/B 可跑。若换到没有密钥的环境：退到 3.1.12 并在报告里写明基线版本，或用官方二进制做黑盒参考、只出趋势不出同比——不冒充 4.x。
 
 ---
 
@@ -1413,36 +1424,35 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 | 里程碑 | 内容 | 出口条件 |
 |---|---|---|
 | **M0 骨架（已完成）** | slnx、props、`Abstractions`（格式 / 池 / 缓冲 / 算子契约 / 选项）、`Image` + Load/Save/Encode、AOT 冒烟工程与脚本 | ✅ `Release` 构建 0 警告；两种基线的 AOT 产物与 JIT 逐字节一致，`dynamic-code=False` 已断言 |
-| **M1 几何（已完成）** | Crop / Pad / Flip / Rotate 90·180·任意角 / Affine / Perspective / Resize（5 种采样器）/ Premultiply / Unpremultiply / Composite；SIMD 内核与四档一致性、`ProcessingPlan`、PublicAPI 快照 | ✅ 黄金测试通过、三档逐字节一致（AVX-512 档预留）；对 ImageSharp 的倍数见 `docs/measurements.md` |
+| **M1 几何（已完成）** | Crop / Pad / Flip / Rotate 90·180·任意角 / Affine / Perspective / Resize（首发 5 种采样器；2026-11-15 补齐 16 个成员 / 15 个核）/ Premultiply / Unpremultiply / Composite；SIMD 内核与四档一致性、`ProcessingPlan`、PublicAPI 快照 | ✅ 黄金测试通过、三档逐字节一致（AVX-512 档预留）；对 ImageSharp 的倍数见 `docs/measurements.md` |
 | **M2 色彩 + 滤波（功能完成）** | 35 个点算子 + LUT 字节域融合、Gaussian/Box/Median/Sobel/Unsharp、直方图与均衡、自适应二值化 | 模糊 ≥ 1.5×：**1080p 实测 1.61–1.86×，达标**（11-07）；「点算子融合后分配 = 0」：**❌ 已判定未达标（2026-11-15，M5 出数）**——M10 的 `AddPointLut` 折叠与窗口递归落地后重测，稳态 ≈4.3 KiB/op（§1.3 字面尺 `GC.GetAllocatedBytesForCurrentThread`）/ ≈6.0 KiB/op（进程级），两尺子、两次独立运行、两尺寸可复现；残余是 per-call 计划重建而非像素缓冲。0 B/op 未达成，与 §1.3/§6.1/README 既有口径一致；11-11 的 7 / 39 / 8 KiB/op 是融合前的旧读数，不作结论。见 `known-gaps.md` §「M2『点算子融合后分配』重测与判定」 |
 | **M3 量化 + 绘制（功能完成）** | Octree/Wu/Palette/WebSafe、抖动、路径与形状、18 blend + 12 Porter-Duff、渐变、水印 | 量化 PSNR：**16.61 dB**（Wu / 64 色 / 无抖动，同参数对拍，11-11）；本行未给阈值，只能记数、不能判达标。抗锯齿覆盖率：**判据未定义**（无测法、无阈值，现有测试只有 `partial > 0` 存在性断言）→ 仍不可判定 |
 | **M4 HDR/ICC/高级（功能完成）** | 传递函数、色调映射、gain map、ICC 矩阵/TRC（LUT 顺延 M13）、CLAHE、双边、行带流式 | 8K 峰值内存：**4 场景 0.74 / 2.68 / 1.01 / 1.01× 单帧**（单帧 126.56 MiB，2.5× = 316.4 MiB），gaussian-blur 339.0 MiB **超 7.1%**；10-bit HEIF → 16-bit PNG 端点：**测不了**——HEIF 未接入、也无可编解码语料，未出数（`Png_Rgba16_RoundTripsByteExact` 只证 16-bit PNG 往返，不等于 HEIF 端点） |
-| **M5 验收（已完成）** | 19 场景基准报告、分配报告、AOT 报告、`known-gaps.md` 定稿 | ✅ 2026-11-15：§1.3 七条**全部出数或写明不可测原因**——吞吐 1080p 19/19 领先（2.1632×）达标；稳态分配 4.3–6.0 KiB/op **未达标**；8K 峰值 3/4 达标（`gaussian-blur` 2.68× **未达标**）；位深 16-bit PNG 逐字节达标、HEIF 端点架构下不可测；三档逐字节一致（963×3、body SHA `9bd6c8df…`），第四档未实现；ICC ΔE 尺子对 Sharma 34/34 达标、与 4.1.3 对拍缺；AOT 双档逐字节达标。**总账 2 达标 / 3 部分 / 2 未达标**，逐条见 `known-gaps.md` 的 M5 节 |
+| **M5 验收（已完成）** | 19 场景基准报告、分配报告、AOT 报告、`known-gaps.md` 定稿 | ✅ 2026-11-15：§1.3 七条**全部出数或写明不可测原因**——吞吐 1080p 19/19 领先（2.1632×）达标；稳态分配 4.3–6.0 KiB/op **未达标**；8K 峰值 3/4 达标（`gaussian-blur` 2.68× **未达标**）；位深 16-bit PNG 逐字节达标、HEIF 端点架构下不可测；三档逐字节一致（963×3、body SHA `9bd6c8df…`），第四档未实现；ICC ΔE 尺子对 Sharma 34/34 达标、与 4.1.3 对拍缺；AOT 双档逐字节达标。**总账 2 达标 / 3 部分 / 2 未达标** |
 | **M6 治理与验收基建前置（已完成）** | 参考向量包 / 像素差异工具 / CC0 语料清单 + SHA-256 下载脚本 / SIMD 档位矩阵 / 版本化性能基线格式与 `gates.sh --perf` 框架 / AotSmoke 必需 hash 检查与 `warp` 条目 | ✅ 2026-11-14：`gates.sh` observed `warnings=0 errors=0`、`failed=0 passed=619`、PublicApi 快照 unchanged；`simd-tiers.sh` 三档 JIT 各 619/619，算子输出 body SHA-256 均为 `44390203…6763`；`run.sh` 的 JIT/AVX2/SSE2 三路 `diff` 无差且必需 hash 含 `warp` / `samplepixel`；语料 2/2 条 SHA-256 通过；`--perf` 如实输出 `enforced=0`（框架入库、阈值待 M15）。AOT 档无法跑 xUnit，以 smoke 的三路字节比对代替第四次全量测试，这是口径说明不是宣称跑了四套测试 |
 
 | **M7 P0 正确性止血（已完成）** | `Execute` / `Transforms.Copy` 异常所有权；`SamplingCore` 格式原生采样 + `SampleOptions` 契约 + `SampleRaw`；Warp 精度回归；AotSmoke `warp` / `samplepixel` 条目 | ✅ 2026-11-14：计数池 5 例（Global kernel / band kernel / observer / 正常三步 / 空 plan）验证 `Rent == Dispose`、重复释放 0；`WarpPrecisionTests` 12 例覆盖三格式恒等逐字节、Rgba16 低字节、Rgba32F 的 HDR>1 / 负值 / 超范围、边界背景、非整数坐标、8-bit 兼容重载、不支持契约显式抛、map 抛异常不泄漏；`gates.sh --aot --perf` observed `warnings=0 errors=0`、`failed=0 passed=636`、快照 review 后 unchanged、AOT 三路 `diff` 无差；`simd-tiers.sh` 三档各 636/636，body SHA-256 `44390203…6763` 与 M6 相同（Rgba8 输出字节未变，旧内联断言全部未改）。`docs/public-api.txt` 只有新增条目、无现有签名改写 |
 
-| **M8 采样三链统一与色彩域（已完成）** | `SampleTransferCurve` 镜像 enum / `SampleOptions.Curve` / `TapPlan` 唯一权重生成器 / `SampleTransfer` / 统一重建核心（含 tap-plan 注入重载）/ `WarpWithOptions` + 第二波 `Mapping.TransformWithOptions` / `PerspectiveWithOptions` / `Resample.ResizeWithOptions` / `Image.{Resize,Rotate,Affine,Perspective}WithOptions` | ✅ 2026-11-14：`gates.sh --aot --perf` observed `warnings=0 errors=0`、`failed=0 passed=668`、快照 review「只有新增、0 删除 0 改写」；**剥离 AotSmoke 全部 5 条新增行后，既有算子 body SHA-256 仍为 `44390203…6763`**（既有输出字节零变化）；三档新 body SHA `7a7e74fe…` 一致；AOT 三路 `diff` 无差；`SampleOptionsContractTests` 12 例 + `GeometryOptionsContractTests` 13 例（含 2 条新向量执行断言）+ Mapping 等价扫描 9 例；语料 2/2。**Mapping 接入 TapPlan 按等价扫描判分支 B**：legacy 逐字冻结（Rgba32F 在 2/33 矩阵差 1 ULP，根因 = JIT 对 legacy 一次性 Σw·c 表达式做 FMA 融合而循环累加不融合，见 `known-gaps.md` M8 节与 `Diagnose_DumpsBothWeightPathsForTheShearCase`），仅新 WithOptions 走 `MappingTapSampler`；零值张力（全零 record = 历史契约）已在入口 xmldoc 与 known-gaps 登记。EWA 与融合属 M9/M10 |
+| **M8 采样三链统一与色彩域（已完成）** | `SampleTransferCurve` 镜像 enum / `SampleOptions.Curve` / `TapPlan` 唯一权重生成器 / `SampleTransfer` / 统一重建核心（含 tap-plan 注入重载）/ `WarpWithOptions` + 第二波 `Mapping.TransformWithOptions` / `PerspectiveWithOptions` / `Resample.ResizeWithOptions` / `Image.{Resize,Rotate,Affine,Perspective}WithOptions` | ✅ 2026-11-14：`gates.sh --aot --perf` observed `warnings=0 errors=0`、`failed=0 passed=668`、快照 review「只有新增、0 删除 0 改写」；**剥离 AotSmoke 全部 5 条新增行后，既有算子 body SHA-256 仍为 `44390203…6763`**（既有输出字节零变化）；三档新 body SHA `7a7e74fe…` 一致；AOT 三路 `diff` 无差；`SampleOptionsContractTests` 12 例 + `GeometryOptionsContractTests` 13 例（含 2 条新向量执行断言）+ Mapping 等价扫描 9 例；语料 2/2。**Mapping 接入 TapPlan 按等价扫描判分支 B**：legacy 逐字冻结（Rgba32F 在 2/33 矩阵差 1 ULP，根因 = JIT 对 legacy 一次性 Σw·c 表达式做 FMA 融合而循环累加不融合，见 `Diagnose_DumpsBothWeightPathsForTheShearCase`），仅新 WithOptions 走 `MappingTapSampler`；零值张力（全零 record = 历史契约）已在入口 xmldoc 与 known-gaps 登记。EWA 与融合属 M9/M10 |
 
-| **M9 几何采样突破（EWA / 自适应 AA）（已完成）** | `SampleAaMode{None,Elliptical}` + `SampleOptions.AaMode` / `SourceJacobian` / `EwaKernel`（椭圆高斯足迹 `w=exp(-0.5·dᵀ(JJᵀ)⁻¹d)` + 退化判定）/ `AdaptiveAa`（\|det J\| 分档；轴比只判退化）/ `SamplingCore` Jacobian 重载 / `Mapping.TransformWithOptions`・`PerspectiveWithOptions` 的解析 Jacobian（affine 常量、perspective 逐像素解析）/ `WarpWithOptions` 传 Elliptical 显式抛 | ✅ 2026-11-14：**足迹公式勘误后重测**（原 `Q=MᵀM`+`k²` 把缩小做成了锐化，2× 缩小 σ≈0.35 px；已改为 Heckbert 定义 `R=(JJᵀ)⁻¹`、2σ 窗口、`(maxTaps+1)²` 缓冲，见 `known-gaps.md` M9 节）。`EwaPrecisionTests` 18 例（对称中心保真 128、独立双精度高斯逐字节 3 相位、单像素白线 0.25× 缩小四行都必须保留能量且 legacy 双线性丢失该线、`(maxTaps+1)²` 预算边界不越界、`AdaptiveAa` 5 档、退化 status 可观察 + 各向同性回退逐字节、Nearest/Warp+Elliptical 显式抛、强透视远端无 NaN、HDR LinearLight 往返、2 条 ewa 向量执行断言）+ `TapPlanTests` 7 例；`gates` observed `failed=0 passed=698`；三档 body SHA `42c595fe…` 一致，**剥离 6 条新增 smoke 行后精确回到 `44390203…6763`**（legacy 字节零变化）；AOT 三路 diff 无差；快照新增 `SampleAaMode` 4 行、0 删除 0 改写；`ewa.identity`=96 / `ewa.minify`=128 独立推导逐字节一致（两者都是对称足迹，对公式修正不变）。**设计决定**：EWA 累加保持纯标量（无 SIMD 层），SIMD twin 顺延 M15——规避 M8 等价扫描暴露的「legacy 表达式 FMA 融合 vs 循环累加不融合」形状不对称在参考/加速双路径间复现；`ewa.aa.tier.*` 阈值待摩尔纹语料扫描回填（P4） |
+| **M9 几何采样突破（EWA / 自适应 AA）（已完成）** | `SampleAaMode{None,Elliptical}` + `SampleOptions.AaMode` / `SourceJacobian` / `EwaKernel`（椭圆高斯足迹 `w=exp(-0.5·dᵀ(JJᵀ)⁻¹d)` + 退化判定）/ `AdaptiveAa`（\|det J\| 分档；轴比只判退化）/ `SamplingCore` Jacobian 重载 / `Mapping.TransformWithOptions`・`PerspectiveWithOptions` 的解析 Jacobian（affine 常量、perspective 逐像素解析）/ `WarpWithOptions` 传 Elliptical 显式抛 | ✅ 2026-11-14：**足迹公式勘误后重测**（原 `Q=MᵀM`+`k²` 把缩小做成了锐化，2× 缩小 σ≈0.35 px；已改为 Heckbert 定义 `R=(JJᵀ)⁻¹`、2σ 窗口、`(maxTaps+1)²` 缓冲）。`EwaPrecisionTests` 18 例（对称中心保真 128、独立双精度高斯逐字节 3 相位、单像素白线 0.25× 缩小四行都必须保留能量且 legacy 双线性丢失该线、`(maxTaps+1)²` 预算边界不越界、`AdaptiveAa` 5 档、退化 status 可观察 + 各向同性回退逐字节、Nearest/Warp+Elliptical 显式抛、强透视远端无 NaN、HDR LinearLight 往返、2 条 ewa 向量执行断言）+ `TapPlanTests` 7 例；`gates` observed `failed=0 passed=698`；三档 body SHA `42c595fe…` 一致，**剥离 6 条新增 smoke 行后精确回到 `44390203…6763`**（legacy 字节零变化）；AOT 三路 diff 无差；快照新增 `SampleAaMode` 4 行、0 删除 0 改写；`ewa.identity`=96 / `ewa.minify`=128 独立推导逐字节一致（两者都是对称足迹，对公式修正不变）。**设计决定**：EWA 累加保持纯标量（无 SIMD 层），SIMD twin 顺延 M15——规避 M8 等价扫描暴露的「legacy 表达式 FMA 融合 vs 循环累加不融合」形状不对称在参考/加速双路径间复现；`ewa.aa.tier.*` 阈值待摩尔纹语料扫描回填（P4） |
 
 | **M10 执行架构：真正融合（已完成）** | `ExecuteOptions`（degree / `MaxWorkingBytes` / `AllowFusion` / `Diagnostics` / 取消）/ `ProcessingPlan.ExecuteWithOptions` + `Image.ApplyWithOptions` / `PlanReport` + `PlanSegment` + `FusionFallbackReason` / `FusionPlanner` 分段 / `FusedExecutor` 窗口递归（halo 累积、同原点视图、按 worker 的两张窗口 ping-pong）/ `ProcessingPlan.AddPointLut` + 连续字节表折叠 / `CountingPool` | ✅ 2026-11-14：`gates.sh --aot --perf` observed `warnings=0 errors=0`、`failed=0 passed=722`、快照两次 review「只有新增、0 删除 0 改写」；三档 JIT 各 721/721，body SHA `d6781e6e…` 一致，**剥离 7 条 smoke 行（M8 5 条 + `ewa.rotate` + `plan.fused`）后精确回到 `44390203…6763`**；AOT 三路 `diff` 无差且 `REQUIRED` 含 `plan.fused`；`FusedExecutorEquivalenceTests` 18 例（P³ × bandRows{1,2,7,64} × degree{1,2,4}、P+N(3)、N(2)+N(3)、N(3)+P+N(1)、P+N(6)（halo>band）、N+Global+N、Separable+P、Rgba16/Rgba32F、结构化 rect 断言、预算/取消/诊断）+ `PointLutCompositionTests` 4 例（折叠表 == 逐步应用，用真实点算子的 4×256 表验证）；`ProcessingPlanLeakTests` 按新内存模型重写（1 张输出 + 2×worker 窗口，异常路径全归还）；`--perf` 如实 `enforced=0`。**口径**：融合只改内存曲线与池租借，不改字节；halo 声明小于算子真实支撑时融合与原路径本来就会不同（已写入 `AGENTS.md`） |
 | **M11 高级照片算法 I（已完成）** | `NonLocalMeans`（精确无剪枝、Rgba8 整数 / Rgba16 long / Rgba32F double 距离、AVX2 SSD 标量孪生、可切带 halo=`S+P`）/ `Pyramid`（Burt–Adcock 5-tap，层原生尺寸，分析/合成同核）/ `LocalLaplacian`（按层选样、code-value LUT、原始基带残差、层原生存储、2 GiB 硬上限） | ✅ 2026-11-14：`gates.sh --aot --perf` observed `warnings=0 errors=0`、`failed=0 passed=768`、快照两次 review「只有新增、0 删除 0 改写」；三档 body SHA `3d51c3a6…` 一致，**剥离 9 条 smoke 行（M8 5 条 + `ewa.rotate` + `plan.fused` + `nlm` + `ll`）后精确回到 `44390203…6763`**（既有算子字节零变化）；AOT 三路 `diff` 无差且 `REQUIRED` 含 `nlm` / `ll` / `bilateral`（补上 bilateral 只 hash 不 gate 的欠账）；`NonLocalMeansTests` 19 例（双精度朴素参考逐字节：六组尺寸×S×P、3×3 图 S=5/P=2 专抓行环播种、degree 1/2/16、AVX2 vs 标量孪生、PSNR +3 dB、Rgba32F NaN 有界）+ `LocalLaplacianTests` 11 例（α=β=1 恒等 ≤1 LSB、LUT==直算逐字节、小图 levels 钳制、对比度 1.5×、常数图不变）+ `PyramidTests` 10 例（双精度参考）；NLM 1080p 实测 **S=3/P=1 5.8 s、S=5/P=2 16.1 s**（默认按实测下调为 S=3/P=1）；LL 1080p 实测 **1.81 s / 分配 139.7 MB**（4K 按面积外推约 560 MB，未实测）。**口径**：exp 是 NLM SIMD 之后的地板（不剪枝、不近似）；LL 的细节增益由采样间距/σr 决定（实测 1.5×），插值变体未做 |
 | **M12 反卷积与内容感知缩放（已完成）** | `RichardsonLucy`（高斯 PSF，可分离）/ `RichardsonLucyMotion`（PSF 取 `MotionBlur` 同一套整数偏移 ⇒ 真逆对，稀疏 tap）/ `PlanarConvolve`（float 平面，向量轴为像素、tap 升序）/ `SeamCarving`（整数 luma 能量 + DP backpointer，删/插/`CarveTo`，水平走转置）/ FFT（评估不落地，见 `docs/known-gaps.md`） | ✅ 2026-11-14：`gates.sh --aot --perf` observed `warnings=0 errors=0`、`failed=0 passed=799`、snapshot 新增 15 行 0 删除 0 改写；三档 body SHA `cf7dc7f8…9838` 一致，**剥离 13 条 smoke 行（M8 5 条 + `ewa.rotate` + `plan.fused` + `nlm` + `ll` + `rl` + `rl.motion` + `seam`）后精确回到 `44390203…6763`**；AOT 三路 `diff` 无差且 `REQUIRED` 含 `rl` / `rl.motion` / `seam`；`RichardsonLucyTests` 14 例（0 迭代逐字节拷贝、高斯去模糊 PSNR 10.55→13.58 dB、运动去模糊 7.23→11.52 dB、alpha 逐字节不变、Rgba32F 4.0 不钳、标量/向量孪生、degree 1/2/16 一致、非法参数抛）+ `SeamCarvingTests` 14 例（平局恒删第 0 列、强边方块保宽、横向==转置竖向、插入后删除回原尺寸、三格式保留字节、确定性）+ 融合等价 +3（RL/运动 RL 作为 `Neighborhood` 步）+ halo 对拍（计划步 == 整图调用，halo = `iterations×半径`）。**实测**：1080p σ=1.5 十次迭代 254 ms / 分配 95 MiB；运动 len=15 347 ms；接缝裁剪 1080p 删 50 列 502 ms（≈10 ms/缝）、分配 4 MiB。**口径**：FFT 未落地（σ ≳ 18 px 才有算术优势，且破坏 D1，见 `docs/known-gaps.md` 的评估记录）；接缝的「增量能量更新」实测否决（影响锥每行扩散一列，整高缝到底行覆盖全宽），文档写明而不是静默省略 |
-| **M13 HDR GainMap 与 ICC LUT（已完成）** | `IccProfile`（header/tag 表校验 + `mft1`/`mft2`/`mAB`/`mBA` 解析 + 方向选择）/ `IccClut3D`（u16 网格、Q15 权重、int64 累加、四面体六分支）/ `IccTransformOps` 行带并行 + PCS 缝合 / ICC 边界（见 `docs/known-gaps.md` 的评估记录） / `GainMapParameters` + `HdrOps.ReconstructGainMap`（hdrgm：min/max/gamma/offsetSdr/offsetHdr/capacity，1/4 尺寸双线性上采样，行带并行）/ `GainMappedImage`（Crop·Flip·Rotate90/180·Rotate·Resize·Affine·Perspective·WarpNormalized 的同步几何 + Load/Save/FromHdr/ToHdr）/ `ColorDifference`（ΔE2000） | ✅ 2026-11-14：`failed=0 passed=864`（+65 例：ICC 28、ΔE 7、配对几何 22、Ultra HDR 8）；ΔE2000 对 Sharma 34 组参考全部 ≤1e-4；ICC 1080p 实测 `grid=33` **40.0 ms** / `grid=2` **36.5 ms** / 同图 matrix-TRC **34.8 ms** ⇒ CLUT 只占约 9%，**per-pixel SIMD 实测否决**（AVX2 无 64 位整数乘、8 角点 gather），见 `known-gaps.md` M13 节；gainmap 重建 1080p **28.4 ms**（加行带并行前 138.6 ms）、配对 resize 1080p→720p **5.2 ms**；快照 58 行**只有新增、0 删除 0 改写**；`run.sh` 的 `REQUIRED` 含新增 `icc.lut` / `gainmap.hdr` |
+| **M13 HDR GainMap 与 ICC LUT（已完成）** | `IccProfile`（header/tag 表校验 + `mft1`/`mft2`/`mAB`/`mBA` 解析 + 方向选择）/ `IccClut3D`（u16 网格、Q15 权重、int64 累加、四面体六分支）/ `IccTransformOps` 行带并行 + PCS 缝合 / ICC 边界（见 `docs/known-gaps.md` 的评估记录） / `GainMapParameters` + `HdrOps.ReconstructGainMap`（hdrgm：min/max/gamma/offsetSdr/offsetHdr/capacity，1/4 尺寸双线性上采样，行带并行）/ `GainMappedImage`（Crop·Flip·Rotate90/180·Rotate·Resize·Affine·Perspective·WarpNormalized 的同步几何 + Load/Save/FromHdr/ToHdr）/ `ColorDifference`（ΔE2000） | ✅ 2026-11-14：`failed=0 passed=864`（+65 例：ICC 28、ΔE 7、配对几何 22、Ultra HDR 8）；ΔE2000 对 Sharma 34 组参考全部 ≤1e-4；ICC 1080p 实测 `grid=33` **40.0 ms** / `grid=2` **36.5 ms** / 同图 matrix-TRC **34.8 ms** ⇒ CLUT 只占约 9%，**per-pixel SIMD 实测否决**（AVX2 无 64 位整数乘、8 角点 gather）；gainmap 重建 1080p **28.4 ms**（加行带并行前 138.6 ms）、配对 resize 1080p→720p **5.2 ms**；快照 58 行**只有新增、0 删除 0 改写**；`run.sh` 的 `REQUIRED` 含新增 `icc.lut` / `gainmap.hdr` |
 | **M14 内存预算与预估 API（已完成）** | `FloatScratch` per-thread 字节预算（64 MB 保留 / 32 MB 单块上限、最久未用淘汰、命中/分配/淘汰计数、`Trim`）/ 权重表缓存从「24 条 + 全清」改为 8 MB + 64 条 + LRU + 命中率 / `MemoryBudget.Snapshot()·Trim()·SetLimits(...)` / `MemoryEstimator.Estimate(...)`（源、目标、计划 scratch、每 worker 声明、峰值；`checked` 溢出安全）/ `PlanStep.Scratch` + `Add(..., scratch)` 6 参重载 / `RichardsonLucyOps.ScratchBytes` / `CountingPool` 增加到字节峰值统计 | ✅ 2026-11-14：`gates.sh --aot` → `warnings=0 errors=0`、`failed=0 passed=884`（+20 例）、快照**只新增不改写**（5 参 `Add` 原样保留，新增 6 参重载）；三档 body SHA 仍为 `846c1c62…20c6`（**既有算子零字节变化**，与 M13 相同）；预估对拍 `CountingPool.PeakBytes` 三个尺寸全过（`PeakBytes ≥ 实测 + 源`）；融合算术锁常量：两个 point 步 / 64 行 band / degree 4 → `2×4×491520 = 3 932 160` 字节；预算压到 0 后 resize 输出与基线逐字节相同 |
-| **M15 SIMD / 门禁 / 契约收口（进行中）** | 已完成：**性能回退门禁**（版本化基线 + 同机器同源码可比性 + 机器校正判定 + `--self-test`）与 `docs/contracts.md` 30 条逐条关联测试。AVX-512 已出评估（`docs/known-gaps.md` 的评估记录，本机 `avx512=False`，只出评估不出数）；AotSmoke 已全量核对（53 条 hash / 23 条设闸 / 0 悬空） | ✅ 2026-11-15：判定口径重做为**机器校正**——绝对毫秒在同一台机器上 4 小时内漂 1.2–1.8×，黑盒参照 ImageSharp 同幅漂移（resize-bicubic 12.5 → 19.3 ms），故每跑自带两个不调用本库的探针（256 MB 并行求和 / 32M xorshift），判定用 `got / max(mem, alu)` 相对基线校正；阈值由**五次**运行归一化后的偏差推出 `max(20, ceil(3×S))`，设闸条数随机器噪声浮动（本次 16/29，阈值 20–59%），规则见 `known-gaps.md` 的 M15 节。实测 `--perf` 正常跑 `enforced=16`、最差 **+1.4%**；`--self-test` **exit=1**（29 条全部纳入）；负载验证：4 核抢占下 `alu` 探针报 **x1.59**、校正后全部设闸场景**最差 −1.2%**，而未校正的原始读数均值 **+40%**。2026-11-14 的旧口径（两次一对照、15 个 15% 闸、`enforced=15`）已被替换，原因见 `known-gaps.md` 的 M15 节 |
+| **M15 SIMD / 门禁 / 契约收口（进行中）** | 已完成：**性能回退门禁**（版本化基线 + 同机器同源码可比性 + 机器校正判定 + `--self-test`）与 `docs/contracts.md` 30 条逐条关联测试。AVX-512 已出评估（`docs/known-gaps.md` 的评估记录，本机 `avx512=False`，只出评估不出数）；AotSmoke 已全量核对（77 条 hash / 50 条设闸 / 0 悬空） | ✅ 2026-11-15：判定口径重做为**机器校正**——绝对毫秒在同一台机器上 4 小时内漂 1.2–1.8×，黑盒参照 ImageSharp 同幅漂移（resize-bicubic 12.5 → 19.3 ms），故每跑自带两个不调用本库的探针（256 MB 并行求和 / 32M xorshift），判定用 `got / max(mem, alu)` 相对基线校正；阈值由**五次**运行归一化后的偏差推出 `max(20, ceil(3×S))`，设闸条数随机器噪声浮动（m16 主基线 15/29，阈值 25–53%；tile 2/2），规则见 `known-gaps.md` 的 M15 节。实测 `--perf` 正常跑 `enforced=17`（两份基线合计）、最差 **+1.4%**；`--self-test` **exit=1**（29 条全部纳入）；负载验证：4 核抢占下 `alu` 探针报 **x1.59**、校正后全部设闸场景**最差 −1.2%**，而未校正的原始读数均值 **+40%**。2026-11-14 的旧口径（两次一对照、15 个 15% 闸、`enforced=15`）已被替换，原因见 `known-gaps.md` 的 M15 节 |
 
-| **M16 文件级流式（完成；静态入口 2026-11-25 内部化，2026-11-26 删除，公开面为 `ImageTranscode`）** | S1：`IRowSource` / `IRowSink`（Abstractions）+ `ProcessingPlan.CanStream` / `TryExecuteTo` + `ProcessChain`（`ImageTranscode` 的流式路由）+ `StreamRefusal` / `StreamResult` / `ProcessReport` + `FusedExecutor.RunWindow`（整图与流式共用同一段递归）+ `PlanStep.NeedsWholeSource`。S2：`RowParallel.EnterTopLevel(degree)` 把 `MaxDegreeOfParallelism` 接进带泵、`PreserveMetadata` 显式保留元数据（默认只读头部：I/O 从 2.0–3.4× 降到 1.01–1.41×）、`stream.plan` 进 AotSmoke `REQUIRED`；**有序带队列测量后取消**（见 §6.5.3） | ✅ 2026-11-25：`gates.sh --aot` observed `warnings=0 errors=0`、`failed=0 passed=1169`、快照只有新增、`stream.plan` 三档（jit / avx2 / base）sha 相同且条目内部断言「流式 == 整图」。`StreamingTests` 26 例：逐字节等价（5 链 × 2 深度、带高 1/2/7/64、PNG 8/16-bit、带 Exif 的 JPEG 走 `PreserveMetadata`）、默认丢元数据且如实报告、读量 ≤1.5×、行缓存不随高度增长、四种回退、串行度一致、取消。实拍 JPEG→PNG 实测流式/整图 **1.00–1.02×**（1280×720）、**1.06–1.09×**（3069×2653），输出逐字节相同（含 9.4 KB Exif）。**未做**：`Global` 两遍、TIFF 区域源 |
-| **M17 区域执行（完成；静态入口 2026-11-25 起内部化）** | `IRegionSource`（Abstractions）+ `RegionExecutor` / `RegionRefusal` / `RegionResult` + `ProcessingPlan.CanExecuteRegion` / `TryExecuteRegion` + `Image.DescribeRegion` / `ProcessRegion` + `TiffRegionSource`（`TiffReader.ReadLayout` / `ReadSegment`，显式引用 `Sdcb.SimdCodecs.Tiff`）+ 运行期 TIFF 夹具（codec 写条带、手写 tile / MinIsWhite / float / 4 通道） | ✅ 2026-11-25：`gates.sh --aot` observed `warnings=0 errors=0`、`failed=0 passed=1211`（1 skip）、快照 128 行**只有新增、0 删除 0 改写**、AOT 三路 `region.plan` / `region.tiff` sha 相同且条目内部断言「区域 == 整图裁剪」。`RegionExecutorTests` 25 + `TiffRegionTests` 13 + `RegionEndToEndTests` 4；等价（4 链 × 2 深度 × 6 矩形、带高 1/7/64、非对称 5×3 halo、1×1 区 + halo 18）、读量（16² 区域：512 高 3.06 KB / 2048 高 3.44 KB）、内存（100 000² 源读 64² 与 4096² 同级）、拒绝表逐项、取消。**不做**：`Load(path, Region)` 快路径、4 通道 / Palette / CMYK、Geometric / Global 两遍、区域 sink |
-| **M18 几何进入执行模型（完成）** | 拉式流水线：`PlanRowSource`（按需出一带）/ `ResizeRowSource`（按需出缩放行）/ `CropRowSource` / `Pipeline` 驱动；`ImageTranscode.Resize`（算子可夹在缩放前后）；`ImageTranscode.Region(...).Resize(...)`（区域 + 尾部缩放，2026-11-26 改为编译区域 + 编译缩放段）；`Resample.TryNearestTap` 共享；AOT `resize.stream` / `resize.plan` / `resize.after` / `plan.resize` / `region.resize` / `region.resizeplan` / `file.builder` / `file.geometry`。未做：多级缩放、Affine/Perspective | ✅ 2026-11-25：40 组（4 尺寸 × 2 深度 × 5 滤波器）与 `Resample.Resize` 逐字节；8K→1080p 纯缩放 **390 vs 426 ms（0.92×）**、blur+contrast→缩放→sharpen **835 vs 791 ms（1.06×）**；区域链与 `Load → Apply/Crop → Resize` 逐字节；AOT 六条三档一致；`plan.resize` 与 `resize.plan` 的 sha 相同（两条路径、同一份字节） |
+| **M16 文件级流式（完成；静态入口 2026-11-25 内部化，2026-11-26 删除，公开面为 `ImageTranscode`）** | S1：`IRowSource` / `IRowSink`（Abstractions）+ `ProcessingPlan.CanStream` / `TryExecuteTo` + `ProcessChain`（`ImageTranscode` 的流式路由）+ `StreamRefusal` / `StreamResult` / `ProcessReport` + `FusedExecutor.RunWindow`（整图与流式共用同一段递归）+ `PlanStep.NeedsWholeSource`。S2：`RowParallel.EnterTopLevel(degree)` 把 `MaxDegreeOfParallelism` 接进带泵、`PreserveMetadata` 显式保留元数据（默认只读头部：I/O 从 2.0–3.4× 降到 1.01–1.41×）、`stream.plan` 进 AotSmoke `REQUIRED`；**有序带队列测量后取消**（见 §6.5.3） | ✅ 2026-11-25：`gates.sh --aot` observed `warnings=0 errors=0`、`failed=0 passed=1169`、快照只有新增、`stream.plan` 三档（jit / avx2 / base）sha 相同且条目内部断言「流式 == 整图」。`StreamingTests` 26 例：逐字节等价（5 链 × 2 深度、带高 1/2/7/64、PNG 8/16-bit、带 Exif 的 JPEG 走 `PreserveMetadata`）、默认丢元数据且如实报告、读量 ≤1.5×、行缓存不随高度增长、四种回退、串行度一致、取消。实拍 JPEG→PNG 实测流式/整图 **1.00–1.02×**（1280×720）、**1.06–1.09×**（3069×2653），输出逐字节相同（含 9.4 KB Exif）。**未做**：`Global` 两遍（TIFF 区域源由 M17 补上） |
+| **M17 区域执行（完成；静态入口 2026-11-25 起内部化）** | `IRegionSource`（Abstractions）+ `RegionExecutor` / `RegionRefusal` / `RegionResult` + `ProcessingPlan.CanExecuteRegion` / `TryExecuteRegion` + `Image.DescribeRegion` / `ProcessRegion` + `TiffRegionSource`（`TiffReader.ReadLayout` / `ReadSegment`，显式引用 `Sdcb.SimdCodecs.Tiff`）+ 运行期 TIFF 夹具（codec 写条带、手写 tile / MinIsWhite / float / 4 通道） | ✅ 2026-11-25：`gates.sh --aot` observed `warnings=0 errors=0`、`failed=0 passed=1211`（1 skip）、快照 128 行**只有新增、0 删除 0 改写**、AOT 三路 `region.plan` / `region.tiff` sha 相同且条目内部断言「区域 == 整图裁剪」。`RegionExecutorTests` 25 + `TiffRegionTests` 13 + `RegionEndToEndTests` 4；等价（4 链 × 2 深度 × 6 矩形、带高 1/7/64、非对称 5×3 halo、1×1 区 + halo 18）、读量（16² 区域：512 高 3.06 KB / 2048 高 3.44 KB）、内存（100 000² 源读 64² 与 4096² 同级）、拒绝表逐项、取消。**不做**：`Load(path, Region)` 快路径、4 通道 / Palette / CMYK、Geometric / Global 两遍；区域/tile sink 于 P5 由 `IRegionSink` + `Image.ProcessTilesTo` 补上 |
+| **M18 几何进入执行模型（完成）** | 拉式流水线：`PlanRowSource`（按需出一带）/ `ResizeRowSource`（按需出缩放行）/ `CropRowSource` / `Pipeline` 驱动；`ImageTranscode.Resize`（算子可夹在缩放前后）；`ImageTranscode.Region(...).Resize(...)`（区域 + 尾部缩放，2026-11-26 改为编译区域 + 编译缩放段）；`Resample.TryNearestTap` 共享；AOT `resize.stream` / `resize.plan` / `resize.after` / `plan.resize` / `region.resize` / `region.resizeplan` / `file.builder` / `file.geometry`。未做（行流式）：多级缩放、Affine/Perspective | ✅ 2026-11-25：40 组（4 尺寸 × 2 深度 × 5 滤波器）与 `Resample.Resize` 逐字节；8K→1080p 纯缩放 **390 vs 426 ms（0.92×）**、blur+contrast→缩放→sharpen **835 vs 791 ms（1.06×）**；区域链与 `Load → Apply/Crop → Resize` 逐字节；AOT 六条三档一致；`plan.resize` 与 `resize.plan` 的 sha 相同（两条路径、同一份字节） |
 
 > **状态口径**：M2–M4 的功能（算子、测试、公开 API）都已落地；上表「出口条件」是当初写进设计的验收标准。
-> 2026-11-11 补测后：M2 模糊、M3 量化 PSNR（已出数但无阈值可判）、M4 的 8K 峰值内存有了实数
-> （见 `known-gaps.md` §「M2–M4 出口条件核验」），其中 8K `gaussian-blur` **未达标**；M2 的「融合后分配 = 0」
-> 2026-11-15 已在 M10 融合路径上重测并**判定为未达标**（≈4.3–6.0 KiB/op，见 `known-gaps.md` §「M2『点算子融合后分配』重测与判定」），
-> 不再是「未判定」，但同样不是达标；M3 抗锯齿覆盖率（判据未定义）与 M4 的 HEIF 端点（HEIF 未接入，见 `known-gaps.md`）仍无法出数。
-> 要宣称某个里程碑「完成」，先把它那一行的出口条件全部跑出数来，且必须达标。
+> 2026-11-11 补测的实数：M2 模糊达标；M4 的 8K 峰值 3/4 达标，`gaussian-blur` 超 7.1%（见
+> `known-gaps.md` §「M2–M4 出口条件核验」）；M2 的「融合后分配 = 0」于 2026-11-15 在 M10 融合路径上重测，
+> **判定为未达标**（≈4.3–6.0 KiB/op，见 `known-gaps.md` §「M2『点算子融合后分配』重测与判定」）。
+> 要宣称某个里程碑「完成」，先把它那一行的出口条件全部跑出数来。
 >
 > **2026-11-26 出口条件关闭（P4）**：M2 的「0 B/op」经两次复核确认不可达（残余是 `WorkingBuffer` 包装与调度，不是像素
 > 缓冲），出口条件改为「融合点链在单 worker 下 ≤ 4 KiB/op」，实测 256 B/op，由 `AllocationBoundTests` 守护；M3 抗锯齿
@@ -1471,7 +1481,7 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 | 4.x 功能清单凭公开文档整理 | 对标表可能不准（4.0 新增的 ICC / 色彩配置文件 / Convolution API 面很大） | 锁 4.1.3；`Oracle/README.md` 记录版本与文档快照日期，M5 前逐项复核 |
 | 框架基线 net10.0（与 SimdCodecs 一致） | 无法被 net8.0 应用引用，而 ImageSharp 4.x 是 net8.0 | 接受：本项目的定位是 net10 + AOT；若必须支持 net8，需要多目标并放弃部分 `Vector512` 优化 |
 | 格式面缺口：EXR / TGA / CgBI PNG / ANI | 对标表上不是完全覆盖，而这四项在 SimdCodecs 侧没有 | 写进 `known-gaps.md`；要补属 codec 层，不在 SimdImaging 范围，也不假装"后续支持" |
-| ImageSharp 4.x 构建期校验许可密钥 | 4.1.3 的同进程 A/B 在拿到密钥前跑不起来 | 按 §10 的三条路走；报告里写明基线版本，不拿 3.1.12 冒充 4.x |
+| ImageSharp 4.x 构建期校验许可密钥 | 4.1.3 的同进程 A/B 需要密钥；本仓库的密钥在 git-ignored 的 `docs/sixlabors.lic`，按路径引用 | 密钥在位，A/B 可跑；无密钥环境退 3.1.12 并写明基线版本，不冒充 4.x |
 
 ### 12.2 已定与待定
 

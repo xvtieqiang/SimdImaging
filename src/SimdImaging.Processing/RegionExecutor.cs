@@ -66,6 +66,11 @@ public readonly record struct RegionResult(RegionRefusal Refusal, int BandCount,
 /// computed and discarded: that is the price of reusing the loop unchanged, and it is bounded by the halo, not by
 /// the image.
 /// </para>
+/// <para>
+/// The destination is the caller's: this executor only reserves the windows it rents. Whoever rents the target
+/// reserves it before the rent (<see cref="TargetBuffer"/>) — the region facade for the rectangle it returns, the
+/// tile walk for the tile it hands to a sink. Counting it here as well would charge one tile twice.
+/// </para>
 /// </summary>
 internal static class RegionExecutor
 {
@@ -147,8 +152,7 @@ internal static class RegionExecutor
         var bytesPerPixel = source.Format.BytesPerPixel();
 
         var estimate = WorkingSetBudget.Measure(steps, options, maxWindowCols, height, maxWindowCols, maxWindowRows,
-            source.Format, windows: steps.Count > 1 ? 4 : 2,
-            extraBytes: (long)region.Width * region.Height * bytesPerPixel, out var undeclared);
+            source.Format, windows: steps.Count > 1 ? 4 : 2, out var undeclared);
         WorkingSetBudget.Ensure(estimate, undeclared, steps.Count, options, "The region");
         using var regionLease = options.Workspace?.Reserve(estimate, "region windows");
 

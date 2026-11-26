@@ -10,12 +10,13 @@ namespace SimdImaging.Processing.Internal;
 /// </summary>
 internal static class WorkingSetBudget
 {
-    /// <summary>The bytes the executor would hold: windows, the declared scratch for every worker, and
-    /// <paramref name="extraBytes"/> (the destination region, for instance).</summary>
+    /// <summary>The bytes the executor holds: its windows plus the declared scratch for every worker. A target
+    /// buffer is not part of this measurement — it belongs to whoever rents it, and <see cref="TargetBuffer"/>
+    /// reserves it before the rent.</summary>
     internal static long Measure(IReadOnlyList<PlanStep> steps, ExecuteOptions options, int width, int height,
-        int windowCols, int windowRows, WorkingFormat format, int windows, long extraBytes, out int undeclared)
+        int windowCols, int windowRows, WorkingFormat format, int windows, out int undeclared)
     {
-        var estimate = ((long)windows * windowCols * windowRows * format.BytesPerPixel()) + extraBytes;
+        var estimate = (long)windows * windowCols * windowRows * format.BytesPerPixel();
         undeclared = 0;
         var perWorker = 0L;
         var wholeImage = 0L;
@@ -63,16 +64,5 @@ internal static class WorkingSetBudget
             throw new InvalidOperationException(
                 $"{pathName} would need an estimated {estimate} bytes of working set, above the "
                 + $"{options.MaxWorkingBytes}-byte ceiling in ExecuteOptions.MaxWorkingBytes.");
-    }
-
-    /// <param name="windows">Window buffers the executor holds at once (2 for a single step, 4 for a chain).</param>
-    /// <param name="extraBytes">Bytes held besides the windows — the destination region, for instance.</param>
-    /// <param name="pathName">What to call this executor in the message ("Streaming", "The region").</param>
-    public static void Ensure(IReadOnlyList<PlanStep> steps, ExecuteOptions options, int width, int height,
-        int windowCols, int windowRows, WorkingFormat format, int windows, long extraBytes, string pathName)
-    {
-        var estimate = Measure(steps, options, width, height, windowCols, windowRows, format, windows, extraBytes,
-            out var undeclared);
-        Ensure(estimate, undeclared, steps.Count, options, pathName);
     }
 }

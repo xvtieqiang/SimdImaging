@@ -102,6 +102,30 @@ public sealed class TileExecutionTests
             $"a 64x64 tile should not need half a 512x512 frame; peaked at {pool.PeakBytes}");
     }
 
+    /// <summary>
+    /// The tile the walk rents is the destination of the per-rectangle work, so it is reserved once, by the walk,
+    /// before the rent. Before this the region executor added the same tile to its own estimate, and a limit of
+    /// "one tile plus its windows" was refused as if two tiles were alive. A 16x16 single-step walk holds exactly
+    /// one tile and two windows; the limit below is that sum, so a second tile entry would throw.
+    /// </summary>
+    [Fact]
+    public void ATileWalk_CountsTheTargetTileOnce()
+    {
+        const int size = 16;
+        const long tileBytes = (long)size * size * 4;
+        const long windowBytes = 2 * tileBytes;
+        using var image = TestImages.Gradient(size, size, WorkingFormat.Rgba8);
+        var workspace = new WorkspaceManager(tileBytes + windowBytes);
+
+        Image.ProcessTiles(new BufferRegionSource(image[0].Pixels.View), new DiscardSink(size, size),
+            new ProcessingPlan().Add(PlanOps.Invert()), size, size,
+            new ExecuteOptions { Workspace = workspace, MaxDegreeOfParallelism = 1 });
+
+        workspace.PeakBytes.ShouldBe(tileBytes + windowBytes,
+            "one target tile and its windows, not the tile twice");
+        workspace.OutstandingBytes.ShouldBe(0);
+    }
+
     [Fact]
     public void TheTilesCoverEveryPixelExactlyOnce()
     {

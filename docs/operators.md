@@ -40,7 +40,7 @@
 | GEO-2  | Pad              | 背景色 / edge / mirror / tile 四种模式                 | 先分配目标，四边填充；edge 整行复制，mirror 反向行复制                                                                | D0    | P0                                         |
 | GEO-3  | Trim             | 剔除与角像素同色的均匀边框                                   | 四边逐行向量比较 + `SequenceEqual`，O(周长)                                                                 | D0    | P1                                         |
 | GEO-4  | EntropyCrop      | 按行/列熵阈值裁掉低信息边界                                  | 两遍：行列表的 256-bin 直方图 → 熵 → 阈值定位                                                                   | D1    | P1                                         |
-| GEO-5  | Resize           | **已实现 5 种**（设计目标 16 种，见下表）                       | 可分离两遍：水平行内核 + 垂直列内核。当前实现走 f32 两遍 + 字节域 LUT，权重表按 (srcLen, dstLen, kernel) 缓存（24 条有界）；行带 scratch 预算 4 MiB；下采样按 1/scale 缩放支撑 | D1    | P0 已实现 5 种，其余 P1 未做 |
+| GEO-5  | Resize           | **16 个成员 / 15 个核**（见下表；`Triangle`≡`Bilinear`、`CatmullRom`≡`Bicubic`） | 可分离两遍：水平行内核 + 垂直列内核。走 f32 两遍 + 字节域 LUT，权重表按 (srcLen, dstLen, kernel) 缓存（8 MB / 64 条 LRU 有界）；行带一个 24 MiB 账本（ring + staging + 输出批 + worker 行）；下采样按 1/scale 缩放支撑 | D1    | P0/P1 已实现 |
 | GEO-6  | ResizeMode       | Stretch / BoxPad / CropPad / Max / Min + 9 宫格锚点 | 先算目标矩形，再对子区重采样，避免二次拷贝                                                                            | D0    | P1                                         |
 | GEO-7  | ResizeByAxis     | 只给宽或高，保持比例                                      | 算术 + 委托 GEO-5                                                                                    | D0    | P0                                         |
 | GEO-8  | ResizeCanvas     | 扩到目标宽高比（不缩放内容）                                  | 计算 pad 偏移 + GEO-2                                                                                | D0    | P1                                         |
@@ -49,7 +49,7 @@
 | GEO-11 | Transpose        | 转置 / 副转置                                        | 同 GEO-9 的块转置                                                                                     | D0    | P1                                         |
 | GEO-12 | RotateFlip       | 旋转 + 翻转的组合                                      | 组合 GEO-9/10/11，合并为一次遍历                                                                           | D0    | P1                                         |
 | GEO-13 | Rotate           | 任意角，Nearest/Bilinear/Bicubic 采样                 | 逆映射 + 采样；cos/sin 预计算为 Q16 定点，按输出行扫描                                                              | D1    | P1                                         |
-| GEO-14 | Skew             | X/Y 错切                                          | 等价仿射；水平错切按行整数偏移，垂直错切按行带重采样                                                                       | D1    | P1                                         |
+| GEO-14 | Skew             | X/Y 错切                                          | **不设独立方法**：错切是仿射的特例，用 `Affine` 矩阵表达（水平错切即 `C` 非零，垂直错切即 `B` 非零）                                                                       | D1    | P1（由 Affine 覆盖）                                         |
 | GEO-15 | Affine           | `Matrix3x2` + 采样器 + 边界模式                        | 通用逆矩阵；可选 2×2 超采样抗锯齿                                                                              | D1    | P1                                         |
 | GEO-16 | Projective       | 3×3 单应                                          | 按行递推 1/w（避免逐像素除法），再乘回                                                                            | D1    | P2                                         |
 | GEO-17 | Tile             | 平铺 / 镜像平铺                                       | 目标行按周期复制源行块，行宽整数倍时整块 `memcpy`                                                                    | D0    | P1                                         |
@@ -227,7 +227,7 @@
 | 能力族       | ImageSharp 4.1.x（代表）                                                                                                                                       | SimdImaging 侧            | 差异说明                                                                     |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------ |
 | 加载/保存/格式  | `Image.Load/Save`；JPEG/PNG/GIF/BMP/TGA/TIFF/WebP/PBM/QOI/ICO/CUR/EXR。4.0 加 ICO/CUR 解码、渐进式 JPEG 编码、JPEG COM 标记；4.1 加 ANI、CgBI PNG                           | IO-1/2                   | 格式面由 SimdCodecs 决定：多出 JPEG2000、JBIG2、PNM 全族（PAM/PFM）；少 EXR、TGA、CgBI。HEIF 是独立包 `Sdcb.SimdCodecs.Heif`，需 `ImageCodecs.Register` 手动注册，本库不默认接入        |
-| 缩放        | `Resize` + `KnownResamplers`（4.1.3 公开 16 个名称）                                                                                                             | GEO-5                    | **本库仅 5 种已实现**（设计 16 种未齐），此项为功能缺口；另有 1/8 缩放解码下推 |
+| 缩放        | `Resize` + `KnownResamplers`（4.1.3 实测公开 15 个名称）                                                                                                        | GEO-5                    | **16 个成员 / 15 个核全部实现**（多出的 `Bilinear` 是本库历史名）；另有 1/8 缩放解码下推 |
 | 裁剪/画布     | `Crop` `Pad` `EntropyCrop` `BackgroundColor` `ResizeMode`                                                                                                  | GEO-1/2/4/6/8 + COL-35   | 覆盖                                                                       |
 | 旋转/翻转     | `Rotate` `RotateFlip` `Flip` `AutoOrient`                                                                                                                  | GEO-9/10/11/12 + IO-4    | 覆盖                                                                       |
 | 仿射/投影     | `AffineTransformBuilder` `ProjectiveTransformBuilder`（含 `QuadDistortion`、`TaperSide/TaperCorner`） `Transform` `Skew`                                       | GEO-14/15/16             | 功能对等；taper 作为单应的一种参数化                                                    |
@@ -245,7 +245,7 @@
 | 元数据       | Exif / IPTC / XMP / ICC；4.0 加格式间元数据转换 API                                                                                                                  | IO-7                     | 只做透传 + 少量字段；不提供 IPTC 编辑                                                  |
 | 多帧/动画     | `ImageFrameCollection`、GIF/WebP/ANI；4.0 规范化动画编码与 alpha 透明处理                                                                                                | IO-5/6                   | GIF/WebP 覆盖；ANI 在 SimdCodecs 侧暂不支持，属 codec 缺口                            |
 | 位深        | 由像素类型决定（`Rgba32`/`Rgba64`/`HalfVector4`…）                                                                                                                  | 全链路 Rgba16               | 16 位不被 8 位中间层吞掉                                                          |
-| 色彩管理      | 4.0 起 `ColorProfileConverter` + CieLab/LCh/Luv/XYZ/xyY/HunterLab/LMS/CMYK/YCbCr/YccK + Von Kries 色适应                                                       | COL-30/31/32 + ANL-8     | ΔE2000 **已有**（ANL-8，Sharma 34 组参考）；ICC 的 RGB **LUT 型 profile 已支持**。仍缺：CMYK / 灰度设备空间、Intent 1/2、真实扫描仪 profile 语料；**追赶项**是拿 ΔE2000 对 4.1.3 做同图对拍 |
+| 色彩管理      | 4.0 起 `ColorProfileConverter` + CieLab/LCh/Luv/XYZ/xyY/HunterLab/LMS/CMYK/YCbCr/YccK + Von Kries 色适应                                                       | COL-30/31/32 + ANL-8     | ΔE2000 **已有**（ANL-8，Sharma 34 组参考）；ICC 的 RGB **LUT 型 profile 已支持**。仍缺：CMYK / 灰度设备空间、Intent 1/2、真实扫描仪 profile 语料；与 4.1.3 的同图对拍**不可行**（其 profile→profile API 不公开），改用自洽验证 |
 | HDR       | 公开处理器集合中未见 PQ/HLG 语义级处理（待复核）                                                                                                                               | COL-27/28/29             | PQ/HLG 色调映射 + Ultra HDR gain map                                         |
 | 扩展性       | `PixelRowOperation` 行委托、`Filter` 组合、`IImageProcessor`                                                                                                      | `ImageOp` + `OperatorContract` + 非泛型行委托      | 我们多"算子声明 halo 与源矩形"，因此可分块                                                |
 | AOT       | 4.1 起为像素格式与 ICO/CUR/QOI 加 AOT 种子；**实测 PNG+Rgba32 完整编解码链路可 NativeAOT publish（0 警告、运行正常）**，其余格式/像素格式组合待逐项核实 | 构建门禁 + 双基线档位断言 | 从第一个提交起零 trim/AOT 警告；参照实现此链路同样可用，此项不宣称领先 |
@@ -258,22 +258,10 @@
 
 ---
 
-## 实现进度（2026-11-05）
+## 实现状态
 
-已实现：
-
-| 组  | 编号                                                                                                                                                                                                                                                                                                              |
-| -- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 容器 | IO-1 Load（含多帧）、IO-2 Save（单帧）、IO-3 Transcode（改元数据重编码）、IO-4 AutoOrient（EXIF 1–8 + 复位标签）、IO-5 Frames / KeepFrames、IO-6 AnimationCompose（逐帧 SourceOver）、IO-7 MetadataTransfer、IO-8 Thumbnail |
-| 几何 | GEO-1 Crop、GEO-2 Pad、GEO-5 Resize（Nearest / Box / Bilinear / Bicubic / Lanczos3，5 / 16 种采样器）、GEO-9 Rotate 90 · 180 · 270、GEO-13 Rotate（任意角）、GEO-14 Affine、GEO-15 Perspective、GEO-10 Flip H / V、GEO-3 Trim（容差）、GEO-6 ResizeMode（Stretch / BoxPad / CropPad / Max / Min + 9 锚点）、GEO-8 ResizeCanvas、GEO-17 Tile / 镜像平铺、GEO-19 RoundCorners（抗锯齿 alpha 掩膜）、GEO-4 EntropyCrop、GEO-11 Transpose / 副转置、GEO-12 RotateFlip（单遍）、GEO-18 Warp（委托映射）、GEO-20 Sample（单点 / 批量）、GEO-7 ResizeToWidth / ResizeToHeight                                                                                                                                                                      |
-| 色彩 | COL-1 Brightness、COL-2 Contrast、COL-3 Saturation、COL-4 HueRotate、COL-6 Opacity、COL-7 Invert、COL-8 Gamma、COL-9 Levels、COL-10 Curves、COL-11 ColorMatrix、COL-12 ChannelSwap、COL-13 Grayscale、COL-14 BlackWhite、COL-15 Threshold、COL-16 Posterize、COL-17 Sepia、COL-18 Tint、COL-19 ColorBalance、COL-20 Temperature、COL-21 Vibrance、COL-22 Premultiply、COL-23 Unpremultiply、COL-24 AlphaThreshold、COL-25 Normalize、COL-26 Clamp、COL-27 Linearize / Delinearize（sRGB / γ2.2 / Rec.709 / PQ / HLG）、COL-33 AdaptiveThreshold（局部均值）、COL-34 ColorBlindness（四种 + Daltonize 校正）、COL-35 BackgroundColor（容差 + 羽化）、COL-5 Lightness（乘性增益）、COL-31 ColorSpaceConvert（XYZ / xyY / Lab / LCh / Luv / LChuv / HunterLab / LMS / HSL / HSV / YCbCr + 色适应）、COL-32 ChromaResample（4:2:2 / 4:2:0）、COL-30 IccTransform（matrix/TRC 型 ICC）、COL-28 ToneMap（Reinhard / Reinhard 扩展 / Hable / ACES / BT.2390 + 自动曝光）、COL-29 GainMap                                                                                                                                            |
-| 滤波 | FLT-2 GaussianBlur（真高斯）、FLT-5 Bilateral、FLT-3 BoxBlur、FLT-4 Median3x3、FLT-10 Sobel、FLT-1 Convolve3x3、FLT-6 BokehBlur、FLT-7 MotionBlur、FLT-8 Sharpen（unsharp mask）、FLT-9 GaussianSharpen（负高斯单核）、FLT-11 Emboss、FLT-17 Morphology（Erode / Dilate / Open / Close 3×3）、FLT-13 Pixelate、FLT-14 Vignette、FLT-15 Glow、FLT-16 Dither（None / Floyd–Steinberg / Atkinson / Burkes / Sierra / Stucki / Bayer 2·4·8）、FLT-12 OilPaint、FLT-18 HistogramEqualization、FLT-19 Clahe、FLT-20 Noise（固定种子）、FLT-21 GuidedFilter、FLT-22 NonLocalMeans、FLT-23 LocalLaplacian、FLT-24 Dehaze、FLT-25 ExposureFusion                                                                                                                                            |
-| 合成 | CMP-1 DrawImage、CMP-10 Linear / Radial / SweepGradient、CMP-13 Watermark、CMP-5 FloodFill、CMP-4 Fill / CMP-12 Clear（原地写入）、CMP-6 DrawLine（Bresenham + Liang-Barsky 裁剪）、CMP-7 DrawRect / FillEllipse / FillPolygon、CMP-2 BlendModes（18 种，含 Hue / Saturation / Color / Luminosity）、CMP-3 PorterDuff（12 式全：Clear / Src / Dst / SrcOver / DstOver / SrcIn / DstIn / SrcOut / DstOut / SrcAtop / DstAtop / Xor）、CMP-8 FillPath（贝塞尔扁平化 + even-odd / non-zero 扫描线）、CMP-9 StrokePath（miter / round / bevel 连接、butt / round / square 端点、虚线）、CMP-11 Clip（路径覆盖率乘 alpha） |
-| 量化 | QNT-2 Wu（矩 + 方差最小化切分）、QNT-4 WebSafe、QNT-8 DitherToPalette、QNT-3 中位切分调色板（无 k-means 精修）、QNT-1 Octree（8 层 + 插入期剪枝）、QNT-7 ReduceColors（量化 + 可选抖动）、QNT-5 BuildPalette、QNT-6 MapToPalette                                                                                                                                                                                                                         |
-| 分析 | ANL-1 Histogram（每通道 n 桶）                                                                                                                                                                                                                                                                                        |
-
-共 119 / 119。几何与滤波的 resize/blur 已向量化（Rgba8 行读写 + 两遍卷积）；此后 `Median3x3` / `BokehBlur` / `Convolve2D` 等热点也 SIMD 化、多个重算子改行带并行。点算子走字节域 LUT 快路径（与标量孪生逐位一致），**未做 SIMD 向量化**。
-逐项状态见 [`known-gaps.md`](known-gaps.md)。
+119 项清单全部落地（分组统计见下表）；`Skew` 不设独立方法，由 `Affine` 矩阵表达。resize/blur 的两遍卷积已向量化；`Median3x3` / `BokehBlur` / `Convolve2D` 等热点也已 SIMD 化，
+多个重算子改行带并行；点算子走字节域 LUT 快路径（与标量孪生逐位一致），**未做 SIMD 向量化**。
 
 ---
 
@@ -302,20 +290,20 @@
 | `Sampling.Sample` / `Image.SamplePixel` | D0 | **8-bit 便利 API**，签名与行为保持不变，返回 `RgbaColor`；需要格式原生精度时改用 `SampleRaw`。这是显式区分的便利语义，不是"静默降级到别的格式" |
 | `SampleOptions` | — | M7 只实现 `Encoded` / `Straight` / `Clamp` / `Preserve` 这一组默认契约；其余组合显式抛 `NotSupportedException`，禁止静默回退。`LinearLight` / `Premultiplied` 由 M8 三链统一实现 |
 
-**尚未统一（M8 后的残余）**：legacy `Mapping.cs`（Affine / Perspective / Rotate）与 `Resize.cs` 路径**逐字冻结**（等价扫描判分支 B：Rgba32F 与 TapPlan 权重版差 1 ULP，根因 = JIT 对 legacy 一次性 `Σw·c` 表达式做 FMA 融合而循环累加不融合，实现细节级不对称）。新 `…WithOptions` 入口走 `TapPlanBuilder` 权重 + `SamplingCore.SampleWithOptions` / `MappingTapSampler` 统一语义：`Mapping.TransformWithOptions` / `PerspectiveWithOptions`（centre 级 `>W` / `w<=1e-12` 背景判定是 Mapping 几何语义、与 `EdgeMode` 无关）、`Resample.ResizeWithOptions`（逐点 scale-aware TapPlan，`Edge=Background` 越界 tap 换背景、权重不重归一化，`default` 转发冻结路径）。零值张力：全零 `SampleOptions` == `default` == 该链历史契约，「全零字段的字面统一契约」不可表达，需统一语义时至少设一个非零字段。GEO-5 的 `Resampler` 枚举仍只有 5 种，不顺手扩到设计表的 16 种。
+**尚未统一（M8 后的残余）**：legacy `Mapping.cs`（Affine / Perspective / Rotate）与 `Resize.cs` 路径**逐字冻结**（等价扫描判分支 B：Rgba32F 与 TapPlan 权重版差 1 ULP，根因 = JIT 对 legacy 一次性 `Σw·c` 表达式做 FMA 融合而循环累加不融合，实现细节级不对称）。新 `…WithOptions` 入口走 `TapPlanBuilder` 权重 + `SamplingCore.SampleWithOptions` / `MappingTapSampler` 统一语义：`Mapping.TransformWithOptions` / `PerspectiveWithOptions`（centre 级 `>W` / `w<=1e-12` 背景判定是 Mapping 几何语义、与 `EdgeMode` 无关）、`Resample.ResizeWithOptions`（逐点 scale-aware TapPlan，`Edge=Background` 越界 tap 换背景、权重不重归一化，`default` 转发冻结路径）。零值张力：全零 `SampleOptions` == `default` == 该链历史契约，「全零字段的字面统一契约」不可表达，需统一语义时至少设一个非零字段。GEO-5 的 `Resampler` 已是 16 个成员 / 15 个核（见上表）。
 
 `SamplingCore` 目前是纯标量参考实现（无向量内核），因此不存在可与之对拍的 SIMD twin；跨档位一致性由 `benchmarks/simd-tiers.sh` 的三档全量测试加算子输出 SHA-256 比对覆盖。M9 引入 EWA 权重 SIMD 时，按 §7.5 惯例补 scalar twin。
 
 ---
 
-## 采样契约补记（M8，进行中，2026-11-14）
+## 采样契约补记（M8，2026-11-14）
 
 既有算子的编号不变。M8 采用「**同一核心 + 每链默认契约**」：`TapPlanBuilder` 是唯一权重生成器（`Resize.cs BuildCore` 与新重建路径共用），但 `Alpha` / `Edge` / 累加序按各链现行语义保留，只有显式 `SampleOptions` 才切换到统一语义。因此既有算子输出字节零变化 —— 剥离 AotSmoke 新增两行后 body SHA-256 仍为 `44390203…6763`。
 
 | 项 | 确定性 | 语义 |
 |---|---|---|
-| `TapPlanBuilder` | D1 | 唯一定义 `scale / filterScale / radius / taps / center / sum 归一化 / sum==0 兜底`；5 核来自 `ResamplerKernels.Get`，GEO-5 仍只有 5 种不扩 16 |
-| `SamplingCore.SampleWithOptions` | D1 | 冻结累加序（y major → x ascending → channel ascending），5 核、`LinearLight` 域变换、`Premultiplied` 预乘、`Clamp`/`Background` 边界、`Clamp`/`Throw` 色域外策略 |
+| `TapPlanBuilder` | D1 | 唯一定义 `scale / filterScale / radius / taps / center / sum 归一化 / sum==0 兜底`；16 个成员共用 `ResamplerKernels.Get` 的 15 个核 |
+| `SamplingCore.SampleWithOptions` | D1 | 冻结累加序（y major → x ascending → channel ascending），15 个核（经 `TapPlanBuilder`）、`LinearLight` 域变换、`Premultiplied` 预乘、`Clamp`/`Background` 边界、`Clamp`/`Throw` 色域外策略 |
 | `SampleOptions.Curve` | — | `SampleTransferCurve`（Abstractions 镜像 enum，`Srgb=0`，6 值）；per-sample 传输**不钳 [0,1]**，保 HDR>1 / 负值 / 超范围；整图 LUT 管线不复用 |
 | `WarpWithOptions` / `Image.WarpWithOptions` | D1 | 新增重载，旧签名 100% 保留；`docs/public-api.txt` 只有新增、0 删除 0 改写 |
 | `Mapping.TransformWithOptions` / `PerspectiveWithOptions` / `Image.{Rotate,Affine,Perspective}WithOptions` | D1 | centre 级判定（`>W` 开区间 / `w<=1e-12`）恒写背景、与 `EdgeMode` 无关（Mapping 几何语义）；`default` 契约走 `MappingTapSampler`（TapPlan 权重 + 预乘读 + Σw·c），非 default 走统一语义；`Alpha=Straight` 在统一路径按字面解释（0 值张力见 known-gaps M8） |
@@ -324,7 +312,7 @@
 | `ProcessingPlan.ExecuteWithOptions` / `FusedExecutor` / `PlanReport` | D1 | M10：连续 `Point`/`Neighborhood`/`Separable` 段按 band 窗口递归执行（`R_k = Σ_{j>k} halo_j`，所有视图同一 `winTop` 原点，每 worker 两张窗口 ping-pong），输出与逐步骤**逐字节相同**；`Global`/`Composite` 整图分段；`PlanObserver` 强制逐步骤并在 `FallbackReason` 说明；`Diagnostics=false` 不建报告、不计时。`MaxWorkingBytes` 是估算上限（1 张输出 + 2×worker 窗口），超限抛 `InvalidOperationException` |
 | `ProcessingPlan.AddPointLut` | 恒等 | M10：`T_AB[c][v] = T_B[c][T_A[c][v]]`，连续 4×256 字节表折叠成一张、单遍执行；逐步执行本来就在字节域量化，折叠是构造性恒等而非近似。**Rgba8 only**，其它格式入口抛 `NotSupportedException` |
 
-**仍未完成**：`ColorConversionOps.Sample` 第 4 插值器明确排除在 M8 之外；HDR 背景语义（`RgbaColor` 为 8-bit）是已知边界，留 M13；`ewa.aa.tier.*` / `ewa.aa.tap.budget` / `k` 的摩尔纹语料扫描回填（P4）待跑；Local Laplacian 的样本间线性插值（抹平量化台阶）未做，留 M15；FFT 反卷积只做了评估、不落地（σ ≳ 18 px 才有算术优势，且与 D1 冲突，见 `known-gaps.md` 的评估记录）。
+**仍未完成**：`ColorConversionOps.Sample` 第 4 插值器明确排除在 M8 之外；HDR 背景语义（`RgbaColor` 为 8-bit）仍是已知边界；`ewa.aa.tier.*` / `ewa.aa.tap.budget` / `k` 的摩尔纹语料扫描回填（P4）待跑；Local Laplacian 的样本间线性插值（抹平量化台阶）未做，留 M15；FFT 反卷积只做了评估、不落地（σ ≳ 18 px 才有算术优势，且与 D1 冲突，见 `known-gaps.md` 的评估记录）。
 
 ## 进不进流水线
 

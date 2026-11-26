@@ -21,7 +21,8 @@
 
 ## 状态
 
-**M0、M1、M5、M6–M14 已完成并验收；M15（SIMD 收口 / 门禁 / 契约）进行中；M16（文件级流式）与 M17（区域执行）已完成；
+**M0、M1、M5、M6–M14 已完成并验收；M15（SIMD 收口 / 门禁 / 契约）进行中；M16（文件级流式）、M17（区域执行）与
+M18（几何进入执行模型）已完成；
 M2–M4 功能已落地、出口条件已于 2026-11-26 关闭**——M2 的「融合后分配 = 0」重定义为单 worker 下 ≤4 KiB/op（实测 256 B/op，
 `AllocationBoundTests` 守护）；M3 抗锯齿覆盖率定义为 45° 三角形面积 ±2% 且每边行部分像素 ≤2（`PathOpsTests` 守护）；
 M4 的 8K `gaussian-blur` 仍超 7.1%，保留为已记录偏差；HEIF 10-bit 端点明确超出本库边界（Heif 是独立包，不注册）。
@@ -30,7 +31,7 @@ M4 的 8K `gaussian-blur` 仍超 7.1%，保留为已记录偏差；HEIF 10-bit �
 
 **已可用：**`Image.Load / Save / Encode`、`Image.Mutate`（原地链式）、`Image.Pipe`（返回新图的链）、三个工作格式、池化缓冲；几何
 （Crop / Pad / Flip / Rotate90·180 / Rotate 任意角 / Affine / Perspective / Resize 十六种采样器）；点算子（Brightness / Contrast / Saturation /
-Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueRotate / Sepia / Normalize / Vibrance / Temperature / Tint / ColorBalance / ChannelSwap / BlackWhite / Curves / Opacity / Clamp）、直方图与均衡；滤波（GaussianBlur / BoxBlur / Median3x3 / Sobel / 形态学 3×3 / 双边 / 卷积 / 浮雕 / 锐化 / 运动模糊 / 散景 / 渐变 / 贴图 / 水印）；合成（Porter-Duff 12 式 + 18 种混合模式）、原地填充/清空、矩形描边、Bresenham 直线、椭圆与多边形填充、预乘/反预乘、调色板量化（中位切分 / Wu / WebSafe / 抖动）、直方图与均衡；高级摄影（非局部均值 / 局部拉普拉斯 / Richardson-Lucy 反卷积 / 接缝裁剪）；色彩管理（ICC 的 matrix/TRC **与 RGB LUT 型 profile**、CIEDE2000）；HDR（五种色调映射、增益图成对类型 `GainMappedImage` + Ultra HDR 读写）；内存治理（每线程 scratch 预算 64 MB、权重表缓存 8 MB + LRU、`MemoryBudget` 统计与 Trim、`MemoryEstimator.Estimate` 预估峰值且区分精确项与算子声明项）；文件级流水线 `ImageTranscode`（`From → Apply/Resize → Save/Run/ToImage`：解码、计划、缩放、编码一条流水线，常驻内存不随高度增长；TIFF 可只处理一个矩形）；区域能力查询 `Image.DescribeRegion`。
+Grayscale / Invert / Gamma / Threshold / Posterize / Levels / ColorMatrix / HueRotate / Sepia / Normalize / Vibrance / Temperature / Tint / ColorBalance / ChannelSwap / BlackWhite / Curves / Opacity / Clamp）、直方图与均衡；滤波（GaussianBlur / BoxBlur / Median3x3 / Sobel / 形态学 3×3 / 双边 / 卷积 / 浮雕 / 锐化 / 运动模糊 / 散景 / 渐变 / 贴图 / 水印）；合成（Porter-Duff 12 式 + 18 种混合模式）、原地填充/清空、矩形描边、Bresenham 直线、椭圆与多边形填充、预乘/反预乘、调色板量化（中位切分 / Wu / WebSafe / 抖动）、直方图与均衡；高级摄影（非局部均值 / 局部拉普拉斯 / Richardson-Lucy 反卷积 / 接缝裁剪）；色彩管理（ICC 的 matrix/TRC **与 RGB LUT 型 profile**、CIEDE2000）；HDR（五种色调映射、增益图成对类型 `GainMappedImage` + Ultra HDR 读写）；内存治理（每线程 scratch 预算 64 MB、权重表缓存 8 MB + LRU、`MemoryBudget` 统计与 Trim、`MemoryEstimator.Estimate` 预估峰值且区分精确项与算子声明项）；文件级流水线 `ImageTranscode`（`From → 算子/Resize → Save/Run/ToImage`：解码、计划、缩放、编码一条流水线，常驻内存不随高度增长；TIFF 可只处理一个矩形）；区域能力查询 `Image.DescribeRegion`；分块执行 `Image.ProcessTiles`（返回缓冲或写 `IRegionSink`）与 `Image.ProcessTilesTo`（边算边编码）。
 
 - `Release` 构建 0 警告，全量测试通过（此处不写死数量，以 CI 输出为准）。
 - Resize 走行带执行：4K→1080p 的分配从 70 MB 降到 **17 MB**（16 MB 预算），输出逐字节不变。
@@ -216,8 +217,7 @@ photo.Mutate(p => p.Resize(800, 600).Saturation(1.2f));
 | [`docs/contracts.md`](docs/contracts.md) | 对外契约 |
 | [`benchmarks/README.md`](benchmarks/README.md) | 基准怎么跑 |
 
-> 2026-11-16 合并：原 `pipeline-coverage` 并入 `operators`，日期类报告（`report-*`、`roadmap-*`）与六份评估文档
-> 并入 `known-gaps` 的「评估记录」。**文档只保留现状，过程进提交历史**——两份东西写同一件事，早晚对不齐。
+> **文档只保留现状，过程进提交历史**——两份东西写同一件事，早晚对不齐。
 
 ## 一句话设计
 

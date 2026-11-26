@@ -3,6 +3,7 @@ using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Compilation;
+using SimdImaging.Processing.Internal;
 
 namespace SimdImaging;
 
@@ -14,19 +15,27 @@ public sealed partial class Image
     /// <paramref name="tileWidth"/> × <paramref name="tileHeight"/> rectangle at a time, returning a new buffer.
     /// </summary>
     /// <remarks>
-    /// The tile size is the memory knob: one tile plus its halo window is resident at a time. The plan must contain
-    /// only steps a rectangle can run; a whole-image step, a composite, a block-aligned step or a format change is
-    /// refused with the compiler's reason rather than approximated.
+    /// The tile size is the memory knob for the walk: one tile plus its halo window is resident at a time. The
+    /// returned frame is a buffer this overload rents, so it is reserved for the duration of the walk as well —
+    /// use the sink form when the result must not be held whole. The plan must contain only steps a rectangle can
+    /// run; a whole-image step, a composite, a block-aligned step or a format change is refused with the compiler's
+    /// reason rather than approximated.
     /// </remarks>
     /// <exception cref="NotSupportedException">The plan has a step a tile cannot run.</exception>
     public static WorkingBuffer ProcessTiles(IRegionSource source, ProcessingPlan plan, int tileWidth, int tileHeight,
         ExecuteOptions? options = null, IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(source);
+        var execute = options ?? new ExecuteOptions();
+        // This overload rents the whole frame, so it reserves it before the rent: TileExecutor reserves the one
+        // tile it hands to the per-rectangle work, and the region executor counts only its windows, so nothing is
+        // charged twice and a refused reservation leaves nothing allocated.
+        using var targetLease = TargetBuffer.Reserve(execute, source.Width, source.Height, source.Format,
+            "tiled destination");
         var destination = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
         try
         {
-            ProcessTiles(source, new BufferRegionSink(destination), plan, tileWidth, tileHeight, options, pool);
+            ProcessTiles(source, new BufferRegionSink(destination), plan, tileWidth, tileHeight, execute, pool);
             return destination;
         }
         catch

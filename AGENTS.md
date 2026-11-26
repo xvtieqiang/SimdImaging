@@ -25,8 +25,8 @@ Not in scope: codecs (SimdCodecs owns them), text rendering, GPU backends.
 
 ## Repository decisions
 
-- One package per layer: `SimdImaging.Abstractions`, `SimdImaging`, later `SimdImaging.Processing` and
-  `SimdImaging.Drawing`. `PackageId = AssemblyName = RootNamespace`. Packages ship in lockstep.
+- One package per layer: `SimdImaging.Abstractions`, `SimdImaging.Processing` and `SimdImaging`;
+  `SimdImaging.Drawing` is still to come. `PackageId = AssemblyName = RootNamespace`. Packages ship in lockstep.
 - `Image` and `ImageFrame` live in **`SimdImaging`** (the facade), not in Abstractions: `Load` needs the
   codecs, and Abstractions must stay dependency-light. Operators take `PixelView`, never `Image`, so
   Processing does not need the facade.
@@ -41,8 +41,8 @@ Not in scope: codecs (SimdCodecs owns them), text rendering, GPU backends.
 - File-level streaming is a **source/sink seam, not a second executor**: `IRowSource` / `IRowSink` live in
   Abstractions, and `FusedExecutor.RunWindow` serves both the whole-image and the band-pump path, which is why the
   two are byte-identical. A plan that cannot stream is refused by `ProcessingPlan.CanStream` and reported, never
-  approximated — `Global`, `Composite`, and steps whose kernel reads the whole image (Mirror / Wrap convolution)
-  are the three refusals that exist today.
+  approximated — `Global`, `Composite`, steps whose kernel reads the whole image (Mirror / Wrap convolution) and
+  steps declaring per-call or source-order state are the four refusals that exist today.
 - **The same window loop serves three sources**: whole image, forward rows (`IRowSource`), and rectangles
   (`IRegionSource`). A region run hands each window to `FusedExecutor.RunWindow` as a standalone image
   (`band 0`, `bandRows = window height`), so no kernel knows the difference — and a plan that cannot stream cannot
@@ -53,8 +53,10 @@ Not in scope: codecs (SimdCodecs owns them), text rendering, GPU backends.
 - **Row stages pull, they do not push.** `PlanRowSource` produces a band on demand, `ResizeRowSource` produces
   resized rows on demand, and `Pipeline.Copy` drives the last one into a sink. That is why "plan → resize → plan"
   needs no queue and no thread: composition is nesting one `IRowSource` inside the next.
-- **PublicAPI analyzers land in M1**, not M0: the surface still moves, and locking it now would only produce
-  churn. Until then, public API changes are reviewed by diff.
+- **The public surface is locked by a snapshot, not an analyzer.** `docs/public-api.txt` is the contract:
+  `PublicApiTests` reflects the public types and members with their nullable annotations and fails on any
+  difference. Regenerate with `SIMDIMAGING_UPDATE_PUBLIC_API=1 dotnet test --filter PublicApi` and read the
+  diff; that diff is the review.
 
 ## Versioning
 
@@ -179,21 +181,19 @@ bash tests/SimdImaging.AotSmoke/run.sh            # needs the C++ workload (see 
 - Untrusted input fails with `InvalidDataException`, caller mistakes with `ArgumentException` /
   `NotSupportedException`; no silent fallback to another format, depth or sampler.
 
-## Status (2026-11-15)
+## Status (2026-11-26)
 
-**Milestone status: M0, M1, M5 and M6–M14 complete and verified. M15 in progress. M2–M4 implemented,
-exit criteria only partly verified.** M5 closed on 2026-11-15 with all seven §1.3 criteria carrying a
-number or a stated reason why they cannot be measured — two are not met (steady-state allocation,
-8K peak), three are partial. Closing M5 does not mean the seven are met.
-Each milestone has acceptance criteria in `docs/architecture.md` §11; M2's blur criterion (1.61–1.86× at
-1080p), M3's quantisation PSNR, M4's 8K memory, and the M6–M14 rows carry measured numbers. M2's
-"zero allocation after point fusion" was re-measured on the M10 fused path on 2026-11-15 and is now
-**judged: not met** (steady state ~4.3 KiB/op by §1.3's literal `GC.GetAllocatedBytesForCurrentThread`
-ruler, ~6.0 KiB/op process-wide; two independent runs, two sizes, both rulers — see
-`docs/known-gaps.md` §「M2『点算子融合后分配』重测与判定」). The residual is per-call plan rebuild, not
-pixel buffers, and the §1.3 per-thread ruler under-reports under band parallelism. M3's antialiasing
-coverage and M4's HEIF endpoint remain unjudged for the reasons recorded in `docs/known-gaps.md`.
-Do not call a milestone done until its row has numbers **and they meet the criterion**.
+**Milestone status: M0, M1, M5, M6–M14 and M16–M18 complete and verified; M15 (SIMD coverage / gates /
+contracts) in progress. M2–M4 were implemented earlier and their exit criteria closed on 2026-11-26** —
+the zero-allocation criterion was redefined as ≤4 KiB/op single-worker (measured 256 B/op, guarded by
+`AllocationBoundTests`), antialiasing coverage became a measured ±2% area criterion (`PathOpsTests`), the
+8K `gaussian-blur` peak stays a recorded 7.1% overrun, and the HEIF 10-bit endpoint is out of this
+library's scope (a separate codec package this build does not register). M2's "zero allocation after
+point fusion" remains judged **not met as originally worded** (~4.3 KiB/op per-thread, ~6.0 KiB/op
+process-wide; see `docs/known-gaps.md` §「M2『点算子融合后分配』重测与判定」) — the residual is per-call
+plan rebuild and scheduling, not pixel buffers. Each milestone has acceptance criteria in
+`docs/architecture.md` §11. Do not call a milestone done until its row has numbers **and they meet the
+criterion**; M5 is the precedent, with two of its seven criteria recorded as not met.
 
 M2–M4 in code: `SimdImaging.Processing` has geometry (Crop, Pad, Trim, Flip, Rotate 90/180/arbitrary, affine, perspective, Resize with
 sixteen named resamplers (fifteen kernels; `Triangle` is `Bilinear` and `CatmullRom` is `Bicubic`) and the five resize modes, canvas pad/crop, tiling, rounded corners, entropy crop, transposes, combined rotate-flip, delegate warping, point sampling, aspect-preserving resize by one axis), point operators (Brightness, Contrast, Saturation, Grayscale, Invert, Gamma, Threshold, Posterize,
@@ -214,7 +214,7 @@ byte-domain SIMD for `Median3x3` (16 lanes, 575 ms → 0.8 ms at 1080p), shifted
 `BokehBlur` and `Convolve2D` (169/81 taps), and row-band parallelism behind `OilPaint`, `Bilateral`,
 `Sobel`, `Clahe` and `EqualizeHistogram`. Point operators are still scalar; at equal core counts we are
 1.1–1.3× behind the oracle overall, and the headline lead comes from the same number of cores doing
-more work per pass, not from more cores. Numbers and protocol: `docs/compare-4.1.3-2026-11-07.md`. `ProcessingPlan` runs same-size steps in row bands with halo-aware source rects, and `PlanSteps` adapts the
+more work per pass, not from more cores. Numbers and protocol: `docs/measurements.md`. `ProcessingPlan` runs same-size steps in row bands with halo-aware source rects, and `PlanSteps` adapts the
 existing operators into steps. Since M10 consecutive band-able steps are **fused** by default: each segment
 runs through band windows (two per worker) with the halo accumulated along the chain, and the output is
 byte-identical to the step-by-step path — `ExecuteOptions.AllowFusion = false` restores it, and a
@@ -231,11 +231,6 @@ replicas", so a chain that looked acceptable step-by-step can change bytes once 
 compare fused against step-by-step on correctly declared halos only; they cannot make a wrong declaration
 right.
 
-**The public surface is locked by a snapshot, not an analyzer.** `docs/public-api.txt` lists every public
-type and member with its nullable annotations; `PublicApiTests` reflects it and fails on any difference.
-Regenerate with `SIMDIMAGING_UPDATE_PUBLIC_API=1 dotnet test --filter PublicApi` and read the diff — that diff
-is the review.
-
 **Resize runs in row bands**, bounded to a 16 MB float scratch; the band size is `(budgetRows - taps) * (dstH / srcH)` — the scale goes the other way round or every band reallocates.
 
 **Measure before optimizing.** `benchmarks/SimdImaging.Benchmarks` is a stopwatch harness for the end-to-end
@@ -249,14 +244,14 @@ reading of 0.031 ms that the next run reported as 0.154 ms. So: run it twice bef
 ranges or a geometric mean rather than per-cell ratios, and prefer two independent protocols agreeing over one
 protocol repeated.
 
-- `-- perf <size>` — throughput: each side runs 30 ms of continuous work per sample, median over rounds.
+- `--perf <size>` — throughput: each side runs 30 ms of continuous work per sample, median over rounds.
   This is the number to quote for "how fast is an operation".
-- `-- cores <size>` — isolation: wall-clock ratio from both sides interleaved inside one child process and
+- `--cores <size>` — isolation: wall-clock ratio from both sides interleaved inside one child process and
   reported as the **minimum** of 21 rounds (interference only ever inflates), plus core counts from one side
   per child. This is the number to quote for single-shot latency, and the only place core counts are honest —
   `TotalProcessorTime` is process-wide and reading it in-process produced 1.22 and 7.86 cores for the same
   operator.
-- `-- sizes` — the same table at five resolutions with the flipped cases listed. Never quote one resolution
+- `--sizes` — the same table at five resolutions with the flipped cases listed. Never quote one resolution
   alone; seven of seventeen cases change sign between 640×360 and 4K.
 
 **`RowParallel.For` versus `RowParallel.ForBands`.** `For` takes a whole image and refuses to parallelise below
@@ -287,7 +282,7 @@ same operator is 1.20× at 1080p and 0.77× at 640×480 — that is not arithmet
 (same-process, interleaved) and **0.24×** under `cores` (subprocess-isolated, min of 21 rounds). Say which
 protocol a number came from, or the number means nothing.
 
-**NativeAOT re-verified (2026-11-07, both tiers, 31 hashes including `median.sobel`, `equalize` and `bilateral`).** **Originally verified (2026-11-05).** `run.sh` publishes twice — `-p:IlcInstructionSet=avx2` and the default
+**NativeAOT is verified on both tiers** (`run.sh`: 77 hash entries, 50 of them required). `run.sh` publishes twice — `-p:IlcInstructionSet=avx2` and the default
 SSE2 baseline — and both binaries produce byte-identical PNG/JPEG output **and** byte-identical geometry
 output (crop, bicubic/Lanczos3 resize, 16-bit resize, rotate, flip, pad, composite) to the JIT run. The tier
 line proves it: the AVX2 publish reports `avx2=True`, the default one `avx2=False`, both `dynamic-code=False`.

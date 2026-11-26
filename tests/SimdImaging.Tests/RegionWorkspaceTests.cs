@@ -47,4 +47,47 @@ public sealed class RegionWorkspaceTests
             File.Delete(destination);
         }
     }
+
+    /// <summary>
+    /// The rectangle is a buffer the facade rents, so the facade must reserve it before the rent. Before this the
+    /// buffer was rented first and the workspace refusal arrived afterwards, naming the windows: a limit that could
+    /// not be met still paid for the full allocation. The assertion on the pool — not only on the exception — is what
+    /// pins the ordering.
+    /// </summary>
+    [Fact]
+    public void ARegionAboveTheWorkspaceLimit_IsRefusedBeforeItsTargetIsRented()
+    {
+        var source = Path.Combine(Path.GetTempPath(), $"simd-region-ws-{Guid.NewGuid():N}.tif");
+        var destination = Path.Combine(Path.GetTempPath(), $"simd-region-ws-{Guid.NewGuid():N}.png");
+        try
+        {
+            var pixels = new byte[64 * 48 * 3];
+            for (var i = 0; i < pixels.Length; i++)
+                pixels[i] = (byte)(i * 37);
+            File.WriteAllBytes(source, TiffFixture.Strips(64, 48, PixelFormat.Rgb24, pixels));
+
+            var pool = new CountingPool();
+            var workspace = new WorkspaceManager(limitBytes: 1);
+            var options = TranscodeOptions.Default with
+            {
+                Execute = new ExecuteOptions { Workspace = workspace, MaxDegreeOfParallelism = 1 },
+                Region = new RegionOptions { Pool = pool },
+            };
+
+            var error = Should.Throw<InvalidOperationException>(() => ImageTranscode.From(source)
+                .WithOptions(options)
+                .Region(new PixelRect(8, 6, 32, 24))
+                .Invert()
+                .Run(destination));
+
+            error.Message.ShouldContain("region destination");
+            pool.Rented.ShouldBe(0, "the target was refused before it was rented");
+            workspace.OutstandingBytes.ShouldBe(0);
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(destination);
+        }
+    }
 }
