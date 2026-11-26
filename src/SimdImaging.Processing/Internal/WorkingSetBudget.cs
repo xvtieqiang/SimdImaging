@@ -10,9 +10,11 @@ namespace SimdImaging.Processing.Internal;
 /// </summary>
 internal static class WorkingSetBudget
 {
-    /// <summary>The bytes the executor holds: its windows plus the declared scratch for every worker. A target
-    /// buffer is not part of this measurement — it belongs to whoever rents it, and <see cref="TargetBuffer"/>
-    /// reserves it before the rent.</summary>
+    /// <summary>
+    /// The bytes the executor holds: its structural windows plus the largest simultaneously-live declared scratch
+    /// peak of one sequential operator call. A target buffer is not part of this measurement — it belongs to whoever
+    /// rents it, and <see cref="TargetBuffer"/> reserves it before the rent.
+    /// </summary>
     internal static long Measure(IReadOnlyList<PlanStep> steps, ExecuteOptions options, int width, int height,
         int windowCols, int windowRows, WorkingFormat format, int windows, out int undeclared)
     {
