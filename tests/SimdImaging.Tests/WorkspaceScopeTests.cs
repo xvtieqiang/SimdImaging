@@ -141,6 +141,37 @@ public sealed class WorkspaceScopeTests
     }
 
     [Fact]
+    public void WholeImageMixedWorkspace_CountsPerCallOnlyOnceAlongsideWorkerAndSharedScratch()
+    {
+        const int width = 1024;
+        const int height = 256;
+        var op = MixedGlobalPerCallOp();
+        var model = op.Contract.Workspace;
+
+        model.Estimate!(width, height, height, WorkingFormat.Rgba8).ShouldBe(1024 + 2048 + 512);
+        model.EstimatePerWorkerScratch(width, height, height, WorkingFormat.Rgba8).ShouldBe(1024);
+        model.EstimatePerWorker(width, height, height, WorkingFormat.Rgba8).ShouldBe(1024 + 512);
+        model.EstimateWholeImage(width, height, WorkingFormat.Rgba8).ShouldBe(2048 + 512);
+
+        var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8,
+            [new PlanStep(op)], bandRows: 64, allowFusion: false, degree: 4);
+        estimate.PerWorkerPeakBytes.ShouldBe(4L * 1024);
+        estimate.WholeImageScratchBytes.ShouldBe(2048 + 512);
+        estimate.OperatorScratchPeakBytes.ShouldBe((4L * 1024) + 2048 + 512);
+
+        var options = new ExecuteOptions { MaxDegreeOfParallelism = 4 };
+        var measured = WorkingSetBudget.Measure([new PlanStep(op)], options, width, height,
+            width, height, WorkingFormat.Rgba8, windows: 2, out var undeclared);
+        undeclared.ShouldBe(0);
+        (measured - (2L * width * height * WorkingFormat.Rgba8.BytesPerPixel()))
+            .ShouldBe((4L * 1024) + 2048 + 512);
+
+        var compiled = PipelineCompiler.Compile(
+            new PipelineRecipeBuilder().Append(op).Build(), FrameOptions(width, height));
+        compiled.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.OperatorScratchPeak)
+            .Bytes.ShouldBe((4L * 1024) + 2048 + 512);
+    }
+    [Fact]
     public void GlowWorkspace_SeparatesWholeFramesFromWorkerPrivateRows()
     {
         const int width = 320;
@@ -188,6 +219,22 @@ public sealed class WorkspaceScopeTests
                 + ((long)width * height * WorkingFormat.Rgba8.BytesPerPixel()));
     }
 
+    private static ImageOp MixedGlobalPerCallOp()
+    {
+        var workspace = WorkspaceModel.OfMixed(
+            (_, _, _, _) => 1024L,
+            (_, _, _, _) => 2048L,
+            (_, _, _, _) => 512L);
+        var contract = OperatorContract.Create("mixed-global-per-call", OpCategory.Global,
+            WorkingFormatMask.All, WholeSourceFootprint.Instance, workspace,
+            requirements: ExecutionRequirements.WholeImage);
+
+        return new ImageOp(contract, new KernelImplementations((source, destination, rect, _) =>
+        {
+            for (var y = rect.Y; y < rect.Y + rect.Height; y++)
+                source.Row(y).CopyTo(destination.Row(y));
+        }));
+    }
     private static ImageOp MixedGlobalOp()
     {
         var workspace = WorkspaceModel.OfMixed(
