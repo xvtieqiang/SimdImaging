@@ -118,7 +118,8 @@ public static class MemoryEstimator
             !step.Definition.Contract.Requirements.RequiresWholeImageInvocation);
         var fuse = fusionAllowed && FusionDecision.ShouldFuse(
             plan.Steps, source.Width, source.Height, source.Format.BytesPerPixel());
-        return Estimate(source.Width, source.Height, source.Format, plan.Steps, plan.BandRows,
+        var bandRows = plan.BandRowsFor(source.Width, source.Height);
+        return Estimate(source.Width, source.Height, source.Format, plan.Steps, bandRows,
             allowFusion: fuse, degree);
     }
 
