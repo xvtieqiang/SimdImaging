@@ -223,7 +223,7 @@ public class ImageTranscodeTests
                     })
                     .Run(destination, ImageFormat.Png));
 
-            error.Message.ShouldContain("working set");
+            error.Message.ShouldContain("estimated peak");
             destination.Length.ShouldBe(0,
                 "the compiled chain and its reservations must be ready before the encoder writes a header");
         }
