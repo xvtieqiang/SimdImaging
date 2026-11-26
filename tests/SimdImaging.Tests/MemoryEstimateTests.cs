@@ -373,6 +373,25 @@ public class MemoryEstimateTests : IDisposable
     }
 
     [Fact]
+    public void WholeImageWorkerScratchUsesExecuteDegreeNotPlanBandHeight()
+    {
+        const int width = 256;
+        const int height = 256;
+        const int degree = 2;
+        var op = PlanOps.Clahe(tilesX: 4, tilesY: 8);
+        var plan = new ProcessingPlan { BandRows = height }.Add(op);
+        var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
+            bandRows: height, allowFusion: false, degree: degree);
+        var fullBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
+        var perWorker = op.Contract.Workspace.EstimatePerWorker(width, height, height, WorkingFormat.Rgba8);
+        var wholeImage = op.Contract.Workspace.EstimateWholeImage(width, height, WorkingFormat.Rgba8);
+
+        estimate.Workers.ShouldBe(degree);
+        estimate.PerWorkerBytes.ShouldBe(perWorker);
+        estimate.WholeImageScratchBytes.ShouldBe(wholeImage);
+        estimate.PeakBytes.ShouldBe((2 * fullBytes) + (perWorker * degree) + wholeImage);
+    }
+    [Fact]
     public void Estimate_CountsDeclaredOperatorScratch()
     {
         var plan = new ProcessingPlan()
