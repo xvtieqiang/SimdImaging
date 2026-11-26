@@ -1289,6 +1289,14 @@ MIT 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精度、�
   带 `Region` 的转码仍走 `RegionExecutor`、没有编译计划可解释；
   `Image.Apply/ApplyWithOptions/ProcessRegion` 已统一到 Compiler（区域经 `CompiledPlanExecutor.ExecuteRegion`），
   `ProcessTo` 与 `ResizeRegion` 仍走旧 `ProcessingPlan`/行泵路径。
+- **P0 契约收尾（部分完成，2026-11-26）**：`OperatorContract` 已覆盖所有算子步；`ContractConformanceTests` 逐工厂校验
+  格式、footprint、halo、pass、分区与 workspace，代表八算子中的 Invert/GaussianBlur/Pixelate/Equalize/Noise 在列，
+  Composite/Blend 在 `CompositeStepTests`。审查中发现并修复了两处真实语义偏差：Pixelate 与
+  Composite/Blend/DrawImage 实际会重算 alpha，却声明 `AlphaPolicy.Preserve`；现在声明 `Recomputes`，并由
+  `RepresentativeSemanticsTests` 用像素行为（2×2 块 alpha 平均）守护，不是只改一个枚举值。**仍未完成**：几何步
+  （Warp/SeamCarve/Resize/Crop/Pad/Flip）只有 `GeometryDescriptor`，没有 `ExecutionRequirements`/`PassModel`/
+  `PixelSemantics`/`WorkspaceModel`；`IImageOp` 仍是死接口（仅 `ImageOp` 实现，全仓无消费），`MapSourceRect` 不在执行
+  链路上。下一步应把几何描述符提升为契约、退役 `IImageOp`，而不是重写 Compiler。
 - **Tile 后端（P5 部分完成）**：`IRegionSink` + `TileExecutor` 已能把 Point / Neighborhood 计划按 tile 执行，并与
   Frame 逐字节比较；`Global` / `Composite` / `FormatChange` / 块对齐 / 整图步骤仍以 `TileRefusal` 拒绝。公开入口：
   `Image.ProcessTiles` 的缓冲与 Sink 两个重载、`Image.ProcessTilesTo(IRegionSource, Stream, …)`（编码器端 sink：

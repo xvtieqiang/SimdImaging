@@ -363,7 +363,7 @@ public static class PlanOps
         return Create(nameof(AlphaOps.Composite), OpCategory.Composite, WholeSourceFootprint.Instance,
             WorkspaceModel.Of((_, _, _, _) => 2L * overlay.Width * 4 * sizeof(float), WorkspaceScope.WholeImage),
             new KernelImplementations(PlanSteps.Composite(overlay, x, y, mode)),
-            formats, ExecutionRequirements.WholeImage,
+            formats, ExecutionRequirements.WholeImage, semantics: PixelSemantics.EncodedFloatAlphaComputed,
             input: new InputPort("source", PortRole.Source, formats, Required: true),
             input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true,
                 new FixedFootprint(new PixelRect(x, y, overlay.Width, overlay.Height))));
@@ -377,7 +377,7 @@ public static class PlanOps
         return Create(nameof(Processing.Blend), OpCategory.Composite, WholeSourceFootprint.Instance,
             WorkspaceModel.Of((_, _, _, _) => 2L * overlay.Width * 4 * sizeof(float), WorkspaceScope.WholeImage),
             new KernelImplementations(PlanSteps.BlendOverlay(overlay, x, y, mode)),
-            formats, ExecutionRequirements.WholeImage,
+            formats, ExecutionRequirements.WholeImage, semantics: PixelSemantics.EncodedFloatAlphaComputed,
             input: new InputPort("source", PortRole.Source, formats, Required: true),
             input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true,
                 new FixedFootprint(new PixelRect(x, y, overlay.Width, overlay.Height))));
@@ -397,6 +397,7 @@ public static class PlanOps
                     "ProcessingPlan.Add(operator, second)."),
                 secondKernel: PlanSteps.CompositeInto(x, y, mode)),
             WorkingFormatMask.All, ExecutionRequirements.WholeImage,
+            semantics: PixelSemantics.EncodedFloatAlphaComputed,
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("overlay", PortRole.Overlay, WorkingFormatMask.All, Required: true,
                 WholeSourceFootprint.Instance));
@@ -411,6 +412,7 @@ public static class PlanOps
                     "ProcessingPlan.Add(operator, second)."),
                 secondKernel: PlanSteps.BlendInto(x, y, mode)),
             WorkingFormatMask.All, ExecutionRequirements.WholeImage,
+            semantics: PixelSemantics.EncodedFloatAlphaComputed,
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("overlay", PortRole.Overlay, WorkingFormatMask.All, Required: true,
                 WholeSourceFootprint.Instance));
@@ -447,7 +449,7 @@ public static class PlanOps
                     * (opacity < 1f ? 2 : 1),
                 WorkspaceScope.WholeImage),
             new KernelImplementations(PlanSteps.DrawImage(image, destination, opacity)),
-            formats, ExecutionRequirements.WholeImage,
+            formats, ExecutionRequirements.WholeImage, semantics: PixelSemantics.EncodedFloatAlphaComputed,
             input: new InputPort("source", PortRole.Source, formats, Required: true),
             input2: new InputPort("overlay", PortRole.Overlay, formats, Required: true,
                 new FixedFootprint(new PixelRect(0, 0, image.Width, image.Height))));
@@ -466,6 +468,7 @@ public static class PlanOps
                     "'draw-image' needs its overlay injected; add it with ProcessingPlan.Add(operator, second)."),
                 secondKernel: PlanSteps.DrawImageInto(destination, opacity)),
             WorkingFormatMask.All, ExecutionRequirements.WholeImage,
+            semantics: PixelSemantics.EncodedFloatAlphaComputed,
             input: new InputPort("source", PortRole.Source, WorkingFormatMask.All, Required: true),
             input2: new InputPort("overlay", PortRole.Overlay, WorkingFormatMask.All, Required: true,
                 WholeSourceFootprint.Instance));
@@ -900,7 +903,8 @@ public static class PlanOps
         // Writes blocks straight into the destination; no plane of its own. The footprint is the block grid,
         // not a constant halo: the radius a band needs depends on where the band starts.
         Global(nameof(FilterOps.Pixelate), v => FilterOps.Pixelate(v, blockSize), (_, _, _, _) => 0L,
-            footprint: new BlockAlignedFootprint(blockSize));
+            footprint: new BlockAlignedFootprint(blockSize),
+            semantics: PixelSemantics.EncodedFloatAlphaComputed);
 
     /// <summary>Dehaze: the dark channel and the atmospheric light both need the whole picture.</summary>
     public static ImageOp Dehaze(int patchRadius = 7, float omega = 0.95f, float tMin = 0.1f, int refineRadius = 20) =>
