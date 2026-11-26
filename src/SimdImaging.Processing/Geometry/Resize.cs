@@ -504,7 +504,7 @@ internal static bool TryNearestTap(WeightTable table, out int offset)
 
         // Tap count grows with the downsample ratio: 16384 -> 1 needs ~98 K taps, which as two stackalloc
         // arrays is ~786 KB and overflows a 1 MB worker stack. Small ratios keep the stack (cheapest thing
-        // there is); past StackTapLimit the arrays come from the shared pool instead.
+        // there is); larger ratios reuse exact-sized per-worker arrays across all rows in that worker.
         if (weights.Taps <= VerticalStackTapLimit)
         {
             Span<int> rows = stackalloc int[VerticalStackTapLimit];
