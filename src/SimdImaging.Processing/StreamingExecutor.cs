@@ -1,5 +1,6 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Compilation;
 using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Fusion;
 using SimdImaging.Processing.Geometry;
@@ -70,6 +71,16 @@ public readonly record struct StreamResult(StreamRefusal Refusal, int RowsWritte
 /// windows (band + halo, twice) plus the operators' declared scratch: it does not grow with the image height.
 /// </para>
 /// <para>
+/// <b>The sections are the stages.</b> A forward-only source cannot materialise an intermediate, so the chain is one
+/// <c>PlanRowSource</c> per operator section of the compiled plan — the pull chain the report names, with each stage's
+/// window sized by its own <c>Σhalo</c>. That is why these entry points take a <c>CompiledExecutionPlan</c> rather than
+/// a step list: the shape the caller was shown is the shape that runs, and one figure
+/// (<c>WorkspacePlan.BoundedBytes</c>) covers both. The trade the streaming path makes is that a section boundary
+/// cannot reset anything to a frame, so a chain the whole-image path would cut into eleven fused plus nine stepwise
+/// steps still streams as ten linked windows. <see cref="Classify"/> says whether a plan <i>can</i> stream, never
+/// whether streaming is the cheaper shape.
+/// </para>
+/// <para>
 /// A plan that cannot stream is refused rather than approximated: see <see cref="StreamRefusal"/>. Empty plans are
 /// a straight copy of the rows.
 /// </para>
@@ -115,66 +126,80 @@ internal static class StreamingExecutor
     }
 
     /// <summary>
-    /// The plan's steps, then a resize, as one chain: the pump produces same-size rows, the resize pulls them and the
-    /// sink receives the resized ones. No intermediate image, whichever stage the caller stops at.
+    /// The compiled plan's sections, then a resize, as one chain: the stages produce same-size rows, the resize pulls
+    /// them and the sink receives the resized ones. No intermediate image, whichever stage the caller stops at.
     /// </summary>
-    internal static StreamResult ExecuteWithResize(ProcessingPlan plan, IRowSource source, IRowSink sink, int width,
-        int height, Resampler resampler, ExecuteOptions? options)
+    internal static StreamResult ExecuteWithResize(CompiledExecutionPlan plan, IRowSource source, IRowSink sink,
+        int width, int height, Resampler resampler, ExecuteOptions? options, IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sink);
+        if (plan.Backend != ExecutionBackend.Stream)
+            throw new InvalidOperationException(
+                $"The plan did not choose the stream backend ({plan.Backend}); there is no chain to build.");
         options ??= new ExecuteOptions();
 
-        var refusal = Classify(plan.Steps, out var refusingStep);
-        if (refusal != StreamRefusal.None)
-            return new StreamResult(refusal, 0, 0, 0) { RefusingStep = refusingStep };
-
         options = EnsureWorkspace(options);
-        var planBytes = EstimatePlanRowSource(plan, source, options, out var undeclared);
         var resizeWorkspace = EstimateResizeWorkspace(source, width, height, resampler, options);
         var copyBytes = checked((long)width * Math.Min(Pipeline.TransferRows, height)
             * source.Format.BytesPerPixel());
-        WorkingSetBudget.Ensure(checked(planBytes + resizeWorkspace.TotalBytes + copyBytes), undeclared,
-            plan.Steps.Count, options, "The streaming plan, resize and transfer pipeline");
+        WorkingSetBudget.Ensure(checked(WithTransferBuffer(plan.Workspace, copyBytes)
+                + resizeWorkspace.TotalBytes), plan.Workspace.UndeclaredSteps, plan.Steps.Count, options,
+            "The streaming plan, resize and transfer pipeline");
 
-        using var rows = new PlanRowSource(plan, source, options);
-        using var resized = new ResizeRowSource(rows, width, height, resampler, options);
-        var written = Pipeline.Copy(resized, sink, options.CancellationToken, options);
-
-        return new StreamResult(StreamRefusal.None, written, Math.Max(1, rows.Bands), 1);
+        var chain = CompiledPlanExecutor.CreateStreamChain(plan, source, options, pool);
+        try
+        {
+            using var resized = new ResizeRowSource(chain, width, height, resampler, options);
+            var written = Pipeline.Copy(resized, sink, options.CancellationToken, options);
+            return new StreamResult(StreamRefusal.None, written, Bands(chain), 1);
+        }
+        finally
+        {
+            (chain as IDisposable)?.Dispose();
+        }
     }
 
-    public static StreamResult Execute(ProcessingPlan plan, IRowSource source, IRowSink sink,
-        ExecuteOptions? options)
+    /// <summary>
+    /// Runs a compiled plan over a forward-only source. The stages it builds are the plan's sections, so the shape
+    /// the caller was shown is the shape that runs: segment boundaries, per-stage windows and the working-set figure
+    /// all come from the same <see cref="CompiledExecutionPlan"/>.
+    /// </summary>
+    internal static StreamResult Execute(CompiledExecutionPlan plan, IRowSource source, IRowSink sink,
+        ExecuteOptions? options, IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sink);
+        if (plan.Backend != ExecutionBackend.Stream)
+            throw new InvalidOperationException(
+                $"The plan did not choose the stream backend ({plan.Backend}); there is no chain to build.");
         options ??= new ExecuteOptions();
 
         if (source.Width <= 0 || source.Height <= 0)
             throw new ArgumentException(
                 $"A row source must have a positive size; got {source.Width}x{source.Height}.", nameof(source));
 
-        var refusal = Classify(plan.Steps, out var refusingStep);
-        if (refusal != StreamRefusal.None)
-            return new StreamResult(refusal, 0, 0, 0) { RefusingStep = refusingStep };
-
         options = EnsureWorkspace(options);
-        var planBytes = EstimatePlanRowSource(plan, source, options, out var undeclared);
         var copyBytes = checked((long)source.Width * Math.Min(Pipeline.TransferRows, source.Height)
             * source.Format.BytesPerPixel());
-        WorkingSetBudget.Ensure(checked(planBytes + copyBytes), undeclared, plan.Steps.Count, options,
-            "The streaming plan and transfer pipeline");
+        WorkingSetBudget.Ensure(WithTransferBuffer(plan.Workspace, copyBytes),
+            plan.Workspace.UndeclaredSteps, plan.Steps.Count, options, "The streaming plan and transfer pipeline");
 
-        // The pump is a pull source now; this driver is the only thing that writes to the sink. Keeping one
+        // The chain is a pull source now; this driver is the only thing that writes to the sink. Keeping one
         // direction for every stage is what lets a resize sit between two plans (see PlanRowSource).
-        using var rows = new PlanRowSource(plan, source, options);
-        var written = Pipeline.Copy(rows, sink, options.CancellationToken, options);
-
-        return new StreamResult(StreamRefusal.None, written, Math.Max(1, rows.Bands),
-            Math.Max(1, RowParallel.LastWorkerCount));
+        var chain = CompiledPlanExecutor.CreateStreamChain(plan, source, options, pool);
+        try
+        {
+            var written = Pipeline.Copy(chain, sink, options.CancellationToken, options);
+            return new StreamResult(StreamRefusal.None, written, Bands(chain),
+                Math.Max(1, RowParallel.LastWorkerCount));
+        }
+        finally
+        {
+            (chain as IDisposable)?.Dispose();
+        }
     }
 
     private static ExecuteOptions EnsureWorkspace(ExecuteOptions options) =>
@@ -182,26 +207,26 @@ internal static class StreamingExecutor
             ? options
             : options with { Workspace = new WorkspaceManager(options.MaxWorkingBytes) };
 
-    private static long EstimatePlanRowSource(ProcessingPlan plan, IRowSource source, ExecuteOptions options,
-        out int undeclared)
+    /// <summary>
+    /// The plan's estimate carries one transfer buffer at the plan's own output width; the driver rents one at the
+    /// sink's. Replace that term instead of adding a second copy of it — a post-resize width may be larger, so the
+    /// larger of the two is the one that keeps the figure an upper bound.
+    /// </summary>
+    private static long WithTransferBuffer(WorkspacePlan workspace, long copyBytes)
     {
-        if (plan.Steps.Count == 0)
+        var planned = 0L;
+        foreach (var term in workspace.Terms)
         {
-            undeclared = 0;
-            return 0;
+            if (term.Kind == WorkspaceTermKind.CopyBuffer)
+                planned = checked(planned + term.Bytes);
         }
 
-        var halo = 0;
-        foreach (var step in plan.Steps)
-            halo = checked(halo + step.HaloY);
-
-        var bandRows = SequentialBands.For(plan, source.Width, source.Height, source.Format,
-            options.MaxDegreeOfParallelism);
-        var windowRows = (int)Math.Min(source.Height, (long)bandRows + 2L * halo);
-        var windows = plan.Steps.Count > 1 ? 4 : 2;
-        return WorkingSetBudget.Measure(plan.Steps, options, source.Width, source.Height, source.Width,
-            windowRows, source.Format, windows, out undeclared);
+        return checked(workspace.BoundedBytes - planned + Math.Max(planned, copyBytes));
     }
+
+    /// <summary>Bands produced by the busiest stage of the chain; 1 for an empty plan, which is one straight copy.</summary>
+    private static int Bands(IRowSource chain) =>
+        chain is CompiledPlanExecutor.OwnedRowChain owned ? Math.Max(1, owned.Bands) : 1;
 
     private static ResizeWorkspace EstimateResizeWorkspace(IRowSource source, int width, int height,
         Resampler resampler, ExecuteOptions options)

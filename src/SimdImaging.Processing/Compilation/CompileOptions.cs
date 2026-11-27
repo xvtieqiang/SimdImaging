@@ -1,5 +1,6 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Fusion;
 
 namespace SimdImaging.Processing.Compilation;
 
@@ -28,6 +29,11 @@ internal sealed record CompileOptions
     /// <summary>True when a <c>PlanObserver</c> needs every step's full output; fusion is then refused and the
     /// stream backend cannot avoid materialising.</summary>
     internal bool ObserveSteps { get; init; }
+
+    /// <summary>What a section boundary costs the executor this plan is compiled for. The whole-image, region and
+    /// tile executors materialise a frame at a boundary; the row pump links a stage. Defaults to
+    /// <see cref="Fusion.FusionBoundary.Frame"/>, which is what every caller that returns a buffer runs.</summary>
+    internal FusionBoundary Boundary { get; init; } = FusionBoundary.Frame;
 
     /// <summary>Rows per band; 0 lets the executor size it, any positive value (128 included) is literal. The
     /// workspace prediction resolves 0 to <see cref="ProcessingPlan.DefaultBandRows"/>, which bounds the automatic

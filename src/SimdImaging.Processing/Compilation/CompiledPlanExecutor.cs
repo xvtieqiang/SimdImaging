@@ -225,7 +225,9 @@ internal static class CompiledPlanExecutor
 
                 if (section.Kind == CompiledSectionKind.OperatorRun)
                 {
-                    var stage = new PlanRowSource(plan.SectionPlan(sectionIndex)!, current, options);
+                    // The caller's pool reaches the stream windows too: a stage that silently fell back to the shared
+                    // pool would be invisible to a counting or limiting pool the caller passed in for exactly this.
+                    var stage = new PlanRowSource(plan.SectionPlan(sectionIndex)!, current, options, pool);
                     owned.Add(stage);
                     current = stage;
                     continue;
@@ -238,7 +240,7 @@ internal static class CompiledPlanExecutor
                 current = next;
             }
 
-            return owned.Count == 0 ? current : new OwnedRowChain(current, owned);
+            return new OwnedRowChain(current, owned);
         }
         catch
         {
@@ -271,13 +273,34 @@ internal static class CompiledPlanExecutor
                 $"{what} needs {bytes} bytes, above ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
     }
 
-    private sealed class OwnedRowChain(IRowSource inner, List<IDisposable> owned) : IRowSource, IDisposable
+    /// <summary>
+    /// The pull chain, wrapped so its ownership is unconditional: disposing it releases the stages it built and never
+    /// the <see cref="IRowSource"/> it was given. An empty plan has no stages, and that is the case this wrapper used
+    /// to skip — which made "dispose what BuildChain returned" mean "dispose the caller's decoder".
+    /// </summary>
+    internal sealed class OwnedRowChain(IRowSource inner, List<IDisposable> owned) : IRowSource, IDisposable
     {
         public int Width => inner.Width;
         public int Height => inner.Height;
         public WorkingFormat Format => inner.Format;
         public int ReadRows(Span<byte> destination, int stride, int maxRows) =>
             inner.ReadRows(destination, stride, maxRows);
+
+        /// <summary>Bands produced by the busiest stage; a stage that has not run reports 0.</summary>
+        internal int Bands
+        {
+            get
+            {
+                var bands = 0;
+                foreach (var stage in owned)
+                {
+                    if (stage is PlanRowSource rows && rows.Bands > bands)
+                        bands = rows.Bands;
+                }
+
+                return bands;
+            }
+        }
 
         private bool _disposed;
 

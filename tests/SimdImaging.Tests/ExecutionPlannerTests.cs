@@ -7,8 +7,9 @@ using SimdImaging.Processing.Contracts;
 namespace SimdImaging.Tests;
 
 /// <summary>
-/// The planner's decision matrix, exercised through the real compiler and workspace estimator. No entry point
-/// uses it yet; these tests pin the semantics before any public API or fallback is migrated.
+/// The planner's decision matrix, exercised through the real compiler and workspace estimator. Four entry points
+/// consume it — <c>ProcessingPlan.TryExecuteTo</c>, <c>ImageTranscode</c> and the two tile entry points in
+/// <c>ImageTiles</c> — and each executes the plan the planner returned, so these cases decide what those callers run.
 /// </summary>
 public sealed class ExecutionPlannerTests
 {

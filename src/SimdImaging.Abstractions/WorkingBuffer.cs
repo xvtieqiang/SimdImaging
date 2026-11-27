@@ -69,6 +69,13 @@ public sealed class WorkingBuffer : IDisposable, IMemoryOwner<byte>
     /// Rents a tightly packed buffer from <paramref name="pool"/> (or <see cref="ArrayPixelPool.Shared"/>).
     /// Contents are undefined; <c>Image.Create</c> clears them.
     /// </summary>
+    /// <remarks>
+    /// Undefined is not "free": nothing in the engine assumes a rented buffer is zeroed, and a kernel that leaves
+    /// part of its destination rectangle unwritten writes whatever the previous tenant left there into the result.
+    /// That is a wrong image — possibly one carrying another image's pixels — not an exception. The property test
+    /// <c>PoolContents_DoNotChangeTheResult</c> runs a plan against a pool that fills every rent with 0xA5 and
+    /// compares it against a zero-filled one, so an operator that skips a channel or a padding row fails there.
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive, or the size overflows.</exception>
     public static WorkingBuffer Rent(int width, int height, WorkingFormat format,
         IPixelPool? pool = null, bool clear = false)
@@ -149,6 +156,10 @@ public sealed class WorkingBuffer : IDisposable, IMemoryOwner<byte>
             return _memory.Slice(_offset, _length);
         }
     }
+
+    /// <summary>True once <see cref="Dispose"/> has returned the memory to its pool. Reading a view taken before
+    /// that is undefined rather than guarded: the pixels may already belong to someone else.</summary>
+    public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     /// <summary>Returns the memory to its pool (or disposes the wrapped owner). Safe to call more than once;
     /// afterwards <see cref="View"/> throws.</summary>

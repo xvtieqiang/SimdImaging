@@ -69,7 +69,7 @@ internal static class PipelineCompiler
                 var count = steps.Count - first;
                 var runSegments = FusionDecision.PlanSegments(steps, first, count, width, height,
                     currentFormat.BytesPerPixel(), options.Execute.AllowFusion && !options.ObserveSteps,
-                    options.Execute.ForceFusion);
+                    options.Execute.ForceFusion, options.Boundary);
                 foreach (var (segmentFirst, segmentCount) in runSegments)
                 {
                     var fused = segmentCount > 1;
@@ -193,8 +193,8 @@ internal static class PipelineCompiler
         }
 
         // Pass the option through unchanged: 0 means "the executor sizes the band", any positive value (128
-        // included) is the caller's geometry. The workspace above was already estimated with the resolved policy
-        // band, so the prediction stays an upper bound for the automatic case.
+        // included) is the caller's geometry. The workspace above was estimated with the same option, so it resolved
+        // the same band rule (policy band, then ExecBandRows over the section's segmentation) the executor will.
         return new CompiledExecutionPlan(recipe, steps, sections, backend, streamRefusal, regionRefusal,
             tileRefusal, width, height, sizeKnown, options.BandRows, workspace, stepInfo, regionCost, explanation);
     }

@@ -10,6 +10,16 @@ namespace SimdImaging.Abstractions;
 /// Rent returns an owner: disposing the owner returns the memory. There is deliberately no separate
 /// <c>Return</c> — one owner, one release, so a buffer cannot be returned twice.
 /// </para>
+/// <para>
+/// <b><see cref="Rent"/> must be thread-safe.</b> A fused segment rents its band windows from inside the band
+/// workers, so one <c>Execute</c> on a 16-core machine makes up to sixteen concurrent calls; a pool that keeps a
+/// plain list of free blocks corrupts it on the first fused chain. <see cref="ArrayPixelPool"/> uses concurrent
+/// collections for exactly this reason.
+/// </para>
+/// <para>
+/// Contents are undefined and the engine never assumes otherwise: a kernel that leaves part of its destination
+/// rectangle unwritten exposes the previous tenant's pixels (see <see cref="WorkingBuffer.Rent"/>).
+/// </para>
 /// </summary>
 public interface IPixelPool
 {

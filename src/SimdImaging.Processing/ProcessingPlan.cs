@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Threading;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Compilation;
@@ -57,12 +58,14 @@ public delegate void IntoKernel(PixelView sourceWindow, PixelView destination, i
 /// </remarks>
 public readonly record struct PlanStep
 {
-    internal PlanStep(ImageOp definition, byte[]? lut = null, PixelView? secondary = null)
+    internal PlanStep(ImageOp definition, byte[]? lut = null, PixelView? secondary = null,
+        WorkingBuffer? owner = null)
     {
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
         Kernel = definition.Kernels.PlanKernel;
         Lut = lut;
         Secondary = secondary;
+        SecondaryOwner = owner;
     }
 
     /// <summary>The operator this step was compiled from.</summary>
@@ -73,6 +76,11 @@ public readonly record struct PlanStep
     /// recording it on the step is what lets the executor supply it instead of a closure capturing it.
     /// </summary>
     internal PixelView? Secondary { get; init; }
+
+    /// <summary>The buffer <see cref="Secondary"/> was taken from, when the caller supplied one. Only this form can be
+    /// checked: a view carries no owner, so the executor cannot tell a live buffer from one that went back to the
+    /// pool. Not owned — the plan never disposes it.</summary>
+    internal WorkingBuffer? SecondaryOwner { get; init; }
 
     /// <summary>The second-input kernel, when the operator was built for injection; null for an operator that
     /// declares no second input.</summary>
@@ -220,7 +228,21 @@ public sealed class ProcessingPlan
     /// Wrapped, not cast: returning the backing <see cref="List{T}"/> as <see cref="IReadOnlyList{T}"/> still hands
     /// out an object a caller can cast back and mutate, which would change a plan between its estimate and its run.
     /// </remarks>
-    public IReadOnlyList<PlanStep> Steps => _readOnlySteps ??= _steps.AsReadOnly();
+    public IReadOnlyList<PlanStep> Steps
+    {
+        get
+        {
+            // Publish once, without the `??=` race: two threads executing the same plan would both build a wrapper,
+            // and a reader could otherwise observe the field before the wrapper's own fields were written. The hit
+            // path is one Volatile read — this property is on every Execute.
+            var cached = Volatile.Read(ref _readOnlySteps);
+            if (cached is not null)
+                return cached;
+
+            var created = _steps.AsReadOnly();
+            return Interlocked.CompareExchange(ref _readOnlySteps, created, null) ?? created;
+        }
+    }
 
     /// <summary>Whether the plan ends with a size change.</summary>
     public bool HasResize => _resizeWidth > 0;
@@ -250,7 +272,7 @@ public sealed class ProcessingPlan
         _resizeWidth = width;
         _resizeHeight = height;
         _resizeResampler = resampler;
-        _version++;
+        Interlocked.Increment(ref _version);
         return this;
     }
 
@@ -264,7 +286,7 @@ public sealed class ProcessingPlan
             return;
 
         _steps.AddRange(other._steps);
-        _version++;
+        Interlocked.Increment(ref _version);
     }
 
     /// <summary>The size <see cref="Execute"/> and a streamed run produce for a given input.</summary>
@@ -287,6 +309,17 @@ public sealed class ProcessingPlan
     /// own scratch is ever held, so memory does not grow with the image height.
     /// <para>The result is byte-identical to <c>Execute</c> over the same pixels: both use the same halo
     /// recursion. An empty plan is a straight copy of the rows.</para>
+    /// <para>
+    /// This entry point has no pool parameter, so the band windows come from <c>ArrayPixelPool.Shared</c>; the
+    /// compiled file path forwards the pool its caller supplied. Either way the windows are pooled and returned, not
+    /// allocated per band.
+    /// </para>
+    /// <para>
+    /// The plan the planner returned is the plan that runs: one row source per operator section, linked as a pull
+    /// chain, so <see cref="StreamResult.Execution"/>'s sections and working-set figure describe the stages rather than
+    /// a shape that was considered and dropped. <see cref="CanStream"/> says whether the plan can stream, not what its
+    /// halo costs.
+    /// </para>
     /// </summary>
     /// <exception cref="ArgumentException">The source reports a non-positive size.</exception>
     /// <exception cref="InvalidDataException">The source ends before its declared height.</exception>
@@ -341,10 +374,12 @@ public sealed class ProcessingPlan
                 : new NotSupportedException(failure.Message);
         }
 
+        // Execute the plan the planner produced, not the step list it was produced from: the sections the report
+        // names are then the stages that run, and one working-set figure covers both.
         var result = HasResize
-            ? StreamingExecutor.ExecuteWithResize(this, source, sink, _resizeWidth, _resizeHeight,
+            ? StreamingExecutor.ExecuteWithResize(decision.Plan!, source, sink, _resizeWidth, _resizeHeight,
                 _resizeResampler, execute)
-            : StreamingExecutor.Execute(this, source, sink, execute);
+            : StreamingExecutor.Execute(decision.Plan!, source, sink, execute);
         return result with { Execution = decision.ToReport(OutputStrategy.Banded) };
     }
 
@@ -408,10 +443,45 @@ public sealed class ProcessingPlan
     /// view from the plan, the compiler derives the port's regions from the same contract, and the caller keeps
     /// ownership — the view must stay valid until the plan finishes.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The plan holds a reference to the memory, not a copy of it. Returning a rented buffer before the plan
+    /// finishes hands the pixels to the pool while the executor is still reading them, and the result is another
+    /// band's data in the composite — a wrong image, not a throw.
+    /// </para>
+    /// <para>
+    /// <b>This overload cannot check that.</b> A view carries no owner, so the executor cannot tell a live buffer
+    /// from one that went back to the pool. Use <see cref="Add(ImageOp, WorkingBuffer)"/> unless the second input
+    /// lives in memory the engine does not pool: that overload records the buffer and refuses to run once it has
+    /// been disposed.
+    /// </para>
+    /// </remarks>
     /// <param name="op">The operator; it must declare a second input and an injectable kernel.</param>
     /// <param name="second">The second input, in the format its port accepts.</param>
     /// <exception cref="ArgumentException">The operator has no injectable second input, or the format is not accepted.</exception>
-    public ProcessingPlan Add(ImageOp op, PixelView second)
+    public ProcessingPlan Add(ImageOp op, PixelView second) => AddValidated(op, second, owner: null);
+
+    /// <summary>
+    /// Appends an operator whose second input is a pooled buffer the plan holds a reference to, so a buffer that
+    /// went back to its pool is reported instead of read.
+    /// </summary>
+    /// <remarks>
+    /// The plan does not take ownership: it never disposes <paramref name="second"/>, it only keeps the reference so
+    /// <see cref="Execute(PixelView,IPixelPool?,PlanObserver?)"/> can fail fast when it has been disposed. The
+    /// reference also keeps the buffer out of the collector, so a caller who finishes with the plan should let it
+    /// go rather than hold it for the life of the process.
+    /// </remarks>
+    /// <param name="op">The operator; it must declare a second input and an injectable kernel.</param>
+    /// <param name="second">The second input, in the format its port accepts.</param>
+    /// <exception cref="ObjectDisposedException"><paramref name="second"/> is already disposed.</exception>
+    /// <exception cref="ArgumentException">The operator has no injectable second input, or the format is not accepted.</exception>
+    public ProcessingPlan Add(ImageOp op, WorkingBuffer second)
+    {
+        ArgumentNullException.ThrowIfNull(second);
+        return AddValidated(op, second.View, second);
+    }
+
+    private ProcessingPlan AddValidated(ImageOp op, PixelView second, WorkingBuffer? owner)
     {
         ArgumentNullException.ThrowIfNull(op);
         if (op.Contract.Inputs.Count < 2 ||
@@ -424,10 +494,10 @@ public sealed class ProcessingPlan
             throw new ArgumentException(
                 $"The second input is {second.Format}, which '{op.Name}' does not accept on that port.", nameof(second));
 
-        return AddCore(op, second);
+        return AddCore(op, second, owner);
     }
 
-    private ProcessingPlan AddCore(ImageOp op, PixelView? secondary)
+    private ProcessingPlan AddCore(ImageOp op, PixelView? secondary, WorkingBuffer? owner = null)
     {
         if (op.Category == OpCategory.Geometric)
             throw new NotSupportedException(
@@ -440,8 +510,8 @@ public sealed class ProcessingPlan
             throw new InvalidOperationException(
                 "A resize ends the plan; add the steps before processing the size change, or run the resize outside.");
 
-        _steps.Add(new PlanStep(op, secondary: secondary));
-        _version++;
+        _steps.Add(new PlanStep(op, secondary: secondary, owner: owner));
+        Interlocked.Increment(ref _version);
         return this;
     }
 
@@ -479,7 +549,7 @@ public sealed class ProcessingPlan
         var plan = bandRows > 0 ? new ProcessingPlan { BandRows = bandRows } : new ProcessingPlan();
         foreach (var step in steps)
             plan._steps.Add(step);
-        plan._version++;
+        Interlocked.Increment(ref plan._version);
         return plan;
     }
 
@@ -505,7 +575,7 @@ public sealed class ProcessingPlan
 
         var table = rgbaTable.ToArray();
         _steps.Add(new PlanStep(ImageOp.PointLut(name, table), table));
-        _version++;
+        Interlocked.Increment(ref _version);
         return this;
     }
 
@@ -610,6 +680,17 @@ public sealed class ProcessingPlan
             return Geometry.Transforms.Copy(source, pool);
         }
 
+        // A recorded second input is only a live reference while it is still rented. The executor reads it from band
+        // workers at a point where a returned buffer holds some other band's pixels: check here, once, rather than
+        // let a wrong image through. Only Add(operator, WorkingBuffer) can be checked at all — a bare view has no
+        // owner to ask.
+        foreach (var step in _steps)
+        {
+            if (step.SecondaryOwner is { IsDisposed: true })
+                throw new ObjectDisposedException(nameof(WorkingBuffer),
+                    $"The second input of step '{step.Name}' was disposed; it must stay rented until the plan finishes.");
+        }
+
         var width = source.Width;
         var height = source.Height;
         var bandRows = BandRowsFor(width, height);
@@ -620,13 +701,14 @@ public sealed class ProcessingPlan
         var shape = ExecutionShapeFor(fusionAllowed);
         var execution = shape.Steps;
 
-        // The same table the compiler uses: each contiguous bandable run either fuses as one segment or is split
-        // into single steps. The runtime no longer makes one plan-wide decision that the compiled path can
-        // contradict for the same steps. Keyed on every decision input so a compiled plan (fixed geometry) reuses
-        // one segmentation across runs instead of rebuilding two lists each time.
+        // The same table the compiler uses: each contiguous bandable run is cut into segments at the halo budget,
+        // and each segment either fuses or runs as a single step. The runtime no longer makes one plan-wide
+        // decision that the compiled path can contradict for the same steps. Keyed on every decision input so a
+        // compiled plan (fixed geometry) reuses one segmentation across runs instead of rebuilding two lists each
+        // time.
         var bytesPerPixel = source.Format.BytesPerPixel();
         var forceFusion = options.ForceFusion;
-        var cache = _segmentCache;
+        var cache = Volatile.Read(ref _segmentCache);
         List<(int First, int Count)> segments;
         if (cache is not null && cache.Width == width && cache.Height == height &&
             cache.BytesPerPixel == bytesPerPixel && cache.FusionAllowed == fusionAllowed &&
@@ -636,7 +718,7 @@ public sealed class ProcessingPlan
         {
             segments = FusionDecision.PlanSegments(execution, 0, execution.Count, width, height,
                 bytesPerPixel, fusionAllowed, forceFusion);
-            _segmentCache = new SegmentCache(width, height, bytesPerPixel, fusionAllowed, forceFusion, segments);
+            Volatile.Write(ref _segmentCache, new SegmentCache(width, height, bytesPerPixel, fusionAllowed, forceFusion, segments));
         }
 
         // A fused window is band + 2 x halo, and every band re-runs the whole segment over that overlap. With the
@@ -880,15 +962,23 @@ public sealed class ProcessingPlan
     /// </summary>
     private ExecutionShape ExecutionShapeFor(bool fold)
     {
-        if (_shapeVersion != _version)
+        // The version is the publication barrier for the two shapes: a plan may be built on one thread and executed on
+        // others, so every field a reader touches here is read and written through Volatile. Plain reads were the same
+        // weak-memory hazard the segment cache had: a reader could see the new version with a half-published shape and
+        // index the previous step list.
+        var version = Volatile.Read(ref _version);
+        if (Volatile.Read(ref _shapeVersion) != version)
         {
-            _fusedShape = null;
-            _plainShape = null;
-            _segmentCache = null;
-            _shapeVersion = _version;
+            Volatile.Write(ref _fusedShape, null);
+            Volatile.Write(ref _plainShape, null);
+            // Released, not merely cleared: the segmentation is read through Volatile.Read, so a stale non-null
+            // cache would otherwise be published to a concurrent reader with the previous step list's indices.
+            Volatile.Write(ref _segmentCache, null);
+            Volatile.Write(ref _shapeVersion, version);
         }
 
-        var cached = fold ? _fusedShape : _plainShape;
+        ref var slot = ref (fold ? ref _fusedShape : ref _plainShape);
+        var cached = Volatile.Read(ref slot);
         if (cached is not null)
             return cached;
 
@@ -911,11 +1001,7 @@ public sealed class ProcessingPlan
             HasCategoryBoundary = boundary,
         };
 
-        if (fold)
-            _fusedShape = shape;
-        else
-            _plainShape = shape;
-
+        Volatile.Write(ref slot, shape);
         return shape;
     }
 
@@ -1011,13 +1097,8 @@ public sealed class ProcessingPlan
     /// <summary>Documented estimate (not a measurement): the live set is the previous result plus the
     /// destination, plus two band windows per worker for every fused segment.</summary>
     /// <summary>The destination band widened by the halo and clamped to the image.</summary>
-    private static PixelRect MapSource(PixelRect band, int haloX, int haloY, int width, int height)
-    {
-        var left = Math.Max(0, band.X - haloX);
-        var top = Math.Max(0, band.Y - haloY);
-        var right = Math.Min(width, band.X + band.Width + haloX);
-        var bottom = Math.Min(height, band.Y + band.Height + haloY);
-
-        return new PixelRect(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top));
-    }
+    /// <summary>The read rectangle of one band, clamped to the image. The stepwise band loop's only use of the halo
+    /// contract; it delegates so there is one implementation of the clamping, not two that agree today.</summary>
+    private static PixelRect MapSource(PixelRect band, int haloX, int haloY, int width, int height) =>
+        HaloFootprint.Expand(band, haloX, haloY, width, height);
 }

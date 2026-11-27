@@ -844,6 +844,154 @@ Apache-2.0 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精
   几何版 `MemoryEstimator.Estimate(width, height, …, bandRows: 0)` 也会套用 halo/缓存带规则（以前只能按字面 128 估）。
   锁定：`Estimate_WorkerCountFollowsTheBandRule` 用同一条链分别跑 0（32 workers）与 128（9 workers），钉住显式值
   能穿过编译边界。
-- **未做**：Σhalo 在 33–64 行之间的链条目前整体退回逐步执行，没有尝试「按 halo 预算切子段」；`shp` 单算子 0.85× 仍在
-  长链里主导剩余差距；4K 中档 0.94–0.95 的剩余差距未定位到单一原因。
+- **按 halo 预算切子段（2026-11-28 补齐）**：原缺口是「Σhalo 在 33–64 行之间的链条整体退回逐步」，没有再试
+  「能填进预算的前缀」。现在 `FusionDecision.PlanSegments` 在整条 run 被判为不融合之后按 `MaxFusedHaloRows` 贪心前扫：
+  累计 `HaloY` 再收下一步就会超预算时，把已累计的子段交回决策表（`ShouldFuse`）判一次，然后是下一段。
+  两个直接后果：① 11 步 `BoxBlur(3)`（Σhalo = 33）从 11 段变成「前 10 步融合 + 1 步逐步」，1080p 下前缀省掉 9 张整帧
+  （74.6 MB，仍在 64 MiB 阈值之上，所以是按测得的规则融合，不是破例）；② 仍不划算的子段照样退回逐步，行为与改前一致。
+  子段边界是一整帧，编译器与运行时读同一张表，所以窗口预测、峰值估计、流式/区域拒绝都不变；字节等价由
+  `TheSegmentedChainIsByteIdenticalToStepwise` 与既有随机链测试锁定。
+- **仍未做**：`shp` 单算子 0.85× 仍在长链里主导剩余差距；4K 中档 0.94–0.95 的剩余差距未定位到单一原因。
   `FusionDecision` 文档里那张短链比值表是在本次修复前测的，仍成立但需要重录性能基线（`benchmarks/gates.sh --perf`）。
+
+## 执行引擎源码级走查（2026-11-28，第二轮）
+
+按风险顺序修的六项，全部带测试；字节结果不变，公开 API 只多两个成员。
+
+- **F2 池内容残留（已修，靠测试而非代码）**：`ArrayPool.Return` 与 `WorkingBuffer.Rent` 都不清零，而「核必须写满
+  `destinationRect`」这条约定一旦破了，输出里出现的是上一张图的字节。没有给租用路径加 memset（1080p 一次全帧清零
+  ≈ 2.4 ms 点链的 20%），而是把约定变成可执行的性质：`PoolContentsTests` 用「每次租用填 0xA5」与「填 0」两个池跑
+  同一条链比对字节，8 个用例覆盖点/邻域/全局/LUT/合成/卷积，96×64（融合窗口）与 320×240（逐步整帧）各一遍。
+  文档同步写进 `IPixelPool` 与 `WorkingBuffer.Rent`：引擎**不依赖**清零，这是核的义务。
+- **F7 第二输入生命周期（部分可查）**：`Add(op, WorkingBuffer)` 记录缓冲引用并在 `Execute` 入口检查一次，已释放抛
+  `ObjectDisposedException`；`WorkingBuffer.IsDisposed` 因此公开。`Add(op, PixelView)` 无法检查——视图里没有所有者，
+  要查就得给 `PixelView` 加 8 字节引用，代价落在最热的类型上，不做。门面 `Composite/DrawImage` 仍走视图重载。
+- **F9 融合带高把机器跑空（已修）**：`ExecBandRows` 的 `4×Σhalo` 加上界 `min(4H, max(策略带, height/4))`，至少 4 条带。
+  1080p 落点不变（208 行 / 5 带）；1920×400 从 2 带 ~135 ms 变成 4–5 带 ~100 ms（强制融合带扫描，见
+  `docs/architecture.md` §6.2.2）。注意矮图上 64 MiB 流量规则通常先拒绝融合，所以这条只对 `ForceFusion` / 极长链生效。
+- **F13 编译期预测的带高（已修）**：`WorkspacePlanner.EstimateFrame` 原样传 `options.BandRows`（含 0），估计器自己解析
+  策略带与 `ExecBandRows`。旧代码传字面 128，在窄高图（512×4000，策略带 250）上不是上界；1080p 上也一直在按 128 算
+  一个实际是 67/112/16 的带。由此顺带修正了逐步 scratch 的行分割（`useDefaultPolicy` 之前被 128 强行关掉）。
+- **F1/F12 契约缺口（文档）**：`IPixelPool.Rent` 写明必须线程安全（融合段在 band worker 内并发租用）；
+  `TryExecuteTo`/`PlanRowSource`/`StreamingExecutor` 写明流式是**一条窗口链**、`H = Σ 全部步骤 halo`、不查
+  `PlanSegments`，以及窗口池的来源。
+- **F4/F5/F6/F16 一致性**：`ExecutionShape`/`_shapeVersion`/`_version` 全部 Volatile/Interlocked 发布，
+  `Steps` 的惰性只读包装改 `LazyInitializer`；`PlanRowSource` 接受并透传调用方的 `IPixelPool`（编译路径此前静默丢弃）；
+  `ProcessingPlan.MapSource` 委托 `HaloFootprint.Expand`，夹紧算术只剩一份；行泵改用接收绝对 `top/bottom` 的
+  `RunWindow` 重载，不再用 `bandTop / _bandRows` 反推行号。
+
+**仍未做（有意留下）**：核内异常仍以 `AggregateException` 逃逸（测试的 `Throws()` 明确不约束形状）；`WorkingBuffer`
+每个实例都是 finalizable（`using` 会 `SuppressFinalize`，但对象本身仍进终结队列）；`MaxWorkingBytes` 与
+`WorkspaceManager` 两套预算互不引用。三条都不产生错图，留待有真实需求时再动。
+
+## 编译期与运行期的形状收敛（2026-11-28，第三轮）
+
+走查发现两个互相独立的问题，都出在"同一件事实推导多次"上。
+
+- **四条估计路径里有三条还在用字面 128 行带高（已修）**：`WorkspacePlanner` 的 `EstimateStream` / `EstimateRegion` /
+  `EstimateTile` 用 `DefaultBandRows` 造合成计划，而 `SequentialBands.For` 把正数当字面几何、只有 0 才走 worker 规则。
+  执行侧一直用 0（1920 宽出 512 行），于是流式窗口项低报 4×：1920×1080 三步链报告 5.7 MiB、实际 22.6 MiB；设
+  `MaxWorkingBytes = 12 MiB` 时规划器接受、`PlanRowSource` 构造时抛。夹具图都短于 128 行，`min(band, height)` 把两个
+  公式压成同一个数，所以测试一直是绿的。现在三处与 frame 一致，原样传 `options.BandRows`。
+- **`TryExecuteTo` 报告的形状不是它执行的形状（已修）**：它用 `ExecutionPlanner` 规划（`decision.Plan`，含分段），
+  却拿原始 `ProcessingPlan` 走"整链一窗"的旧泵，只把 `decision.ToReport` 贴到结果上。公开的
+  `StreamResult.Execution.Steps` / `PredictedWorkingBytes` 因此描述另一条路径。现在 `StreamingExecutor` 的两个入口
+  接收 `CompiledExecutionPlan`：每个算子 section 一个 `PlanRowSource`，与 `ImageTranscode` 走同一条 `CreateStreamChain`；
+  旧的整链一窗入口与 `EstimatePlanRowSource` 删除（后者的"整链 Σhalo"模型正是报告与执行不一致的来源）。
+  顺带修掉两个错误：`BoundedBytes` 已含传输缓冲，runner 又加了一次（重复计一次）；`CreateStreamChain` 在空计划时
+  直接返回调用方的源，`Dispose` 会把它关掉（现在恒包一层 `OwnedRowChain`）。
+- **钉住的用例**：`StreamingTests.ReportedShape_IsTheShapeThatRuns_OnATallImage`（预测值当 `WorkspaceManager` 上限，
+  512×2000）、`StreamingTests.ReportedSections_AreTheStagesThatRun`（Σhalo = 384 → 6 段，逐字节等于整图路径）、
+  `WorkspacePlanTests.CompileTimePredictionUsesTheBandTheExecutorWillPick`。
+- **仍未做**：`WorkspacePlanner`、`MemoryEstimator`、`WorkingSetBudget` 三套估算仍然各自实现同一套窗口算术（现在
+  参数一致、结论一致，但没有共享函数）；`ImageTranscode` 的 `_predictedBytes` 在带 resize 时取的是同尺寸段的
+  `BoundedBytes`，仍靠 `WithTransferBuffer` 取大值的近似。这两条都需要一个"执行形状"值对象才谈得上真正合一，
+  而那个抽象现在只有三个调用点，先不做。
+
+## 转码的内存交叉点（2026-11-28，新 `transcode` 模式实测）
+
+新增的 `benchmarks/SimdImaging.Comparison` 模式 `transcode <宽x高>` 把文件级路径拉进来：PNG→PNG，三侧都是
+「文件进、文件出」（我方 `ImageTranscode` 流式、我方 `Load→Pipe→Save` 整图、对手 `Load→Mutate→Save`），
+峰值用**每格一个冷子进程**采样（与 `peakmem` 同口径），另附时间与分配。首次运行就量到一个反直觉的结论：
+
+| 场景（1920×1080） | 流式峰值 | 整图峰值 | 对手峰值 |
+|---|---|---|---|
+| copy | 8.8 MiB | 31.6 MiB | 18.5 MiB |
+| point-3 | **31.0** | 41.6 | **25.2** |
+| blur-invert | **36.5** | 60.8 | **34.3** |
+
+| 场景（3840×2160） | 流式峰值 | 整图峰值 | 对手峰值 |
+|---|---|---|---|
+| copy | 16.5 MiB | 109.9 MiB | 45.4 MiB |
+| point-3 | **39.2** | 123.0 | 54.0 |
+| blur-invert | **54.5** | 216.9 | 79.5 |
+
+- **1080p 上流式并不比对手省**（`point-3` 31.0 vs 25.2、`blur-invert` 36.5 vs 34.3）：`SequentialBands` 在 1080p
+  给 512 行带（16 worker × 32 行），`PlanRowSource` 每段 4 块窗口 = 4 × 512 × 1920 × 4 B ≈ 17 MiB，比一张整帧
+  （7.9 MiB）还大。4K 带高降到 273 行（被 4 MiB 窗口预算限制），窗口总量 16.8 MiB 对整帧 31.6 MiB，才翻过来。
+- **时间上流式确实更快**：1.24 / 1.46 / 3.01×（1080p 对对手）、1.19 / 1.41 / 2.69×（4K），且流式 vs 整图
+  3/3 逐字节一致。分配上流式是 16–67 KiB/op，整图 9.5–87.5 MiB/op。
+- **可动的旋钮**：① ~~给流式带高加「窗口总量不超过一张整帧」的上限~~ —— **已落地**，见下一条；② ~~让输出兼作一块
+  ping-pong~~ —— **已落地**，但落点不是"兼作"：两步链根本不需要第二块中间缓冲，见下下条；③ ~~带 halo 的转码峰值由
+  算子自己的 workspace 主导，不在窗口这一侧~~ —— 落地方式是**不再切成两段**（见末条）：`blur-invert` 1080p 30.9 MiB
+  对对手 43.1（0.72×）、4K 50.9 对 79.5（0.64×）。高斯的 workspace 仍是那条链的地板，但它不再决定比较结果。
+- **第一版修法（同日，原则而非常数）**：行泵的带高加一条**比较型**上界 —— 窗口集合不得超过一张整帧：
+  `band ≤ height / windows - 2 × Σhalo`（`SequentialBands.For(..., withinOneFrame: true)`），窗口数收进
+  `SequentialBands.Windows`（原来 4 份拷贝）。估计器（`WorkspacePlan.EstimateStream`）与执行器（`PlanRowSource`）共用
+  这两个数。1080p `point-3` 峰值 **31.0 → 21.0 MiB**（0.84× 对手，改前 1.26×），时间不变（266.3 vs 267.0 ms）；
+  4K/8K 的带高本来就在上界之下，数值不动。`blur-invert` 没动，因为它由高斯 workspace 主导——这正是"每条规则都要回答
+  替代方案的成本"的边界：窗口这一侧解决了，算子那一侧还没解决。
+- **窗口数按交替规则算，不按 `steps.Count`（同日，第二版）**：`RunWindow` 的交替只写**一块**中间缓冲——两步链的
+  第二步直接写输出，第二块 ping-pong 从头到尾没被访问过——但 `SequentialBands.Windows` 对 `steps.Count > 1` 一律给 4，
+  于是每段白租也白算一块。改成 0 / 2 / **3** / 4（对应步数 0 / 1 / 2 / ≥3），`PlanRowSource` 与 `RegionExecutor` 按同一
+  个数租用（两步链把同一视图当两块传，与零 halo 分支既有的做法一致）；区域/tile 的窗口项跟着从字面 4 变 3，编译器估算
+  读的还是同一个函数，所以报告形状与执行形状仍然一致。
+  **它对 transcode 那张表没有影响，原因值得记下来**：`Invert → Contrast → Grayscale` 是零 halo，`ShouldFuse` 直接融合成
+  一段（3 步 → 4 块，本来就没变）；`Gaussian → Invert` 有 halo、Σhalo = 5 在预算内，但"省掉的整帧"只有 7.9 MB（1080p）/
+  31.6 MB（4K），落在 64 MiB 阈值之下，被切成两个单步段（2 + 2 块，也没变）。两步段只出现在按 halo 预算切出来的前缀
+  里，或者不走编译器、直接把两步计划交给行泵的调用方。
+  钉住：`ATwoStepChainRentsOneIntermediateNotTwo`（`CountingPool` 数实际租用，并与整图逐字节比对）、
+  `ThePumpRentsItsWindowsFromTheCallersPool`（三步 → 4 块）、`WorkspacePlanTests` 的区域/tile 窗口项。
+- **冷进程峰值这一列的分辨率是 ~5 MiB，不是 1 MiB**：同一份代码复跑三次，`copy`（无算子、窗口项恒为 0，代码路径不可能
+  变）给出 16.5 / 11.6 / 16.5 MiB，`point-3` 给出 39.2 / 34.3 / 38.7 MiB。所以上一条那种 4 MiB 级的改动**不能**用这一列
+  验收——第一次测到的 11.6 / 34.3 是噪声，不是收益。确定性证据在 `WorkspacePlan.BoundedBytes` 与 `CountingPool.Rented`
+  上，冷进程峰值只用来验证"量级对不对"。
+- **量到但没动：`ShouldFuse` 的阈值是整图路径的成本，不是流式路径的**。流式里段边界不物化整帧，代价是多一个 stage
+  （2 块窗口 + 一次整帧行拷贝）。4K `Gaussian σ1.5 → Invert`：融合成一段是 3 × 283 行 ≈ 13.0 MiB 窗口；切成两段是
+  2 × 283 + 2 × 273 ≈ 17.1 MiB **再加上**一次 31.6 MB 的行拷贝。这里融合既更省又更少搬运，而 `ShouldFuse` 用"省下的
+  整帧 > 64 MiB"判它不划算——那条阈值衡量的是整图路径里被省掉的物化帧。
+- **段边界的价格按执行器给，不按链给（同日，第三版，已落地）**：`FusionDecision` 现在收一个 `FusionBoundary`：编译器
+  给 Stream 候选传 `RowPump`，其余（frame / region / tile）传 `Frame`。泵上唯一剩下的拒绝理由是 Σhalo ≤ 32 的预算——
+  36 行的链仍然切成「8 + 1」，因为那是重算量的问题，不是边界价格的问题。先用 `fusionab` 模式把两种报价对撞
+  （决策 vs `ForceFusion`，逐字节一致）：
+
+  | `Gaussian σ1.5 → Invert` | 决策（2 段） | 强制融合（1 段） |
+  |---|---|---|
+  | 1080p | 303.3 ms / 36.7 MiB | 298.6 ms / **30.7 MiB** |
+  | 4K | 691.0 ms / 55.1 MiB | 692.9 ms / **50.4 MiB** |
+
+  落地后整表复测（`transcode`）：1080p `blur-invert` 流式峰值 36.8 → **30.9 MiB**（0.72× 对手，改前 1.07×；对整图
+  0.46×），时间 265.4 ms / 3.04× 对手；4K 54.8 → **50.9 MiB**（0.64× 对手，0.24× 整图），时间 694.5 ms / 2.56×。
+  `point-3` 与 `copy` 不动（零 halo 本来就融合、无算子本来就没有 stage）。钉住：
+  `AHaloPairIsSplitForAFrameAndFusedForAPump`（同一份 steps 两种报价，外加预算仍会切）、
+  `ThePumpFusesAHaloPairTheFramePathSplits`（端到端段数与逐字节等价）。
+- 复现：`dotnet run -c Release --project benchmarks/SimdImaging.Comparison -- transcode 1920x1080`
+  （4K 换成 `3840x2160`；融合 A/B 用 `-- fusionab 1920x1080`；报告按 `SIMDIMAGING_COMPARE_TAG` 区分，`results/` 不入库）。
+
+## 性能门禁的两条假红与一个真问题（2026-11-28 排查）
+
+`gates.sh --perf` 连红两次，两条都不是代码回退，第三条是查出来的真问题。
+
+- **`gainmap resize 1080p->720p`（已降级为 `null`）**：同一 binary 一小时内的三次读数是 9.44 / 4.77 / 4.63 ms，三次的
+  calibration 一致（alu 66.3 / 65.3 / 63.8），S ≈ 68%，而门槛是 38%——门槛低于噪声，按 `benchmarks/baselines/README.md`
+  的规则该降级。它现在比基线（5.89）更快。`DOTNET_TieredCompilation=0` 下两次读到 5.04 / 5.76 ms，双峰消失，指向
+  0.9 MP 复合场景被固定成本与 JIT 分层左右。
+- **`tile gaussian 512x512`（已降级为 `null`）**：三次 171.2 / 176.0 / 139.9 ms（基线 149.4，S ≈ 23%），门禁那次读到
+  241.2 ms。同一套 40-tile 循环的 `tile invert` 三次是 32.0 / 35.2 / 33.1 ms，**非常稳**——不稳定的不是 tile 循环。
+- **真问题（未定位）**：40 个 tile 里每个 tile 跑一次 σ3 高斯，会出现 140 ms 与 240 ms 两种稳定状态，说明**单个
+  tile 的高斯有时掉到慢路径**（每 tile 一次带并行 + scratch 租用，可能是线程池爬坡或池命中率）。它值得单独查，
+  但不该靠一条 35% 的门槛来发现。
+- **校正模型的边界**：`degradation = max(mem, alu)` 在只有 ALU 退化时校正不足——这次探针是 mem x1.00 / alu x0.86，
+  按 x1.00 判定，于是 compute-bound 场景的读数带着 ~15% 的机器变化一起被判。要么在两条探针分歧大时整轮判"不可比"，
+  要么按场景记录它由哪条探针校正；两种都需要改 `check-baseline.sh` 的判定语义，本次不动（降级后 15 条设闸场景
+  最差 +1.8%）。

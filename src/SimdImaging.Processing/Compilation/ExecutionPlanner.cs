@@ -1,5 +1,6 @@
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Fusion;
 
 namespace SimdImaging.Processing.Compilation;
 
@@ -197,6 +198,10 @@ internal static class ExecutionPlanner
             TileHeight = request.TileHeight,
             ObserveSteps = request.ObserveSteps,
             MaxRegionReadAmplification = request.MaxRegionReadAmplification,
+            // The candidate knows what it will run: a streamed plan links stages at its boundaries, everything else
+            // materialises a frame. Compiling each candidate with its own price is why the planner does not need one
+            // segmentation that is wrong for half of its options.
+            Boundary = backend == ExecutionBackend.Stream ? FusionBoundary.RowPump : FusionBoundary.Frame,
             Execute = execute,
         };
     }

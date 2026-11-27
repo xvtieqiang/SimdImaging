@@ -11,12 +11,19 @@ namespace SimdImaging.Processing;
 /// at a time; the next band is produced only once the current one has been consumed.
 /// <para>This is what lets a resize sit between two plans: <c>plan → rows</c>, <c>resize</c>, <c>plan → rows</c> is a
 /// chain of sources, and the encoder pulls from the last one. Nothing is materialised at either end.</para>
+/// <para>
+/// <b>One stage is one section.</b> The compiled plan's operator sections become one of these each, so
+/// <see cref="_haloTotal"/> is that section's Σhalo, the band comes from the sequential rule (this pump runs its bands
+/// one at a time and parallelises inside them), and the whole section re-runs over the overlap on every band. A
+/// section boundary links two pumps instead of materialising a frame; nothing resets to a whole image.
+/// </para>
 /// </summary>
 internal sealed class PlanRowSource : IRowSource, IDisposable
 {
     private readonly ProcessingPlan _plan;
     private readonly IRowSource _source;
     private readonly ExecuteOptions _options;
+    private readonly IPixelPool? _pool;
     private IDisposable? _workspaceLease;
     private readonly int _width;
     private readonly int _height;
@@ -36,7 +43,8 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
     private PixelView _band;    // the current band, a slice of the output window
     private bool _disposed;
 
-    public PlanRowSource(ProcessingPlan plan, IRowSource source, ExecuteOptions? options = null)
+    public PlanRowSource(ProcessingPlan plan, IRowSource source, ExecuteOptions? options = null,
+        IPixelPool? pool = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(source);
@@ -54,6 +62,7 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
         _plan = plan;
         _source = source;
         _options = options;
+        _pool = pool;
         _width = source.Width;
         _height = source.Height;
 
@@ -63,13 +72,15 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
             _haloTotal += steps[i].HaloY;
 
         // Bands run one at a time (the caller pulls), so the band has to keep its own row loop busy; the whole-image
-        // rule would hand it 32 rows at 8K and leave every operator on one thread.
-        _bandRows = SequentialBands.For(plan, _width, _height, source.Format, options.MaxDegreeOfParallelism);
+        // rule would hand it 32 rows at 8K and leave every operator on one thread. `withinOneFrame` is this pump's
+        // own constraint: holding more than a materialised frame is worse than not streaming at all.
+        _bandRows = SequentialBands.For(plan, _width, _height, source.Format, options.MaxDegreeOfParallelism,
+            withinOneFrame: true);
         if (steps.Count == 0)
             return;
 
         var maxWindowRows = Math.Min(_height, _bandRows + (2 * _haloTotal));
-        var windows = steps.Count > 1 ? 4 : 2;
+        var windows = SequentialBands.Windows(steps);
         var estimate = WorkingSetBudget.Measure(steps, options, _width, _height, _width, maxWindowRows,
             source.Format, windows, out var undeclared);
         WorkingSetBudget.Ensure(estimate, undeclared, steps.Count, options, "Streaming");
@@ -86,13 +97,12 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
         {
             // Keep partial construction local: a failed later rent must return every earlier allocation because a
             // throwing constructor cannot be disposed by its caller.
-            cache = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
-            output = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
-            if (steps.Count > 1)
-            {
-                scratchA = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
-                scratchB = WorkingBuffer.Rent(_width, maxWindowRows, source.Format);
-            }
+            cache = WorkingBuffer.Rent(_width, maxWindowRows, source.Format, _pool);
+            output = WorkingBuffer.Rent(_width, maxWindowRows, source.Format, _pool);
+            if (windows > 2)
+                scratchA = WorkingBuffer.Rent(_width, maxWindowRows, source.Format, _pool);
+            if (windows > 3)
+                scratchB = WorkingBuffer.Rent(_width, maxWindowRows, source.Format, _pool);
 
             _cache = cache;
             _output = output;
@@ -195,10 +205,15 @@ internal sealed class PlanRowSource : IRowSource, IDisposable
         var sourceWindow = _cache!.View.Slice(new PixelRect(0, 0, _width, windowRows));
         var finished = _output!.View.Slice(new PixelRect(0, 0, _width, windowRows));
         var a = _scratchA is null ? default : _scratchA.View.Slice(new PixelRect(0, 0, _width, windowRows));
-        var b = _scratchB is null ? default : _scratchB.View.Slice(new PixelRect(0, 0, _width, windowRows));
+        // A two-step chain has one intermediate, so the second slot is the first view rather than a rented buffer:
+        // the alternation writes `window` on step 0 and `output` on step 1, and never reads `next`.
+        var b = _scratchB is null ? a : _scratchB.View.Slice(new PixelRect(0, 0, _width, windowRows));
 
-        FusedExecutor.RunWindow(_width, _height, sourceWindow, finished, winTop, _plan.Steps, 0,
-            _plan.Steps.Count, bandTop / _bandRows, _bandRows, _haloTotal, a, b);
+        // Absolute rows, not a band index: the band height is this class's own choice, so handing over
+        // `bandTop / _bandRows` would make the executor re-derive a row it was just given, and any future change to
+        // how bands advance would silently move the band instead of failing.
+        FusedExecutor.RunWindow(_width, _height, sourceWindow, finished, winTop, bandTop, bottom, _plan.Steps, 0,
+            _plan.Steps.Count, _haloTotal, a, b);
 
         _band = finished.Slice(new PixelRect(0, bandTop - winTop, _width, bottom - bandTop));
         _bandRow = 0;

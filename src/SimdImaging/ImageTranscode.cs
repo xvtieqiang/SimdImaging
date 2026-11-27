@@ -3,6 +3,7 @@ using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
 using SimdImaging.Processing.Compilation;
+using SimdImaging.Processing.Fusion;
 using SimdImaging.Processing.Geometry;
 
 namespace SimdImaging;
@@ -251,6 +252,10 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 SourceHeight = height,
                 SourceFormat = working,
                 Source = SourceCapabilitiesFor(),
+                // This plan is compiled to be streamed, so its boundaries are stages rather than frames. When the
+                // decoder needs the whole input the sink below is absent and the compiler falls back to Frame; the
+                // segmentation it gets is the pump's, which is byte-identical and only changes window sizes.
+                Boundary = FusionBoundary.RowPump,
                 Sink = wholeInput ? SinkCapabilities.None : SinkCapabilities.RowWritable,
                 Execute = _options.Execute,
             });
@@ -578,6 +583,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         SourceFormat = WorkingFormat.Rgba8,
         Source = SourceCapabilitiesFor(),
         Sink = SinkCapabilities.RowWritable,
+        Boundary = FusionBoundary.RowPump,
         Execute = _options.Execute,
     };
 
@@ -704,6 +710,8 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             SourceFormat = source.Format,
             Source = SourceCapabilitiesFor(),
             Sink = SinkCapabilities.RowWritable,
+            // Compiled for the pump it is about to build: a section boundary here is a stage, not a frame.
+            Boundary = FusionBoundary.RowPump,
             Execute = _options.Execute,
         });
 

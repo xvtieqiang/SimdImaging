@@ -160,8 +160,11 @@ internal static class RegionExecutor
         var maxWindowRows = Math.Min(height, probeRows + (2 * haloY));
         var bytesPerPixel = source.Format.BytesPerPixel();
 
+        // The pump's own count, not `steps.Count > 1 ? 4 : 2`: a two-step chain has one intermediate, so the second
+        // ping-pong slot is neither rented nor charged. The estimate and the rents read the same number.
+        var windows = SequentialBands.Windows(steps);
         var estimate = WorkingSetBudget.Measure(steps, options, maxWindowCols, height, maxWindowCols, maxWindowRows,
-            source.Format, windows: steps.Count > 1 ? 4 : 2, out var undeclared);
+            source.Format, windows, out var undeclared);
         WorkingSetBudget.Ensure(estimate, undeclared, steps.Count, options, "The region");
         using var regionLease = options.Workspace?.Reserve(estimate, "region windows");
 
@@ -177,9 +180,9 @@ internal static class RegionExecutor
         using var outputWindow = WorkingBuffer.Rent(maxWindowCols, maxWindowRows, source.Format, pool);
 
         // A single step writes straight into the output window; only a chain needs the ping-pong pair. Renting them
-        // anyway would make the estimate above a lie by two windows.
-        using var scratchA = steps.Count > 1 ? WorkingBuffer.Rent(maxWindowCols, maxWindowRows, source.Format, pool) : null;
-        using var scratchB = steps.Count > 1 ? WorkingBuffer.Rent(maxWindowCols, maxWindowRows, source.Format, pool) : null;
+        // anyway would make the estimate above a lie by two windows, and a two-step chain needs one of the two.
+        using var scratchA = windows > 2 ? WorkingBuffer.Rent(maxWindowCols, maxWindowRows, source.Format, pool) : null;
+        using var scratchB = windows > 3 ? WorkingBuffer.Rent(maxWindowCols, maxWindowRows, source.Format, pool) : null;
 
         var bands = 0;
         for (var bandTop = 0; bandTop < region.Height; bandTop += bandRows)
@@ -199,7 +202,8 @@ internal static class RegionExecutor
 
             var outputView = outputWindow.View.Slice(new PixelRect(0, 0, winWidth, winHeight));
             var a = scratchA is null ? default : scratchA.View.Slice(new PixelRect(0, 0, winWidth, winHeight));
-            var b = scratchB is null ? default : scratchB.View.Slice(new PixelRect(0, 0, winWidth, winHeight));
+            // A two-step chain never reads `next`: step 0 writes the first scratch, step 1 writes the output.
+            var b = scratchB is null ? a : scratchB.View.Slice(new PixelRect(0, 0, winWidth, winHeight));
 
             // The window starts at winY and this call owns [bandTop, bandTop+bandHeight) in image rows, so every
             // step's rectangle shrinks by its remaining halo exactly as it does in the band pump.

@@ -101,13 +101,99 @@ public class StreamingTests
         sink.Bytes.ShouldBe(whole.View.Span.ToArray(), $"{chain}/{format}: streamed bytes must be the image");
     }
 
+    /// <summary>
+    /// The plan-level stream entry must run the sections its report names, and the working set it predicts must cover
+    /// what those stages actually reserve. Both failed quietly on a tall image: the pump sizes its band from the worker
+    /// count (512 rows at 512 wide), while the prediction used a literal 128, so the report claimed one window for a
+    /// chain that holds three, and its byte figure was ~4x low — a caller who trusted it with a
+    /// <see cref="WorkspaceManager"/> got a reservation refusal mid-flight.
+    /// </summary>
+    [Fact]
+    public void ReportedShape_IsTheShapeThatRuns_OnATallImage()
+    {
+        const int width = 512;
+        const int height = 2000;
+        var plan = new ProcessingPlan()
+            .Add(PlanOps.GaussianBlur(1f)).Add(PlanOps.Invert()).Add(PlanOps.Contrast(1.1f));
+        using var image = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
+
+        var probe = plan.TryExecuteTo(new ViewRowSource(image[0].Pixels.View),
+            new CollectingSink(width, height, WorkingFormat.Rgba8));
+        probe.Succeeded.ShouldBeTrue();
+        var predicted = probe.Execution!.PredictedWorkingBytes;
+        predicted.ShouldBeGreaterThan(0);
+        probe.Execution.Steps.Count.ShouldBe(1,
+            "Σhalo here is inside the fusion budget, so the pump runs one stage and the report must name one");
+
+        // The same run with the predicted figure as the account's ceiling: every stage reserves into it, so the number
+        // the report predicts has to be an upper bound on what the stages hold at once.
+        var manager = new WorkspaceManager(predicted);
+        var sink = new CollectingSink(width, height, WorkingFormat.Rgba8);
+        var actual = plan.TryExecuteTo(new ViewRowSource(image[0].Pixels.View), sink,
+            new ExecuteOptions { Workspace = manager, MaxWorkingBytes = predicted });
+
+        actual.Succeeded.ShouldBeTrue();
+        manager.OutstandingBytes.ShouldBe(0);
+        using var whole = plan.Execute(image[0].Pixels.View);
+        sink.Bytes.ShouldBe(whole.View.Span.ToArray(), "routing through the compiled sections must not move a pixel");
+    }
+
+    /// <summary>
+    /// A halo pair runs as one stage on the pump and as two on the whole-image path, and the pixels do not move: a
+    /// section boundary only decides which window a step sees, never which byte it writes. This is the end-to-end
+    /// half of <c>AHaloPairIsSplitForAFrameAndFusedForAPump</c> — the decision is pinned there, the equivalence here.
+    /// </summary>
+    [Fact]
+    public void ThePumpFusesAHaloPairTheFramePathSplits()
+    {
+        const int width = 513;
+        const int height = 200;
+        var plan = new ProcessingPlan().Add(PlanOps.GaussianBlur(1.5f)).Add(PlanOps.Invert());
+        using var image = TestImages.Gradient(width, height, WorkingFormat.Rgba8);
+
+        var sink = new CollectingSink(width, height, WorkingFormat.Rgba8);
+        var result = plan.TryExecuteTo(new ViewRowSource(image[0].Pixels.View), sink);
+
+        result.Succeeded.ShouldBeTrue();
+        result.Execution!.Steps.Count.ShouldBe(1,
+            "a boundary costs the pump a stage, so this pair stays in one segment");
+        using var whole = plan.Execute(image[0].Pixels.View);
+        sink.Bytes.ShouldBe(whole.View.Span.ToArray(),
+            "the frame path splits the same chain into two — and must still produce the same bytes");
+    }
+
+    /// <summary>
+    /// A chain whose halo cannot be fused is cut into single-step sections; the stream entry runs those stages, each
+    /// with its own halo window, so the report's six sections are six stages rather than one whole-chain window.
+    /// </summary>
+    [Fact]
+    public void ReportedSections_AreTheStagesThatRun()
+    {
+        var plan = new ProcessingPlan();
+        for (var i = 0; i < 6; i++)
+        {
+            plan.Add($"box{i}", OpCategory.Neighborhood,
+                PlanSteps.Neighborhood(v => FilterOps.BoxBlur(v, 64), 64, 64), 64, 64);
+        }
+
+        using var image = TestImages.Gradient(512, 2000, WorkingFormat.Rgba8);
+        var sink = new CollectingSink(512, 2000, WorkingFormat.Rgba8);
+
+        var result = plan.TryExecuteTo(new ViewRowSource(image[0].Pixels.View), sink);
+
+        result.Succeeded.ShouldBeTrue();
+        result.Execution!.Steps.Count.ShouldBe(6,
+            "Σhalo = 384 is past the fusion budget, so six sections run and six must be reported");
+        using var whole = plan.Execute(image[0].Pixels.View);
+        sink.Bytes.ShouldBe(whole.View.Span.ToArray());
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(7)]
     [InlineData(64)]
-    public void BandHeight_DoesNotChangeTheBytes(int bandRows)
-    {
+    public void BandHeight_DoesNotChangeTheBytes(int bandRows)    {
         using var image = TestImages.Gradient(41, 29, WorkingFormat.Rgba8);
         var expected = new CollectingSink(image.Width, image.Height, WorkingFormat.Rgba8);
         Build("mixed").TryExecuteTo(new ViewRowSource(image[0].Pixels.View), expected);

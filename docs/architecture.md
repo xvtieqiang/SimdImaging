@@ -283,6 +283,12 @@ public readonly struct PixelView   // 算子唯一认识的形态
 - **类型名叫 `WorkingBuffer`，不叫 `PixelBuffer`**：`Sdcb.SimdCodecs.Abstractions` 2.0 自带一个 `PixelBuffer`（codec 侧，native layout，按 `PixelFormat` 而非 `WorkingFormat`），而每个碰像素的文件都同时 `using` 两个命名空间。2026-11-11 从其 2.0.0 包切换时改名，而不是在每个文件写 `using` 别名——别名的代价是每个新文件都要记得加，改名只付一次。
 - 池：目前只有 `ArrayPixelPool`（默认，`ArrayPool<byte>.Shared` 分桶；大于 4 MiB 的请求走 1 MiB 粒度、每档最多保留 2 块）。
   `NativePixelPool` 与 `NullPixelPool` 未提供——没有调用方，接口 `IPixelPool` 已足够表达它们。测试里用一个计数池断言租/还各一次。
+- **`Rent` 必须线程安全**（2026-11-28 写进契约）：融合段在 band worker 内部租窗口，16 核上一次执行最多 16 个并发
+  `Rent`。`ArrayPixelPool` 用并发集合正是为此；接口文档此前没有一个字说这件事。
+- **租到的内容未定义，引擎不依赖它被清零**（2026-11-28）：`ArrayPool.Return` 不清零、`WorkingBuffer.Rent` 默认不清零，
+  所以「核必须写满 `destinationRect`」这条约定一旦破了，输出里出现的是**上一张图的字节**——不是异常，是看起来合理的错图，
+  长驻进程里还是跨调用数据残留。`PoolContentsTests` 用「每次租用填 0xA5 的池」与「填 0 的池」跑同一条链并比对字节，
+  任何一步漏写就在那里失败（两个尺寸，覆盖融合窗口与逐步整帧两条路径）。
 
 ### 5.3 图像与帧
 
@@ -529,9 +535,16 @@ bandRows  = clamp(min(byPixels, byThreads), 8, 1024);
 
 - **halo 预算**：单段 `Σhalo > 32` 行不融合。窗口是 `band + 2×Σhalo`，每个带都要把整条链在重叠上重跑；
   20 步链（Σhalo = 52）实测融合 252 ms、逐步 151 ms（1080p），4K 986 / 605 ms。
+  **超预算的 run 不再整条退回逐步**：按预算贪心切子段，每段再用同一张决策表判一次，所以长链的廉价前缀照样融合。
+  `[h=5 ×5, h=20 ×3]` 变成「5 步融合 + 3 步逐步」，而不是 8 步全部逐步；子段边界是一整帧，字节结果不变。
 - **带高**：仍融合的段取 `max(策略带, 4×Σhalo)`，把重叠压到 1.5 个带以内；**全部零 halo** 的融合段改为
   `192 KiB ÷ 每行字节`（夹 8–16 行），1080p 16 行、4K 12 行。零 halo 时带循环是纯流式，决定快慢的是两块缓冲
   能否留在 cache：四步点链 67 行 8.14 ms → 16 行 5.81 ms（对手 5.73 ms）。
+- **带高同时受带数约束**（2026-11-28）：`4×Σhalo` 只保证重叠小，不保证还有 worker。融合段的并行度就是带数
+  （`ForBands` 起 `min(degree, bands)` 个 worker），所以带高上界取 `min(4×Σhalo, max(策略带, height/4))`——
+  至少留 4 条带。强制融合带扫描：1080p 20 步链（Σhalo 52）208 行 = 5 带 180 ms，180 行 = 6 带 170 ms，规则不影响
+  1080p 的落点；1920×400 同一条链 208 行只有 2 带、~135 ms，96 行（5 带）只要 100 ms。矮图上 64 MiB 流量规则通常
+  已经拒绝融合，所以这条只对 `ForceFusion` 或极长链生效。
 
 `chainpeak`（8K，16 worker，三条链，总分配量，确定性）：
 
@@ -819,6 +832,15 @@ Resize 取各自最大 ring，不再只算第一个。执行期把几何/格式�
 这仍然是**逐段预留 + 峰值账户**，不是单一分配器，也没有 spool：各段串行，前一段释放后下一段才开始；调用方仍能
 在运行前替换 `WorkspaceManager`。
 
+**编译期预测与运行时用同一条带高规则**（2026-11-28 修正）：`WorkspacePlanner` 的四个后端此前都把 `DefaultBandRows`
+（128）当作字面带高传给估计器，而估计器的 `auto` 分支只有在拿到 0 时才会解析策略带与 `ExecBandRows`（frame）或
+`SequentialBands`（stream / region / tile）。于是预测用的是「1920 宽时的巧合值」：1080p 实际是 67（策略）/112–120（halo）/16
+（零 halo），窄高图（512×4000）策略带是 250，**比 128 还高，预测不再必然是上界**；流式更直接——`PlanRowSource` 按
+worker 规则取 512 行，报告按 128 行算，窗口项低报 4×（1920 宽、3 步链：报告 5.7 MiB，实际 22.6 MiB）。测试抓不到是因为
+夹具图都短于 128 行，`min(band, height)` 把两个公式压成同一个数。现在四处都原样传 `options.BandRows`（含 0），
+`WorkspacePlanTests.CompileTimePredictionUsesTheBandTheExecutorWillPick` 与
+`StreamingTests.ReportedShape_IsTheShapeThatRuns_OnATallImage`（把预测值当 `WorkspaceManager` 上限跑一遍）钉住这条。
+
 ### 6.3.9 区域推导（P1 缺口补齐）
 
 编译器现在从请求的输出矩形 **反向** 推导每一步的源区域：
@@ -912,7 +934,11 @@ requirements 与工作空间；文件侧的选路由 `ImageTranscode.Explain()` 
 - `ImagePipeline.Composite/Blend/DrawImage/Watermark` 全部走注入式；旧的 `PlanOps.Composite(PixelView, …)` /
   `Blend(PixelView, …)` / `DrawImage(PixelView, …)` / `GuidedFilter(guide, …)` / `ApplyGainMap(gainMap, …)` 闭包重载
   已删除（2026-11-26，不保留兼容层）。所有内置第二输入只有一条路径：`Add(op, view)` 记录，执行器注入。
-- 所有权仍是调用方的：视图必须活到 `ToImage` 或计划执行结束，库不做所有权转移，也没有自动的存活校验。
+- 所有权仍是调用方的：视图必须活到 `ToImage` 或计划执行结束，库不做所有权转移。
+- **能查的才查**（2026-11-28）：`Add(op, PixelView)` 只有视图，视图里没有所有者，执行器无法区分「还租着的缓冲」和
+  「已归还池、正被别的带写入的缓冲」，所以这条重载的契约只能靠文档。新增 `Add(op, WorkingBuffer)` 记录缓冲引用
+  （不接管所有权，也不释放它），`Execute` 入口检查一次，已释放就抛 `ObjectDisposedException`——把「错图」变成
+  「响亮失败」。门面路径（`ImagePipeline.Composite/DrawImage`）仍走视图重载，它自己保证覆盖层活到 `Flush`。
 - `GuidedFilter(guide)` 与 `ApplyGainMap`（格式边界，整图内核）也已切到注入式；所有内置第二输入都记录在步骤上。
   Stream / Region / Tile 继续以 `CompositeStep` / `FormatChange` 拒绝。
 
@@ -984,7 +1010,44 @@ ProcessReport report = ImageTranscode.From(sourcePath).GaussianBlur(1f).Run(dest
 3. 跑这一段；
 4. 最后一步产出的 `bandRows` 行是终值，写 `IRowSink`。
 
-内存 = 两份窗口 + 行缓存（`2H`）+ 每 worker scratch + 编码器约 64 KiB，与图像高度无关。
+内存 = 每段的窗口块数 + 每 worker scratch。块数不是常数，而是交替规则的结果（`SequentialBands.Windows`，估计器与
+执行器共用）：单步 2 块（行缓存 + 输出），两步 **3 块**（只多一块中间缓冲——最后一步写输出，第二块 ping-pong 从未被
+写过），三步及以上 4 块。段与段是拉链连接、同时驻留，所以 N 段的账是逐段相加而不是取最大。
+**这套账必须与「不流式」比较**，否则小图上它会比整图更贵：1080p 的 worker 规则给
+512 行带，一段 4 × 512 行 × 1920 × 4 B ≈ 17 MiB，比一张整帧（7.9 MiB）还大。所以行泵的带高有一条比较型上界
+（2026-11-28）：
+
+```csharp
+band ≤ height / windows − 2 × Σhalo        // 窗口集合不超过一张整帧；windows = 2 / 3 / 4 (SequentialBands.Windows)
+```
+
+这条上界是"和替代方案比"，不是常数，因此任何尺寸/格式自动落位：1080p 从 512 行降到 270 行（`point-3` 冷进程峰值
+31.0 → 21.0 MiB，0.84× 对手），4K（273 行）与 8K（136 行）本来就在上界之下、数值不动。区域与 tile 不带这个上界
+（`withinOneFrame: false`）：它们从不持有整帧，卡在这里只会白丢 worker。实测见 `docs/known-gaps.md`「转码的内存交叉点」。
+
+**流式的形状就是编译后的 section**（2026-11-28 修正）：一条前向源不可能物化中间帧，所以链是**每个算子 section 一个
+`PlanRowSource`**（`CompiledPlanExecutor.CreateStreamChain`），每段的窗口按**自己的** `Σhalo` 算，段与段之间用拉链连接、
+不落帧。`TryExecuteTo` 以前用 `ExecutionPlanner` 规划、却拿原始 `ProcessingPlan` 走「整链一窗」的旧泵，于是报告里的
+`Steps`/`PredictedWorkingBytes` 描述的是另一条路；现在两个入口（plan 级与 `ImageTranscode`）都执行 `decision.Plan`，
+报告、估算、窗口第一次指向同一形状。代价是段边界不能把任何东西重置成整帧：整图路径切成「11 融合 + 9 逐步」的链，
+流式仍然是 10 个连接的窗口。`CanStream` 只回答「能不能流」，不回答「流起来贵不贵」。
+窗口用的池来自调用方（编译路径把 `pool` 透传到 `PlanRowSource`）；`ProcessingPlan.TryExecuteTo` 没有 pool 参数，
+走 `ArrayPixelPool.Shared`。
+
+**段边界的代价属于执行器，不属于链**（2026-11-28）：同一张决策表现在报两个价。整图路径的边界是**物化一帧**（写一次、
+读一次），所以它保留「省下的整帧 > 64 MiB」的流量判据；行泵的边界是**一个 stage**——2 块窗口在整个链的生命期里驻留，
+加一次整帧行拷贝，没有任何东西被物化。同一份 `Gaussian σ1.5 → Invert` 两种报价给出相反结论，实测（`fusionab` 模式，
+逐字节一致）：
+
+| | 决策（2 段） | 强制融合（1 段） |
+|---|---|---|
+| 1080p | 303.3 ms / 36.7 MiB | 298.6 ms / **30.7 MiB** |
+| 4K | 691.0 ms / 55.1 MiB | 692.9 ms / **50.4 MiB** |
+
+所以 `FusionDecision` 的入口多了 `FusionBoundary`：`ExecutionPlanner` 给 Stream 候选传 `RowPump`，其余传 `Frame`；
+`ImageTranscode` 的两处编译点明说自己为泵编译。Σhalo ≤ 32 的预算仍是两条路径共同的拒绝理由，也是泵上**唯一**剩下的
+拒绝理由。代价是 `CompileOptions.Boundary` 成了「为谁编译」的一部分：一个声明为泵、最后落到 Frame 的计划会带上泵的
+分段（字节相同，只是窗口不同）。
 
 **并行度是这条路的暗礁。** 计划路径的并行度来自**带数**：每步适配器包一层 `RowParallel.EnterNested()`，
 带内一律串行（§6.2.3），实测单带慢 4 倍。带泵若顺序出带又照搬 `EnterNested`，就会退化成单线程。因此：

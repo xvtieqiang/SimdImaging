@@ -246,7 +246,13 @@ internal static class FusedExecutor
         for (var k = 0; k < count; k++)
         {
             var isLast = k == count - 1;
-            var destination = isLast || ((count - 1 - k) & 1) == 0 ? outputBand : scratch;
+
+            // Counted from the END of the chain, because that is the constraint: the last step must write the
+            // output. An even number of steps remaining after this one means alternating reaches the output on
+            // the last step. Writing the output early is harmless — a later step reads it back and the final
+            // step overwrites it — so only the parity matters, never which of the two buffers comes first.
+            var stepsAfter = count - 1 - k;
+            var destination = isLast || (stepsAfter & 1) == 0 ? outputBand : scratch;
             EnsureRect(previous, rect, "source", first + k);
             EnsureRect(destination, rect, "destination", first + k);
             steps[first + k].Invoke(previous, destination, rect, rect);

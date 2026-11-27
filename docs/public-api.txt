@@ -230,6 +230,7 @@
   SimdImaging.Abstractions.WorkingBuffer.Dispose() -> System.Void
   SimdImaging.Abstractions.WorkingBuffer.Format : SimdImaging.Abstractions.WorkingFormat { get; }
   SimdImaging.Abstractions.WorkingBuffer.Height : System.Int32 { get; }
+  SimdImaging.Abstractions.WorkingBuffer.IsDisposed : System.Boolean { get; }
   SimdImaging.Abstractions.WorkingBuffer.IsTight : System.Boolean { get; }
   SimdImaging.Abstractions.WorkingBuffer.Rent(System.Int32 width, System.Int32 height, SimdImaging.Abstractions.WorkingFormat format, SimdImaging.Abstractions.IPixelPool? pool, System.Boolean clear) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Abstractions.WorkingBuffer.RowBytes : System.Int32 { get; }
@@ -1328,6 +1329,7 @@
   SimdImaging.Processing.ProcessingPlan.#ctor()
   SimdImaging.Processing.ProcessingPlan.Add(SimdImaging.Processing.ImageOp op) -> SimdImaging.Processing.ProcessingPlan
   SimdImaging.Processing.ProcessingPlan.Add(SimdImaging.Processing.ImageOp op, SimdImaging.Abstractions.PixelView second) -> SimdImaging.Processing.ProcessingPlan
+  SimdImaging.Processing.ProcessingPlan.Add(SimdImaging.Processing.ImageOp op, SimdImaging.Abstractions.WorkingBuffer second) -> SimdImaging.Processing.ProcessingPlan
   SimdImaging.Processing.ProcessingPlan.AddPointLut(System.String name, System.ReadOnlySpan<System.Byte> rgbaTable) -> SimdImaging.Processing.ProcessingPlan
   SimdImaging.Processing.ProcessingPlan.BandRows : System.Int32 { get; set; }
   SimdImaging.Processing.ProcessingPlan.CanExecuteRegion() -> SimdImaging.Processing.RegionRefusal

@@ -143,4 +143,41 @@ public class RowBandTests
             RowParallel.DegreeOverride = 0;
         }
     }
+
+    /// <summary>
+    /// The row pump's own bound: the buffers it holds are a shape, and a shape wider than one materialised frame is
+    /// strictly worse than not streaming. The bound is `height / windows - 2 × Σhalo`, so it is a comparison with the
+    /// alternative rather than a constant — 1080p gets colder, 4K and 8K are untouched. Measured on the file path:
+    /// 1080p `point-3` peaked at 31.0 MiB (1.9 frames) against 25.2 MiB for the oracle; at 4K the same chain is
+    /// already under the bound and did not change.
+    /// </summary>
+    [Theory]
+    [InlineData(1920, 1080)]
+    [InlineData(3840, 2160)]
+    [InlineData(7680, 4320)]
+    [InlineData(512, 2000)]
+    public void ThePumpBandKeepsItsWindowsInsideOneFrame(int width, int height)
+    {
+        var plan = new ProcessingPlan()
+            .Add(PlanOps.Invert()).Add(PlanOps.Contrast(1.1f)).Add(PlanOps.Grayscale());
+
+        var bandRows = SequentialBands.For(plan, width, height, WorkingFormat.Rgba8, 16, withinOneFrame: true);
+        var windows = SequentialBands.Windows(plan.Steps);
+
+        windows.ShouldBe(4);
+        (windows * bandRows).ShouldBeLessThanOrEqualTo(height,
+            $"{width}x{height}: {windows} buffers of {bandRows} rows hold more than a frame");
+        bandRows.ShouldBeGreaterThanOrEqualTo(8);
+    }
+
+    [Fact]
+    public void The1080pPumpBandIsCappedByTheFrameNotByTheWorkerCount()
+    {
+        var plan = new ProcessingPlan()
+            .Add(PlanOps.Invert()).Add(PlanOps.Contrast(1.1f)).Add(PlanOps.Grayscale());
+
+        // 16 workers × 32 rows = 512, which four buffers turn into 2048 rows on a 1080-row image.
+        SequentialBands.For(plan, 1920, 1080, WorkingFormat.Rgba8, 16).ShouldBe(512);
+        SequentialBands.For(plan, 1920, 1080, WorkingFormat.Rgba8, 16, withinOneFrame: true).ShouldBe(270);
+    }
 }

@@ -59,7 +59,7 @@ public sealed class WorkspacePlanTests
         plan.Workspace.Terms.ShouldContain(term => term.Kind == WorkspaceTermKind.Source);
         plan.Workspace.Terms.ShouldContain(term => term.Kind == WorkspaceTermKind.Destination);
         var predictedPeak = MemoryEstimator.Estimate(128, 96, WorkingFormat.Rgba8, plan.Steps,
-            ProcessingPlan.DefaultBandRows, allowFusion: plan.Sections[0].Fused).PeakBytes;
+            bandRows: 0, allowFusion: plan.Sections[0].Fused).PeakBytes;
         plan.Workspace.BoundedBytes.ShouldBe(predictedPeak);
 
         using var source = TestImages.Gradient(128, 96, WorkingFormat.Rgba8);
@@ -71,6 +71,28 @@ public sealed class WorkspacePlanTests
             $"reported {plan.Workspace.BoundedBytes}, rented {pool.PeakBytes}");
     }
 
+
+    [Fact]
+    public void CompileTimePredictionUsesTheBandTheExecutorWillPick()
+    {
+        // 512×4000: the policy band is 250 rows, and a zero-halo fused section is smaller still (the cache band, 16
+        // rows at 512 wide). A prediction built on a literal 128 is neither the band the executor picks nor an upper
+        // bound on it; the compiler passes BandRows through and lets the estimator resolve the same rule.
+        const int width = 512;
+        const int height = 4000;
+        var plan = PipelineCompiler.Compile(Recipe(PlanOps.Invert(), PlanOps.Contrast(1.1f)),
+            FrameOptions(width, height));
+        var fused = plan.Sections[0].Fused;
+
+        var resolved = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
+            bandRows: 0, allowFusion: fused);
+        var literal128 = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
+            ProcessingPlan.DefaultBandRows, allowFusion: fused);
+
+        plan.Workspace.BoundedBytes.ShouldBe(resolved.PeakBytes);
+        resolved.PeakBytes.ShouldBeLessThan(literal128.PeakBytes,
+            "the resolved band is 16 rows here, so charging 128 describes a window nothing will rent");
+    }
 
     [Fact]
     public void FrameSections_KeepTheOriginalSourceInLaterPeakAndRuntimeBudget()
@@ -299,10 +321,12 @@ public sealed class WorkspacePlanTests
         regionPlan.Backend.ShouldBe(ExecutionBackend.Region);
         regionPlan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.OperatorScratchPeak)
             .Bytes.ShouldBe(2048);
+        // Two steps: source window, output window and one intermediate. The second ping-pong slot exists only from
+        // three steps on, and neither the estimate nor the executor rents it before then.
         var runtimeRegionBytes = WorkingSetBudget.Measure(regionPlan.Steps,
             new ExecuteOptions { MaxDegreeOfParallelism = 1 }, 64, 40, 32, 20,
-            WorkingFormat.Rgba8, windows: 4, out var undeclared);
-        runtimeRegionBytes.ShouldBe((long)4 * 32 * 20 * WorkingFormat.Rgba8.BytesPerPixel() + 2048);
+            WorkingFormat.Rgba8, windows: 3, out var undeclared);
+        runtimeRegionBytes.ShouldBe((long)3 * 32 * 20 * WorkingFormat.Rgba8.BytesPerPixel() + 2048);
         undeclared.ShouldBe(0);
         var targetBytes = (long)32 * 20 * WorkingFormat.Rgba8.BytesPerPixel();
         regionPlan.Workspace.BoundedBytes.ShouldBe(targetBytes + runtimeRegionBytes);
@@ -318,7 +342,7 @@ public sealed class WorkspacePlanTests
         tilePlan.Backend.ShouldBe(ExecutionBackend.Tile);
         tilePlan.Workspace.Terms.Single(term => term.Kind == WorkspaceTermKind.OperatorScratchPeak)
             .Bytes.ShouldBe(2048);
-        var runtimeTileWindows = (long)4 * 32 * 20 * WorkingFormat.Rgba8.BytesPerPixel();
+        var runtimeTileWindows = (long)3 * 32 * 20 * WorkingFormat.Rgba8.BytesPerPixel();
         tilePlan.Workspace.BoundedBytes.ShouldBe(targetBytes + runtimeTileWindows + 2048);
     }
 

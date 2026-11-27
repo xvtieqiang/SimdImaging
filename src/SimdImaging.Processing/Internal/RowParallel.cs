@@ -12,8 +12,10 @@ internal static class RowParallel
     /// <summary>Test hook / caller override. 0 = use the machine default.</summary>
     internal static int DegreeOverride;
 
-    /// <summary>Diagnostic: workers actually used by the most recent call on this thread.</summary>
-    internal static int LastWorkerCount;
+    /// <summary>Diagnostic: workers actually used by the most recent call on this thread. Thread-static because
+    /// two plans may execute concurrently and both read it right after their own call; a shared field would report
+    /// whichever call wrote last, which is a wrong number rather than a race with consequences.</summary>
+    [ThreadStatic] internal static int LastWorkerCount;
 
     /// <summary>Diagnostic hook: minimum rows assigned to one worker (0 = 32). A same-process sweep
     /// (16/32/64/128/256/512) put 32 at the optimum: sepia 3.211→2.792 ms, rotate90 1.158→0.923 ms,

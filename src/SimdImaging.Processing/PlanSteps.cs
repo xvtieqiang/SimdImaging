@@ -146,10 +146,18 @@ internal static class PlanSteps
 
     /// <summary>Adapts a neighbourhood operator that needs to know where its window sits in the image.</summary>
     /// <remarks>
+    /// <para>
     /// A bordered convolution cannot be banded with <see cref="Neighborhood(Func{PixelView,WorkingBuffer},int,int,IntoKernel?)"/>:
     /// Mirror and Wrap have to reflect or wrap about the <b>image</b> edge, and the operator only sees its window, so
     /// it would reflect about the band edge and produce a seam. The window's origin and the image size are exactly
     /// what tells the two apart, so they are handed over.
+    /// </para>
+    /// <para>
+    /// The third argument is the whole source only because a step using this adapter must declare
+    /// <c>WholeSourceFootprint</c>, which keeps it out of every fused band and off the streaming path. Declare a halo
+    /// instead and the same parameter arrives carrying a band-sized window: the pixels are still well defined and the
+    /// reflection is still wrong, at a seam, with nothing thrown.
+    /// </para>
     /// </remarks>
     /// <param name="operator">Runs over a window and gets the context that locates it.</param>
     /// <param name="haloX">Columns of context the operator reads.</param>

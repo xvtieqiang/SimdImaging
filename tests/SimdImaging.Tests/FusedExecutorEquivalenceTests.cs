@@ -32,6 +32,21 @@ public class FusedExecutorEquivalenceTests
         AssertEquivalent(plan, View(image), degree);
     }
 
+    [Fact]
+    public void FourPointSteps_AlternateWithoutAliasingTheOutput()
+    {
+        // Four is the length the zero-halo parity expression exists for: an even chain has to start on the scratch
+        // window, or the last step reads the buffer it is writing. Three steps pass with the parity inverted.
+        using var image = Ramp(260, 260, WorkingFormat.Rgba8);
+        var plan = Plan(16,
+            ("a", OpCategory.Point, PlanSteps.Point(v => PointOps.Brightness(v, 0.05f)), 0, 0),
+            ("b", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v)), 0, 0),
+            ("c", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 1.1f)), 0, 0),
+            ("d", OpCategory.Point, PlanSteps.Point(v => PointOps.Gamma(v, 1.2f)), 0, 0));
+
+        AssertEquivalent(plan, View(image), 2);
+    }
+
     [Theory]
     [InlineData(3, 1)]
     [InlineData(3, 4)]

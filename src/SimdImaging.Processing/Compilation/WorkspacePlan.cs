@@ -98,7 +98,11 @@ internal static class WorkspacePlanner
         IReadOnlyList<SectionState> states, CompileOptions options, int outputWidth, int outputHeight,
         List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
     {
-        var bandRows = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
+        // 0 goes through, not DefaultBandRows: the estimator resolves it with the same policy the executor will use
+        // (BandRowsFor, then ExecBandRows over the section's own segmentation). Passing 128 made the literal number a
+        // proxy for "the automatic band", which is 67 at 1080p, 16 for a zero-halo segment — and 250 on a narrow tall
+        // image, where the proxy stops being an upper bound at all.
+        var bandRows = options.BandRows;
 
         // A format section's output is one frame of the new format, and the sections after it run in that format.
         var width = options.SourceWidth;
@@ -290,8 +294,10 @@ internal static class WorkspacePlanner
         var sourceWindow = MapSourceWindow(steps, region, options.SourceWidth, options.SourceHeight);
         var windowWidth = sourceWindow.Width;
         var degree = options.Execute.MaxDegreeOfParallelism;
-        var plan = ProcessingPlan.FromCompiled(steps,
-            options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows);
+        // 0 goes through, not DefaultBandRows: `SequentialBands.For` treats a positive value as the caller's literal
+        // geometry, so 128 made the prediction use a band the region executor never picks (it sizes the band from the
+        // worker count: 512 rows at 1920 wide).
+        var plan = ProcessingPlan.FromCompiled(steps, options.BandRows);
         var bandRows = SequentialBands.For(plan, windowWidth, region.Height, options.SourceFormat, degree);
         var windowHeight = (int)Math.Min(options.SourceHeight,
             (long)Math.Min(bandRows, region.Height) + 2L * haloY);
@@ -312,7 +318,7 @@ internal static class WorkspacePlanner
             operatorScratchPeak = Math.Max(operatorScratchPeak, stepScratchPeak);
         }
 
-        var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
+        var windows = SequentialBands.Windows(steps);
         var targetBytes = TargetBuffer.Bytes(region.Width, region.Height, options.SourceFormat);
         var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
         terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, targetBytes, "requested result rectangle"));
@@ -366,8 +372,9 @@ internal static class WorkspacePlanner
 
         var windowWidth = (int)Math.Min(options.SourceWidth, (long)width + 2L * haloX);
         var degree = options.Execute.MaxDegreeOfParallelism;
-        var plan = ProcessingPlan.FromCompiled(steps,
-            options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows);
+        // 0 goes through: the tile executor sizes its band from the worker count, not from a fixed 128 (see the same
+        // note in EstimateRegion).
+        var plan = ProcessingPlan.FromCompiled(steps, options.BandRows);
         var bandRows = SequentialBands.For(plan, windowWidth, height, options.SourceFormat, degree);
         var windowHeight = (int)Math.Min(options.SourceHeight,
             (long)Math.Min(bandRows, height) + 2L * haloY);
@@ -385,7 +392,7 @@ internal static class WorkspacePlanner
                 windowHeight, options.SourceFormat, workers);
             operatorScratchPeak = Math.Max(operatorScratchPeak, stepScratchPeak);
         }
-        var windows = steps.Count > 1 ? 4 : steps.Count == 0 ? 0 : 2;
+        var windows = SequentialBands.Windows(steps);
         var tileBytes = TargetBuffer.Bytes(width, height, options.SourceFormat);
         var windowBytes = (long)windows * windowWidth * windowHeight * options.SourceFormat.BytesPerPixel();
         terms.Add(new WorkspaceTerm(WorkspaceTermKind.Destination, tileBytes, "one resident destination tile"));
@@ -407,7 +414,9 @@ internal static class WorkspacePlanner
         IReadOnlyList<SectionState> states, CompileOptions options, int outputWidth, int outputHeight,
         List<WorkspaceTerm> terms, List<UnmanagedTerm> unmanaged)
     {
-        var bandRowsOption = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
+        // The band is resolved the way the pump resolves it, per stage, from the same two arguments (worker rule,
+        // and "the window set may not exceed a frame"). Passing a literal instead made the prediction describe a
+        // band nothing would use; see the note in EstimateRegion.
 
         // Every operator run has its own width, height and format; a plan after a resize must be estimated at the
         // resized geometry, not at the source. Unlike the frame path, the sections do not run one after another: a
@@ -432,11 +441,12 @@ internal static class WorkspacePlanner
                 halo += slice[i].HaloY;
             }
 
-            var plan = ProcessingPlan.FromCompiled(slice, bandRowsOption);
+            var plan = ProcessingPlan.FromCompiled(slice, options.BandRows);
+            // Same two arguments the pump passes: the worker rule, and this stage's window set may not exceed a frame.
             var bandRows = SequentialBands.For(plan, state.InputWidth, state.InputHeight, state.InputFormat,
-                options.Execute.MaxDegreeOfParallelism);
+                options.Execute.MaxDegreeOfParallelism, withinOneFrame: true);
             var windowRows = Math.Min(state.InputHeight, bandRows + (2 * halo));
-            var windows = slice.Length > 1 ? 4 : 2;
+            var windows = SequentialBands.Windows(slice);
             windowBytes += (long)windows * state.InputWidth * windowRows * state.InputFormat.BytesPerPixel();
             var sectionCount = sections == 0 ? "1 operator section" : $"{sections + 1} operator sections";
             windowNote = $"{sectionCount}, largest {windows} windows of {state.InputWidth}x{windowRows}";
