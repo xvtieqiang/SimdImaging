@@ -11,6 +11,12 @@ namespace SimdImaging.Abstractions;
 public sealed record ExecuteOptions
 {
     /// <summary>
+    /// What the caller is willing to accept from the execution planner. <see cref="ExecutionPolicy.Auto"/>
+    /// allows a whole-image fallback; the strict values refuse instead of materialising.
+    /// </summary>
+    public ExecutionPolicy Policy { get; init; } = ExecutionPolicy.Auto;
+
+    /// <summary>
     /// Maximum worker threads one image's plan may use. 0 keeps the frozen behaviour
     /// (<c>RowParallel.DegreeOverride</c> or the machine default for legacy entry points).
     /// Passed explicitly into the band loops — never read from the environment a second time.

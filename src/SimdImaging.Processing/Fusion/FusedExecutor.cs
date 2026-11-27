@@ -46,12 +46,19 @@ internal static class FusedExecutor
                 WorkingBuffer? next = null;
                 try
                 {
-                    // The second rent can fail; keep the first rent inside the try so it is returned even when
-                    // the pair cannot be completed.
-                    next = WorkingBuffer.Rent(width, maxWindowRows, source.Format, pool);
+                    // A halo-free segment ping-pongs between the output and ONE scratch window, so the second
+                    // rent only exists for segments whose steps read rows outside their band. Halving the rent
+                    // halves both the pooled buffers a fused point chain needs and the allocation a cold call
+                    // pays for them: 16 windows at 1080p instead of 32, on a chain fusion exists to make cheap.
+                    if (haloTotal > 0)
+                    {
+                        // The second rent can fail; keep the first rent inside the try so it is returned even when
+                        // the pair cannot be completed.
+                        next = WorkingBuffer.Rent(width, maxWindowRows, source.Format, pool);
+                    }
                     for (var b = start; b < end; b++)
                         RunBand(source, output.View, steps, first, count, b, bandRows, haloTotal,
-                            window.View, next.View);
+                            window.View, next?.View ?? window.View);
                 }
                 finally
                 {
@@ -89,7 +96,9 @@ internal static class FusedExecutor
         var workers = Math.Max(1, Math.Min(RowParallel.ResolveDegree(degree), bandCount));
         var windowRows = Math.Min(height, bandRows + 2 * haloTotal);
         var windowBytes = (long)width * windowRows * bytesPerPixel;
-        return (long)width * height * bytesPerPixel + 2 * workers * windowBytes;
+        // A halo-free segment ping-pongs between the output and one scratch window; a halo-carrying one needs
+        // two scratch windows because the intermediate rectangles differ from the band.
+        return (long)width * height * bytesPerPixel + (haloTotal == 0 ? 1 : 2) * workers * windowBytes;
     }
 
     private static void RunBand(PixelView source, PixelView output, IReadOnlyList<PlanStep> steps, int first,
@@ -110,11 +119,20 @@ internal static class FusedExecutor
         // A kernel clamps against source.Height, so a taller view would expose rows the last step never wrote
         // (they hold the previous band's data) instead of clamping at the image edge.
         var scratchRect = new PixelRect(0, 0, width, windowRows);
-        RunWindow(width, height,
-            source.Slice(new PixelRect(0, winTop, width, windowRows)),
-            output.Slice(new PixelRect(0, winTop, width, windowRows)),
-            winTop, steps, first, count, band, bandRows, haloTotal,
-            window.Slice(scratchRect), next.Slice(scratchRect));
+        var sourceBand = source.Slice(new PixelRect(0, winTop, width, windowRows));
+        var outputBand = output.Slice(new PixelRect(0, winTop, width, windowRows));
+        var scratch = window.Slice(scratchRect);
+        if (haloTotal == 0)
+        {
+            // Without a halo every step reads and writes exactly this band, so the two scratch windows collapse
+            // into one: alternate output and scratch, and never invoke a kernel with source and destination
+            // aliased.
+            RunZeroHaloBand(width, height, sourceBand, outputBand, winTop, steps, first, count, scratch);
+            return;
+        }
+
+        RunWindow(width, height, sourceBand, outputBand, winTop, steps, first, count, band, bandRows, haloTotal,
+            scratch, next.Slice(scratchRect));
     }
 
     /// <summary>
@@ -146,6 +164,7 @@ internal static class FusedExecutor
         PixelView window, PixelView next)
     {
         var windowRows = sourceWindow.Height;
+        EnsureWindow(width, height, sourceWindow, outputWindow, winTop, top, bottom, count, window, next);
 
         PixelView previous = sourceWindow;
         var previousRect = new PixelRect(0, 0, width, windowRows);
@@ -165,6 +184,8 @@ internal static class FusedExecutor
 
             // The last step writes the band itself; the others ping-pong between the two windows.
             PixelView destination = isLast ? outputWindow : (k & 1) == 0 ? window : next;
+            EnsureRect(previous, previousRect, "source", first + k);
+            EnsureRect(destination, destinationRect, "destination", first + k);
             step.Invoke(previous, destination, destinationRect, previousRect);
 
             if (isLast)
@@ -173,5 +194,74 @@ internal static class FusedExecutor
             previous = destination;
             previousRect = destinationRect;
         }
+    }
+
+    /// <summary>
+    /// The window contract every caller must satisfy. These are ordinary runtime checks, not <c>Debug.Assert</c>:
+    /// the gates run Release, and a silent off-by-one in the halo recursion produces a plausible but wrong image,
+    /// which no assertion compiled out of a Release build would catch.
+    /// </summary>
+    private static void EnsureWindow(int width, int height, PixelView sourceWindow, PixelView outputWindow,
+        int winTop, int top, int bottom, int count, PixelView window, PixelView next)
+    {
+        var windowRows = sourceWindow.Height;
+        if (count <= 0 || width <= 0 || windowRows <= 0)
+            throw new InvalidOperationException(
+                $"A fused window needs a positive size and at least one step (width={width}, rows={windowRows}, " +
+                $"steps={count}).");
+        if (top < 0 || bottom > height || bottom <= top)
+            throw new InvalidOperationException(
+                $"The fused band [{top},{bottom}) is outside the {height}-row image.");
+        if (winTop < 0 || winTop > top || winTop + windowRows < bottom)
+            throw new InvalidOperationException(
+                $"The fused window starts at row {winTop} for {windowRows} rows but must cover the band " +
+                $"[{top},{bottom}) of a {height}-row image.");
+        if (sourceWindow.Width < width || outputWindow.Width < width || outputWindow.Height < windowRows)
+            throw new InvalidOperationException(
+                $"The fused source/output windows {sourceWindow.Width}x{sourceWindow.Height} and " +
+                $"{outputWindow.Width}x{outputWindow.Height} do not cover {width}x{windowRows}.");
+        if (count > 1 &&
+            (window.Width < width || window.Height != windowRows ||
+             next.Width < width || next.Height != windowRows))
+            throw new InvalidOperationException(
+                $"The fused scratch windows {window.Width}x{window.Height} and {next.Width}x{next.Height} must " +
+                $"both be exactly {width}x{windowRows}. A taller view exposes rows the previous step never wrote, " +
+                "so the kernel clamps against stale data instead of the image edge.");
+    }
+
+    /// <summary>
+    /// The halo-free band loop. Every step's rectangle is the band itself, so the two scratch windows the halo
+    /// recursion needs collapse to one: the destinations alternate between the output band and that scratch, and
+    /// the parity is chosen so the last step lands on the output. Source and destination are never the same view,
+    /// which is what the kernels require.
+    /// </summary>
+    private static void RunZeroHaloBand(int width, int height, PixelView sourceBand, PixelView outputBand,
+        int winTop, IReadOnlyList<PlanStep> steps, int first, int count, PixelView scratch)
+    {
+        var rows = sourceBand.Height;
+        EnsureWindow(width, height, sourceBand, outputBand, winTop, winTop, winTop + rows, count, scratch, scratch);
+
+        var rect = new PixelRect(0, 0, width, rows);
+        var previous = sourceBand;
+        for (var k = 0; k < count; k++)
+        {
+            var isLast = k == count - 1;
+            var destination = isLast || ((count - 1 - k) & 1) == 0 ? outputBand : scratch;
+            EnsureRect(previous, rect, "source", first + k);
+            EnsureRect(destination, rect, "destination", first + k);
+            steps[first + k].Invoke(previous, destination, rect, rect);
+            if (isLast)
+                break;
+            previous = destination;
+        }
+    }
+
+    private static void EnsureRect(PixelView view, PixelRect rect, string name, int stepIndex)
+    {
+        if (rect.X < 0 || rect.Y < 0 || rect.Width < 0 || rect.Height < 0 ||
+            rect.X + rect.Width > view.Width || rect.Y + rect.Height > view.Height)
+            throw new InvalidOperationException(
+                $"The fused {name} rect ({rect.X},{rect.Y} {rect.Width}x{rect.Height}) of step {stepIndex} " +
+                $"escapes its {view.Width}x{view.Height} view.");
     }
 }

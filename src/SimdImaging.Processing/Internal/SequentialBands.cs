@@ -22,7 +22,9 @@ internal static class SequentialBands
     /// <param name="degree">The configured degree; 0 means the machine default.</param>
     public static int For(ProcessingPlan plan, int width, int height, WorkingFormat format, int degree)
     {
-        if (plan.BandRows != ProcessingPlan.DefaultBandRows)
+        // Zero is the sentinel ("let the executor size it"); every positive value is the caller's geometry, 128
+        // included. Comparing against DefaultBandRows instead made an explicit 128 indistinguishable from "auto".
+        if (plan.BandRows > 0)
             return Math.Max(1, Math.Min(plan.BandRows, height));
 
         var workers = Math.Max(1, degree > 0 ? degree : Environment.ProcessorCount);

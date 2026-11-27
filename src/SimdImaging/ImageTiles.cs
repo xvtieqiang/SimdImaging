@@ -17,26 +17,39 @@ public sealed partial class Image
     /// <remarks>
     /// The tile size is the memory knob for the walk: one tile plus its halo window is resident at a time. The
     /// returned frame is a buffer this overload rents, so it is reserved for the duration of the walk as well —
-    /// use the sink form when the result must not be held whole. The plan must contain only steps a rectangle can
-    /// run; a whole-image step, a composite, a block-aligned step or a format change is refused with the compiler's
-    /// reason rather than approximated.
+    /// use the sink form when the result must not be held whole. A plan with a step a rectangle cannot run
+    /// (a whole-image step, a composite, a block-aligned step or a format change) falls back to whole-image
+    /// execution instead of failing the caller's goal; the fallback is visible in the returned buffer's size and
+    /// in the working-set account, and an explicit <see cref="ExecuteOptions.MaxWorkingBytes"/> still applies.
     /// </remarks>
-    /// <exception cref="NotSupportedException">The plan has a step a tile cannot run.</exception>
+    /// <exception cref="InvalidOperationException">The whole-image fallback does not fit
+    /// <see cref="ExecuteOptions.MaxWorkingBytes"/>.</exception>
+    /// <summary>Runs the walk and returns the planner's decision in <paramref name="report"/>.</summary>
     public static WorkingBuffer ProcessTiles(IRegionSource source, ProcessingPlan plan, int tileWidth, int tileHeight,
-        ExecuteOptions? options = null, IPixelPool? pool = null)
+        ExecuteOptions options, IPixelPool? pool, out ExecutionReport report) =>
+        ProcessTilesCore(source, plan, tileWidth, tileHeight, options, pool, out report);
+
+    private static WorkingBuffer ProcessTilesCore(IRegionSource source, ProcessingPlan plan, int tileWidth,
+        int tileHeight, ExecuteOptions? options, IPixelPool? pool, out ExecutionReport report)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(plan);
         var execute = options ?? new ExecuteOptions();
-        // Compile and validate before renting the full-frame destination. Compilation is where MaxWorkingBytes
-        // rejects a plan; doing it after this rent made that refusal too late.
-        var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
         var targetBytes = TargetBuffer.Bytes(source.Width, source.Height, source.Format);
-        var tileWorkingBytes = compiled.Workspace.BoundedBytes;
-        if (execute.MaxWorkingBytes > 0 && checked(targetBytes + tileWorkingBytes) > execute.MaxWorkingBytes)
+        // The planner decides before the target is rented: tile if the chain supports it, whole-image otherwise.
+        // The full target is extra only for the tile candidate; the frame estimate already includes its destination.
+        var decision = ExecutionPlanner.Plan(TileRequest(source, plan, tileWidth, tileHeight, execute,
+            backend => backend == ExecutionBackend.Tile ? targetBytes : 0));
+        report = decision.ToReport(OutputStrategy.Buffered);
+        var compiled = RequireDecision(decision);
+
+        if (compiled.Backend == ExecutionBackend.Frame)
+            return ExecuteWhole(compiled, source, execute, pool);
+
+        if (compiled.Backend != ExecutionBackend.Tile)
             throw new InvalidOperationException(
-                $"The tiled result plus tile working set needs {targetBytes + tileWorkingBytes} bytes, above " +
-                $"ExecuteOptions.MaxWorkingBytes = {execute.MaxWorkingBytes}.");
+                $"The planner selected {compiled.Backend}, which the tile entry cannot execute.");
+
         var tileOptions = execute.MaxWorkingBytes > 0
             ? execute with { MaxWorkingBytes = execute.MaxWorkingBytes - targetBytes }
             : execute;
@@ -57,19 +70,131 @@ public sealed partial class Image
     }
 
     /// <summary>
-    /// The sink form of <see cref="ProcessTiles(IRegionSource, ProcessingPlan, int, int, ExecuteOptions?, IPixelPool?)"/>:
+    /// The sink form of <c>ProcessTiles(..., out ExecutionReport)</c>:
     /// each finished tile is handed to <paramref name="sink"/> at its absolute coordinates.
     /// </summary>
+    /// <summary>Runs the walk and returns the planner's decision in <paramref name="report"/>.</summary>
     public static void ProcessTiles(IRegionSource source, IRegionSink sink, ProcessingPlan plan, int tileWidth,
-        int tileHeight, ExecuteOptions? options = null, IPixelPool? pool = null)
+        int tileHeight, ExecuteOptions options, IPixelPool? pool, out ExecutionReport report) =>
+        ProcessTilesCore(source, sink, plan, tileWidth, tileHeight, options, pool, out report);
+
+    private static void ProcessTilesCore(IRegionSource source, IRegionSink sink, ProcessingPlan plan,
+        int tileWidth, int tileHeight, ExecuteOptions? options, IPixelPool? pool, out ExecutionReport report)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(plan);
 
         var execute = options ?? new ExecuteOptions();
-        var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
-        CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, execute, pool);
+        var decision = ExecutionPlanner.Plan(TileRequest(source, plan, tileWidth, tileHeight, execute, null));
+        report = decision.ToReport(CompiledBackendOutput(decision));
+        var compiled = RequireDecision(decision);
+        if (compiled.Backend == ExecutionBackend.Tile)
+        {
+            CompiledPlanExecutor.ExecuteTiles(compiled, source, sink, tileWidth, tileHeight, execute, pool);
+            return;
+        }
+
+        if (compiled.Backend != ExecutionBackend.Frame)
+            throw new InvalidOperationException(
+                $"The planner selected {compiled.Backend}, which the tile entry cannot execute.");
+
+        // The fallback result is delivered in bands so an encoder sink still receives rows in order. The result
+        // stays reserved while it is alive: ExecuteFrame releases its plan lease before returning.
+        using var result = ExecuteWhole(compiled, source, execute, pool);
+        var resultBytes = checked((long)result.Width * result.Height * result.Format.BytesPerPixel());
+        using var resultLease = execute.Workspace?.Reserve(resultBytes, "tile fallback result");
+        WriteBands(result, sink, tileHeight);
+    }
+
+    /// <summary>The planner's Frame candidate, executed over a source read once into a full frame.</summary>
+    private static WorkingBuffer ExecuteWhole(CompiledExecutionPlan compiled, IRegionSource source,
+        ExecuteOptions options, IPixelPool? pool)
+    {
+        var sourceBytes = checked((long)source.Width * source.Height * source.Format.BytesPerPixel());
+        if (options.MaxWorkingBytes > 0 && sourceBytes > options.MaxWorkingBytes)
+            throw new InvalidOperationException(
+                $"A whole-image fallback needs {sourceBytes} bytes for the source, above " +
+                $"ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}. Raise the ceiling or use a tileable plan.");
+
+        using var sourceLease = options.Workspace?.Reserve(sourceBytes, "tile fallback source");
+        using var frame = WorkingBuffer.Rent(source.Width, source.Height, source.Format, pool);
+        source.ReadRegion(new PixelRect(0, 0, source.Width, source.Height), frame.View);
+        return CompiledPlanExecutor.ExecuteFrame(compiled, frame.View, pool, options);
+    }
+
+    private static void WriteBands(WorkingBuffer result, IRegionSink sink, int bandRows)
+    {
+        if (sink.Width != result.Width || sink.Height != result.Height || sink.Format != result.Format)
+            throw new InvalidOperationException(
+                $"The plan fell back to whole-image execution and produced {result.Width}x{result.Height} " +
+                $"{result.Format}, but the sink is {sink.Width}x{sink.Height} {sink.Format}. Use the buffer form " +
+                "or a sink sized for the plan's output.");
+
+        var rowsPerBand = Math.Max(1, Math.Min(bandRows, result.Height));
+        for (var top = 0; top < result.Height; top += rowsPerBand)
+        {
+            var rows = Math.Min(rowsPerBand, result.Height - top);
+            var band = new PixelRect(0, top, result.Width, rows);
+            sink.WriteRegion(band, result.View.Slice(band));
+        }
+    }
+
+    private static OutputStrategy CompiledBackendOutput(ExecutionDecision decision) =>
+        decision.Succeeded && decision.SelectedBackend == ExecutionBackend.Tile
+            ? OutputStrategy.Region
+            : OutputStrategy.Banded;
+
+    private static ExecutionRequest TileRequest(IRegionSource source, ProcessingPlan plan, int tileWidth,
+        int tileHeight, ExecuteOptions execute, Func<ExecutionBackend, long>? additionalBytes) =>
+        new()
+        {
+            Recipe = RecipeFor(plan),
+            Width = source.Width,
+            Height = source.Height,
+            Format = source.Format,
+            Source = SourceCapabilities.Seekable | SourceCapabilities.RandomRegion |
+                     SourceCapabilities.StableContent,
+            Sink = SinkCapabilities.RandomRegionWrite,
+            TileRequested = true,
+            TileWidth = Math.Min(tileWidth, source.Width),
+            TileHeight = Math.Min(tileHeight, source.Height),
+            Preferred = ExecutionBackend.Tile,
+            Policy = execute.Policy,
+            Execute = execute,
+            BandRows = plan.BandRows,
+            AdditionalBytesFor = additionalBytes,
+        };
+
+    private static CompiledExecutionPlan RequireDecision(ExecutionDecision decision)
+    {
+        if (decision.Succeeded)
+            return decision.Plan!;
+
+        // The preferred candidate explains why the tile path was not taken; the terminal candidate explains why
+        // the fallback did not produce a result. Report both, but choose the exception by the terminal blocker.
+        var terminal = decision.TerminalRefusal ?? decision.Refusal!;
+        var primary = decision.Refusal;
+        var message = primary is not null && !ReferenceEquals(primary, terminal)
+            ? $"{primary.Message} {terminal.Message}"
+            : terminal.Message ?? "The plan exceeds the execution constraints.";
+
+        throw terminal.Reason switch
+        {
+            ExecutionRefusalReason.Capability or ExecutionRefusalReason.InvalidPlan =>
+                new NotSupportedException(message),
+            _ => new InvalidOperationException(message),
+        };
+    }
+
+    private static PipelineRecipe RecipeFor(ProcessingPlan plan)
+    {
+        var recipe = new PipelineRecipeBuilder();
+        foreach (var step in plan.Steps)
+            recipe.Append(step.Definition, step.Lut, step.Secondary);
+        if (plan.ResizeSpec is { } resize)
+            recipe.Append(GeometrySteps.Resize(resize.Width, resize.Height, resize.Resampler));
+        return recipe.Build();
     }
 
     /// <summary>
@@ -78,11 +203,12 @@ public sealed partial class Image
     /// band of <paramref name="tileHeight"/> rows because an encoder takes rows in order and tiles arrive per band.
     /// </summary>
     /// <remarks>
-    /// The plan runs in the source's working format, so the result has the source's size: a tile plan cannot carry a
-    /// geometry change. Metadata travels only through <paramref name="save"/>, because a region read does not decode
-    /// the file's metadata blocks.
+    /// A tile run keeps the source's size; when the planner falls back to whole-image execution, the result may be
+    /// resized and the report says <see cref="ProcessMode.Materialized"/>. Metadata travels only through
+    /// <paramref name="save"/>, because a region read does not decode the file's metadata blocks.
     /// </remarks>
-    /// <exception cref="NotSupportedException">The plan has a step a tile cannot run.</exception>
+    /// <exception cref="NotSupportedException">The plan has no executable form.</exception>
+    /// <exception cref="InvalidOperationException">The selected form does not fit the working-set ceiling.</exception>
     public static ProcessReport ProcessTilesTo(IRegionSource source, Stream destination, ImageFormat format,
         ProcessingPlan plan, int tileWidth, int tileHeight, ExecuteOptions? options = null,
         SaveOptions? save = null, IPixelPool? pool = null, CancellationToken cancellationToken = default)
@@ -97,17 +223,26 @@ public sealed partial class Image
         var saved = options ?? new ExecuteOptions();
         var workspace = saved.Workspace ?? new WorkspaceManager(saved.MaxWorkingBytes);
         var execute = saved with { Workspace = workspace };
-        var compiled = CompileTiles(source, plan, tileWidth, tileHeight, execute);
         tileWidth = Math.Min(tileWidth, source.Width);
         tileHeight = Math.Min(tileHeight, source.Height);
         var encoderBandRows = Math.Min(tileHeight, source.Height);
         var encoderBandBytes = checked((long)source.Width * encoderBandRows * source.Format.BytesPerPixel()
             + (long)encoderBandRows * sizeof(int));
-        if (execute.MaxWorkingBytes > 0 &&
-            checked(encoderBandBytes + compiled.Workspace.BoundedBytes) > execute.MaxWorkingBytes)
+
+        // The planner admits the encoder band together with the plan's workspace. A tile candidate keeps only a
+        // band; the whole-image fallback keeps the full frame plus the band, and both are checked before any
+        // encoder header is written.
+        var decision = ExecutionPlanner.Plan(TileRequest(source, plan, tileWidth, tileHeight, execute,
+            _ => encoderBandBytes));
+        var compiled = RequireDecision(decision);
+        if (compiled.Backend == ExecutionBackend.Frame)
+            return WriteWhole(compiled, decision, source, destination, format, encoderBandRows, execute, save, pool,
+                cancellationToken);
+
+        if (compiled.Backend != ExecutionBackend.Tile)
             throw new InvalidOperationException(
-                $"The encoder band plus tile working set needs {encoderBandBytes + compiled.Workspace.BoundedBytes} " +
-                $"bytes, above ExecuteOptions.MaxWorkingBytes = {execute.MaxWorkingBytes}.");
+                $"The planner selected {compiled.Backend}, which the tile encoder entry cannot execute.");
+
         var tileOptions = execute.MaxWorkingBytes > 0
             ? execute with { MaxWorkingBytes = execute.MaxWorkingBytes - encoderBandBytes }
             : execute;
@@ -136,14 +271,49 @@ public sealed partial class Image
             sink.Complete();
             session.Commit(cancellationToken);
 
-            return new ProcessReport(ProcessMode.Tiled, StreamRefusal.None, ReaderIsStreaming: false,
-                EncoderIsStreaming: session.IsStreaming, source.Width, source.Height, source.Height,
-                MetadataCarried: save.Metadata is not null)
-            {
-                PeakWorkingBytes = workspace.PeakBytes,
-                PredictedWorkingBytes = predictedTotalBytes,
-            };
+            return new ProcessReport(
+                decision.ToReport(OutputStrategy.Banded) with
+                {
+                    PeakWorkingBytes = workspace.PeakBytes,
+                    PredictedWorkingBytes = predictedTotalBytes,
+                },
+                StreamRefusal.None, ReaderIsStreaming: false, EncoderIsStreaming: session.IsStreaming,
+                source.Width, source.Height, source.Height, MetadataCarried: save.Metadata is not null);
         }
+    }
+
+    /// <summary>
+    /// Encodes the whole-image result when the plan cannot tile. The result is produced before the encoder is
+    /// opened, so a plan or budget failure still leaves the destination untouched.
+    /// </summary>
+    private static ProcessReport WriteWhole(CompiledExecutionPlan compiled, ExecutionDecision decision,
+        IRegionSource source, Stream destination, ImageFormat format, int bandRows, ExecuteOptions execute,
+        SaveOptions save, IPixelPool? pool, CancellationToken cancellationToken)
+    {
+        using var result = ExecuteWhole(compiled, source, execute, pool);
+        var resultBytes = checked((long)result.Width * result.Height * result.Format.BytesPerPixel());
+        using var resultLease = execute.Workspace?.Reserve(resultBytes, "whole-image fallback result");
+        var computedPredicted = decision.ToReport(OutputStrategy.Banded).PredictedWorkingBytes;
+        var encodeOptions = BuildEncodeOptions(format, save);
+        using var session = ImageCodecs.CreateEncoder(format, destination, encodeOptions, leaveOpen: true);
+        using var sink = new TileEncoderSink(result.Width, result.Height, result.Format,
+            Math.Max(1, Math.Min(bandRows, result.Height)), pool, execute, cancellationToken);
+        var metadata = save.Metadata ?? ImageMetadata.Empty;
+        var frame = session.AddFrame(result.Width, result.Height, result.Format.ToPixelFormat(),
+            ColorEncoding.AssumedSrgb, metadata, null);
+        sink.Attach(frame);
+
+        WriteBands(result, sink, bandRows);
+        sink.Complete();
+        session.Commit(cancellationToken);
+        return new ProcessReport(
+            decision.ToReport(OutputStrategy.Banded) with
+            {
+                PeakWorkingBytes = execute.Workspace?.PeakBytes ?? 0,
+                PredictedWorkingBytes = computedPredicted,
+            },
+            StreamRefusal.None, ReaderIsStreaming: false, EncoderIsStreaming: session.IsStreaming,
+            result.Width, result.Height, result.Height, MetadataCarried: save.Metadata is not null);
     }
 
     /// <summary>
@@ -151,7 +321,8 @@ public sealed partial class Image
     /// opens a region-readable TIFF and the destination named by its extension. The page, working format and segment
     /// cap come from <see cref="TranscodeOptions.Region"/>.
     /// </summary>
-    /// <exception cref="NotSupportedException">The file is not a region-readable TIFF, or the plan cannot tile.</exception>
+    /// <exception cref="NotSupportedException">The file is not a region-readable TIFF, or the plan has no
+    /// executable form.</exception>
     public static ProcessReport ProcessTilesTo(string sourcePath, string destinationPath, ProcessingPlan plan,
         int tileWidth, int tileHeight, TranscodeOptions? options = null, CancellationToken cancellationToken = default)
     {
@@ -191,41 +362,6 @@ public sealed partial class Image
             if (File.Exists(temporaryPath))
                 File.Delete(temporaryPath);
         }
-    }
-
-    private static CompiledExecutionPlan CompileTiles(IRegionSource source, ProcessingPlan plan, int tileWidth,
-        int tileHeight, ExecuteOptions execute)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tileWidth);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tileHeight);
-        tileWidth = Math.Min(tileWidth, source.Width);
-        tileHeight = Math.Min(tileHeight, source.Height);
-        var recipe = new PipelineRecipeBuilder();
-        foreach (var step in plan.Steps)
-            recipe.Append(step.Definition, step.Lut, step.Secondary);
-        if (plan.ResizeSpec is { } resize)
-            recipe.Append(GeometrySteps.Resize(resize.Width, resize.Height, resize.Resampler));
-
-        var compiled = PipelineCompiler.Compile(recipe.Build(), new CompileOptions
-        {
-            SourceWidth = source.Width,
-            SourceHeight = source.Height,
-            SourceFormat = source.Format,
-            Source = SourceCapabilities.Seekable | SourceCapabilities.RandomRegion |
-                     SourceCapabilities.StableContent,
-            Sink = SinkCapabilities.RandomRegionWrite,
-            TileRequested = true,
-            BandRows = plan.BandRows,
-            TileWidth = tileWidth,
-            TileHeight = tileHeight,
-            Execute = execute,
-        });
-
-        if (compiled.Backend != ExecutionBackend.Tile)
-            throw new NotSupportedException(
-                $"The plan cannot run as tiles: {compiled.TileRefusal?.ToString() ?? compiled.Backend.ToString()}.");
-
-        return compiled;
     }
 
     /// <summary>The in-memory sink behind the buffer-returning overload; it owns nothing.</summary>

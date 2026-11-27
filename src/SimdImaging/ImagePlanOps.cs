@@ -87,7 +87,7 @@ public sealed partial class Image
     {
         ArgumentNullException.ThrowIfNull(plan);
         ThrowIfMultiFrame();
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(plan.BandRows);
+        ArgumentOutOfRangeException.ThrowIfNegative(plan.BandRows);
 
         var compiled = PipelineCompiler.Compile(BuildRecipe(plan), new CompileOptions
         {
@@ -120,7 +120,7 @@ public sealed partial class Image
     /// </summary>
     private Image ApplyCompiled(ProcessingPlan plan, ExecuteOptions options, IPixelPool? pool, PlanObserver? observe)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(plan.BandRows);
+        ArgumentOutOfRangeException.ThrowIfNegative(plan.BandRows);
         var compiled = PipelineCompiler.Compile(BuildRecipe(plan), new CompileOptions
         {
             SourceWidth = Width,

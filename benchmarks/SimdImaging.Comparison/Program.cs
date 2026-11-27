@@ -2,7 +2,7 @@ using System.Globalization;
 using SimdImaging.Comparison;
 
 // Comparison harness. Usage:
-//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|realworld|icc|disposecheck|fusion|batch|chainab|perf32|sizes|mem|seamprofile|matrix|cores|peakmem|memsteady|perf16|perfpipe|budget|profile|allocplan|nearest-ablate|records-ablate|trimcost|batchmem|bandcost|pixelate-ablate|singletime|verify-matrix|demo|plan-overhead|one-step|lut-cost] [WxH]
+//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|realworld|icc|disposecheck|fusion|batch|chainab|perf32|sizes|mem|seamprofile|matrix|cores|peakmem|memsteady|perf16|perfpipe|randomchain|budget|profile|allocplan|nearest-ablate|records-ablate|trimcost|batchmem|bandcost|pixelate-ablate|singletime|verify-matrix|demo|plan-overhead|chaindiag|one-step|lut-cost] [WxH]
 // Not part of SimdImaging.slnx on purpose: the shipped solution must stay buildable without the
 // git-ignored Six Labors licence file (AGENTS.md clean-room rules).
 
@@ -55,6 +55,12 @@ if (args.Length > 0 && args[0] == "lut-cost")
 if (args.Length > 0 && args[0] == "one-step")
 {
     OneStepCost.Run(int.Parse(args[1]), int.Parse(args[2]), int.Parse(args[3]));
+    return;
+}
+
+if (args.Length > 0 && args[0] == "chaindiag")
+{
+    ChainDiag.Run(int.Parse(args[1]), int.Parse(args[2]));
     return;
 }
 
@@ -340,6 +346,12 @@ try
     {
         Console.WriteLine($"[perfpipe] pipeline same-process A/B at {width}x{height}...");
         PerfPipeline.Write(report, width, height);
+    }
+
+    if (mode is "randomchain")
+    {
+        Console.WriteLine($"[randomchain] short/medium/long chains at {width}x{height}...");
+        RandomChain.Write(report, width, height);
     }
 
     if (mode is "profile")

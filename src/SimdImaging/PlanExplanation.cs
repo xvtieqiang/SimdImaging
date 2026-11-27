@@ -20,9 +20,6 @@ public enum PlanBackend : byte
 
     /// <summary>Rectangles in, rectangles out.</summary>
     Tile = 3,
-
-    /// <summary>A tile request that could not be honoured; <see cref="PlanRefusals.Tile"/> says why.</summary>
-    TileRefused = 4,
 }
 
 /// <summary>Why a tile request was refused.</summary>
@@ -169,7 +166,6 @@ public sealed record PlanExplanation(PlanBackend Backend, PlanRefusals Refusals,
             ExecutionBackend.Stream => PlanBackend.Stream,
             ExecutionBackend.Region => PlanBackend.Region,
             ExecutionBackend.Tile => PlanBackend.Tile,
-            ExecutionBackend.TileRefused => PlanBackend.TileRefused,
             _ => PlanBackend.Frame,
         },
         new PlanRefusals(compiled.StreamRefusal, compiled.RegionRefusal, compiled.TileRefusal switch

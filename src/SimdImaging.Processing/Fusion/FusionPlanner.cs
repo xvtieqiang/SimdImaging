@@ -17,21 +17,26 @@ internal static class FusionPlanner
         !step.Definition.Contract.Requirements.RequiresWholeImageInvocation;
 
     /// <summary>Segments the chain into (firstStep, stepCount) runs, in execution order.</summary>
-    public static List<(int First, int Count)> Segment(IReadOnlyList<PlanStep> steps)
+    public static List<(int First, int Count)> Segment(IReadOnlyList<PlanStep> steps) =>
+        Segment(steps, 0, steps.Count);
+
+    /// <summary>The same segmentation for one slice of a larger step list.</summary>
+    public static List<(int First, int Count)> Segment(IReadOnlyList<PlanStep> steps, int first, int count)
     {
         var segments = new List<(int First, int Count)>();
-        var index = 0;
-        while (index < steps.Count)
+        var end = first + count;
+        var index = first;
+        while (index < end)
         {
-            var count = 1;
+            var run = 1;
             if (IsBandable(steps[index]))
             {
-                while (index + count < steps.Count && IsBandable(steps[index + count]))
-                    count++;
+                while (index + run < end && IsBandable(steps[index + run]))
+                    run++;
             }
 
-            segments.Add((index, count));
-            index += count;
+            segments.Add((index, run));
+            index += run;
         }
 
         return segments;

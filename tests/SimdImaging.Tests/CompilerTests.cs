@@ -254,7 +254,8 @@ public sealed class CompilerTests
     public void TileIsRefused_WithTheFirstRealBlocker()
     {
         var noSink = PipelineCompiler.Compile(Recipe(PlanOps.Invert()), Streamable() with { TileRequested = true });
-        noSink.Backend.ShouldBe(ExecutionBackend.TileRefused);
+        noSink.Backend.ShouldBe(ExecutionBackend.Frame);
+        noSink.TileRefusal.ShouldBe(TileRefusal.NoRegionSink);
         noSink.TileRefusal.ShouldBe(TileRefusal.NoRegionSink);
 
         var withSink = Streamable() with

@@ -212,16 +212,25 @@ public static class HistogramOps
     /// Three 256-bin histograms in one pass over an Rgba8 image. Per-worker integer counts are merged, so the
     /// result is identical to three sequential passes — just once over the data instead of three times.
     /// </summary>
-    private static int[][] HistogramRgba8(PixelView source)
+    private static int[][] HistogramRgba8(PixelView source) => CountRgba8Rows(source, source.Height);
+
+    /// <summary>
+    /// Counts the three colour channels of a byte-domain Rgba8 view in one pass. Rows are independent, so each
+    /// worker keeps its own integer histogram and the partials are merged at the end: integer counts commute, so
+    /// the result is identical to one sequential pass. <paramref name="rows"/> may be smaller than the view's
+    /// height when the view is a band just read from a forward-only row source.
+    /// </summary>
+    private static int[][] CountRgba8Rows(PixelView view, int rows, int degree = 0,
+        CancellationToken cancellation = default)
     {
         var partials = new System.Collections.Concurrent.ConcurrentBag<int[]>();
-        RowParallel.For(source.Width, source.Height, (start, end) =>
+        RowParallel.For(view.Width, rows, (start, end) =>
         {
             var local = new int[3 * 256];
             for (var y = start; y < end; y++)
             {
-                var row = source.Row(y);
-                var length = source.Width * 4;
+                var row = view.Row(y);
+                var length = view.Width * 4;
                 for (var i = 0; i < length; i += 4)
                 {
                     local[row[i]]++;
@@ -231,7 +240,7 @@ public static class HistogramOps
             }
 
             partials.Add(local);
-        });
+        }, degree, cancellation);
 
         var merged = new[] { new int[256], new int[256], new int[256] };
         foreach (var partial in partials)
@@ -247,7 +256,73 @@ public static class HistogramOps
         return merged;
     }
 
-    private static byte[] BuildLut(int[] histogram, long total)
+
+    /// <summary>
+    /// Pass one of a two-pass equalize: reads a row source once and returns the 4×256 RGBA table the apply pass
+    /// must use. Rgba8 only — the table is byte-domain and the row source is decoded rows, so a 16-bit or float
+    /// source would need a different table width and stays on the materialised path.
+    /// </summary>
+    /// <param name="source">Decoded rows, read exactly once from the current position.</param>
+    /// <param name="options">Workspace account and degree for the row buffer; optional.</param>
+    /// <param name="pool">Where the row buffer is rented; null means the shared pool.</param>
+    /// <exception cref="NotSupportedException">The source is not <see cref="WorkingFormat.Rgba8"/>.</exception>
+    internal static byte[] AnalyzeEqualizeTable(IRowSource source, ExecuteOptions? options = null,
+        IPixelPool? pool = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.Format != WorkingFormat.Rgba8)
+            throw new NotSupportedException(
+                $"A two-pass equalize needs Rgba8 rows, not {source.Format}.");
+
+        options ??= new ExecuteOptions();
+        var bandRows = Math.Max(1, Math.Min(256, source.Height));
+        var rowBytes = checked((long)source.Width * source.Format.BytesPerPixel());
+        var bufferBytes = checked(rowBytes * bandRows);
+
+        using var lease = options.Workspace?.Reserve(bufferBytes, "two-pass equalize analysis");
+        using var buffer = WorkingBuffer.Rent(source.Width, bandRows, source.Format, pool);
+        var view = buffer.View;
+        var histograms = new int[3 * 256];
+        var rows = 0;
+        while (rows < source.Height)
+        {
+            options.CancellationToken.ThrowIfCancellationRequested();
+            var read = source.ReadRows(view.Span, view.Stride, bandRows);
+            if (read <= 0)
+                break;
+
+            // Count this band in parallel, then fold the three channels into the running totals. The buffer rows
+            // are already filled and independent, so the analysis uses the same worker-sized histogram mechanism
+            // as the whole-image Equalize; only the row source itself must be walked serially.
+            var band = CountRgba8Rows(view, read, options.MaxDegreeOfParallelism, options.CancellationToken);
+            for (var channel = 0; channel < 3; channel++)
+            {
+                var offset = channel * 256;
+                for (var v = 0; v < 256; v++)
+                    histograms[offset + v] += band[channel][v];
+            }
+
+            rows += read;
+        }
+
+        if (rows != source.Height)
+            throw new InvalidDataException(
+                $"The row source ended after {rows} of {source.Height} rows during the equalize analysis.");
+
+        var total = (long)source.Width * source.Height;
+        var table = new byte[4 * 256];
+        for (var channel = 0; channel < 3; channel++)
+            BuildLut(histograms.AsSpan(channel * 256, 256), total)
+                .CopyTo(table.AsSpan(channel * 256, 256));
+
+        // Equalize copies alpha unchanged; the point-table path indexes all four channels.
+        for (var i = 0; i < 256; i++)
+            table[(3 * 256) + i] = (byte)i;
+
+        return table;
+    }
+
+    private static byte[] BuildLut(ReadOnlySpan<int> histogram, long total)
     {
         var lut = new byte[256];
         var cdf = new long[256];

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing.Compilation;
 using SimdImaging.Processing.Fusion;
 using SimdImaging.Processing.Contracts;
 using SimdImaging.Processing.Geometry;
@@ -167,7 +168,8 @@ public delegate void PlanObserver(int index, string name, PixelView result);
 /// </summary>
 public sealed class ProcessingPlan
 {
-    /// <summary>Rows per band when a step does not pick its own.</summary>
+    /// <summary>The band the policy lands on for a 1920-wide image: what <see cref="BandRows"/> of 0 resolves to on
+    /// the image sizes the numbers were tuned at. Not a sentinel — 0 is the sentinel.</summary>
     public const int DefaultBandRows = 128;
 
     /// <summary>
@@ -198,6 +200,17 @@ public sealed class ProcessingPlan
     private ExecutionShape? _fusedShape;
     private ExecutionShape? _plainShape;
     private int _shapeVersion = -1;
+
+    /// <summary>
+    /// The segmentation chosen for one execution, keyed on every input the fusion decision reads.
+    /// A compiled plan runs on fixed geometry, so the same key recurs on every execution and the decision
+    /// is computed once; a directly built plan may run on different sizes and simply gets a new entry. The
+    /// reference assignment is atomic and a race can only recompute the same answer, never change a byte.
+    /// </summary>
+    private sealed record SegmentCache(int Width, int Height, int BytesPerPixel, bool FusionAllowed,
+        bool ForceFusion, List<(int First, int Count)> Segments);
+
+    private SegmentCache? _segmentCache;
 
     /// <summary>The frozen defaults: fusion on, no diagnostics, no ceiling, no cancellation.</summary>
     private static readonly ExecuteOptions DefaultOptions = new();
@@ -281,11 +294,59 @@ public sealed class ProcessingPlan
     /// cannot be enforced because a step declares no scratch and
     /// <see cref="ExecuteOptions.AllowUnestimatedScratch"/> is false.</exception>
     /// <exception cref="OperationCanceledException">The token in <paramref name="options"/> was cancelled.</exception>
-    public StreamResult TryExecuteTo(IRowSource source, IRowSink sink, ExecuteOptions? options = null) =>
-        HasResize
-            ? StreamingExecutor.ExecuteWithResize(this, source, sink, _resizeWidth, _resizeHeight, _resizeResampler,
-                options)
-            : StreamingExecutor.Execute(this, source, sink, options);
+    public StreamResult TryExecuteTo(IRowSource source, IRowSink sink, ExecuteOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(sink);
+        var execute = options ?? new ExecuteOptions();
+
+        // Strict streaming: the planner admits only the Stream candidate, using the source's real geometry, so a
+        // budget or a step that needs whole rows is refused before the sink is touched. The executor below then
+        // runs the same strict path; it cannot switch to a whole-image fallback.
+        var recipe = new PipelineRecipeBuilder();
+        foreach (var step in _steps)
+            recipe.Append(step.Definition, step.Lut, step.Secondary);
+        // The resize is a trailing row-stage handled by ExecuteWithResize, which checks its own workspace. The
+        // planner decides the strict streaming form of the same-size chain before any row is written.
+        var decision = ExecutionPlanner.Plan(new ExecutionRequest
+        {
+            Recipe = recipe.Build(),
+            Width = source.Width,
+            Height = source.Height,
+            Format = source.Format,
+            Source = SourceCapabilities.ForwardOnly,
+            Sink = SinkCapabilities.RowWritable,
+            Preferred = ExecutionBackend.Stream,
+            Policy = ExecutionPolicy.RequireStreaming,
+            Execute = execute,
+            BandRows = BandRows,
+        });
+
+        if (!decision.Succeeded)
+        {
+            var failure = decision.TerminalRefusal ?? decision.Refusal!;
+            if (failure.Reason == ExecutionRefusalReason.Capability)
+            {
+                var refusal = StreamingExecutor.Classify(_steps, out var refusingStep);
+                return new StreamResult(
+                    refusal == StreamRefusal.None ? StreamRefusal.StepNeedsWholeSource : refusal, 0, 0, 0)
+                {
+                    RefusingStep = refusingStep,
+                    Execution = decision.ToReport(OutputStrategy.Banded),
+                };
+            }
+
+            throw failure.Reason is ExecutionRefusalReason.Budget or ExecutionRefusalReason.BudgetUnverifiable
+                ? new InvalidOperationException(failure.Message)
+                : new NotSupportedException(failure.Message);
+        }
+
+        var result = HasResize
+            ? StreamingExecutor.ExecuteWithResize(this, source, sink, _resizeWidth, _resizeHeight,
+                _resizeResampler, execute)
+            : StreamingExecutor.Execute(this, source, sink, execute);
+        return result with { Execution = decision.ToReport(OutputStrategy.Banded) };
+    }
 
     /// <summary>
     /// Whether this plan can run over a rectangle of a <see cref="IRegionSource"/>. The conditions are the same as
@@ -314,8 +375,14 @@ public sealed class ProcessingPlan
         ExecuteOptions? options = null, IPixelPool? pool = null) =>
         RegionExecutor.Execute(this, source, region, destination, options, pool);
 
-    /// <summary>Rows per band for this plan.</summary>
-    public int BandRows { get; init; } = DefaultBandRows;
+    /// <summary>Rows per band, or 0 to let the executor size the band for the chain and the image.</summary>
+    /// <remarks>
+    /// Zero is the sentinel, so every positive value — 128 included — is a geometry request the executor honours.
+    /// That is deliberately different from "leave it alone and get the policy": a caller who asked for 128 rows
+    /// gets 128 rows, and only the caller who asked for nothing gets the halo- and cache-aware band. The same
+    /// convention already governs <c>CompileOptions.BandRows</c> and <c>ExecutionRequest.BandRows</c>.
+    /// </remarks>
+    public int BandRows { get; init; }
 
     // Internal on purpose: a caller who can pass a halo can pass the wrong one, and the wrong one does not
     // throw - it returns a wrong pixel at a band boundary. Plans are built from ImageOps, which owns the number.
@@ -408,7 +475,8 @@ public sealed class ProcessingPlan
     /// </summary>
     internal static ProcessingPlan FromCompiled(IReadOnlyList<PlanStep> steps, int bandRows)
     {
-        var plan = new ProcessingPlan { BandRows = bandRows };
+        // Zero means "use the policy"; anything else is the geometry the compiler was given and is passed through.
+        var plan = bandRows > 0 ? new ProcessingPlan { BandRows = bandRows } : new ProcessingPlan();
         foreach (var step in steps)
             plan._steps.Add(step);
         plan._version++;
@@ -529,7 +597,7 @@ public sealed class ProcessingPlan
         IPixelPool? pool, PlanObserver? observe)
     {
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(BandRows);
+        ArgumentOutOfRangeException.ThrowIfNegative(BandRows);
 
         report = null;
         if (_steps.Count == 0)
@@ -549,14 +617,34 @@ public sealed class ProcessingPlan
         // concurrent calls is isolated by FusionPlanner (it is not bandable), so the rest of the chain can still
         // fuse — one demanding step must not disable fusion for its neighbours.
         var fusionAllowed = options.AllowFusion && observe is null;
-
-        // Decided before the shape is built, not per segment: the segments are cut for one execution mode, and a
-        // segment of several steps has no step-by-step form — the else branch runs its first step only.
-        var fused = fusionAllowed && (options.ForceFusion ||
-            FusionDecision.ShouldFuse(_steps, width, height, source.Format.BytesPerPixel()));
-        var shape = ExecutionShapeFor(fused);
+        var shape = ExecutionShapeFor(fusionAllowed);
         var execution = shape.Steps;
-        var segments = shape.Segments;
+
+        // The same table the compiler uses: each contiguous bandable run either fuses as one segment or is split
+        // into single steps. The runtime no longer makes one plan-wide decision that the compiled path can
+        // contradict for the same steps. Keyed on every decision input so a compiled plan (fixed geometry) reuses
+        // one segmentation across runs instead of rebuilding two lists each time.
+        var bytesPerPixel = source.Format.BytesPerPixel();
+        var forceFusion = options.ForceFusion;
+        var cache = _segmentCache;
+        List<(int First, int Count)> segments;
+        if (cache is not null && cache.Width == width && cache.Height == height &&
+            cache.BytesPerPixel == bytesPerPixel && cache.FusionAllowed == fusionAllowed &&
+            cache.ForceFusion == forceFusion)
+            segments = cache.Segments;
+        else
+        {
+            segments = FusionDecision.PlanSegments(execution, 0, execution.Count, width, height,
+                bytesPerPixel, fusionAllowed, forceFusion);
+            _segmentCache = new SegmentCache(width, height, bytesPerPixel, fusionAllowed, forceFusion, segments);
+        }
+
+        // A fused window is band + 2 x halo, and every band re-runs the whole segment over that overlap. With the
+        // default band policy the height is derived from pixels and threads only, so give a halo-carrying segment
+        // enough rows that the overlap costs at most one band. An explicit BandRows is a geometry request and is
+        // left alone.
+        if (BandRows == 0)
+            bandRows = FusionDecision.ExecBandRows(execution, segments, width, height, bytesPerPixel, bandRows);
         var reason = observe is not null ? FusionFallbackReason.ObserverPresent
             : !options.AllowFusion ? FusionFallbackReason.AllowFusionDisabled
             : shape.HasCategoryBoundary ? FusionFallbackReason.CategoryBoundary
@@ -570,7 +658,7 @@ public sealed class ProcessingPlan
             // operators were about to allocate several more full-size planes.
             var stepwiseRows = StepwiseRowsFor(height, bandRows, options.MaxDegreeOfParallelism);
             var estimate = MemoryEstimator.EstimateForExecution(source.Width, source.Height, source.Format,
-                execution, bandRows, stepwiseRows, fused, options.MaxDegreeOfParallelism);
+                execution, bandRows, stepwiseRows, segments, options.MaxDegreeOfParallelism);
 
             if (options.MaxWorkingBytes > 0)
             {
@@ -610,7 +698,7 @@ public sealed class ProcessingPlan
                 cancellation.ThrowIfCancellationRequested();
 
                 WorkingBuffer destination;
-                if (fused && count > 1)
+                if (count > 1)
                 {
                     destination = FusedExecutor.ExecuteSegment(current, execution, first, count, bandRows,
                         options.MaxDegreeOfParallelism, cancellation, execPool);
@@ -713,10 +801,10 @@ public sealed class ProcessingPlan
             report = new PlanReport
             {
                 SegmentCount = segments.Count,
-                Segments = DescribeSegments(execution, segments, fused, shape.FirstOriginal, shape.OriginalCount),
+                Segments = DescribeSegments(execution, segments, shape.FirstOriginal, shape.OriginalCount),
                 FallbackReason = reason,
                 WorkerCount = RowParallel.LastWorkerCount,
-                BandCount = CountBands(execution, segments, fused, width, height),
+                BandCount = CountBands(execution, segments, height, bandRows),
                 PoolRentCount = counting!.Rents,
                 PoolReturnCount = counting.Returns,
                 ElapsedTicks = Stopwatch.GetTimestamp() - startTicks,
@@ -729,7 +817,7 @@ public sealed class ProcessingPlan
     /// <summary>The band height for this image: the caller's, or the pixel budget expressed in rows.</summary>
     internal int BandRowsFor(int width, int height)
     {
-        if (BandRows != DefaultBandRows)
+        if (BandRows > 0)
             return BandRows;
 
         // Two bounds, and the tighter one wins: the pixel budget keeps a band cache-sized on wide images, and
@@ -746,7 +834,7 @@ public sealed class ProcessingPlan
     /// Bands for an unfused segment: enough to keep every worker busy, no finer than a few rows each.
     /// </summary>
     internal int StepwiseRowsFor(int height, int bandRows, int degree) =>
-        ResolveStepwiseRows(height, bandRows, degree, BandRows == DefaultBandRows);
+        ResolveStepwiseRows(height, bandRows, degree, BandRows == 0);
 
     internal static int ResolveStepwiseRows(int height, int bandRows, int degree, bool useDefaultPolicy)
     {
@@ -771,13 +859,12 @@ public sealed class ProcessingPlan
     }
 
     private int StepwiseBandCount(int height, int bandRows, int degree) =>
-        StepwiseBandCountFor(height, bandRows, degree, BandRows == DefaultBandRows);
+        StepwiseBandCountFor(height, bandRows, degree, BandRows == 0);
 
     /// <summary>Everything about one folding mode that does not change between executions.</summary>
     private sealed class ExecutionShape
     {
         public required List<PlanStep> Steps { get; init; }
-        public required List<(int First, int Count)> Segments { get; init; }
         public required int[] FirstOriginal { get; init; }
         public required int[] OriginalCount { get; init; }
         public required bool HasCategoryBoundary { get; init; }
@@ -786,9 +873,9 @@ public sealed class ProcessingPlan
     /// <summary>
     /// The shape for <paramref name="fold"/>, built once per version of the plan.
     /// <para>
-    /// Cached rather than rebuilt: a plan is normally built once and executed many times, and the fold, the
-    /// step arrays and the segmentation depend only on the steps. Rebuilding them was the bulk of the residual
-    /// per-call allocation that kept §1.3's "0 B/op with pooling and plan reuse" out of reach.
+    /// Cached rather than rebuilt: a plan is normally built once and executed many times, and the fold and the
+    /// step arrays depend only on the steps. The segment list is not cached because the fusion decision depends
+    /// on the image geometry and options of each call; it is rebuilt from the shared decision table instead.
     /// </para>
     /// </summary>
     private ExecutionShape ExecutionShapeFor(bool fold)
@@ -797,6 +884,7 @@ public sealed class ProcessingPlan
         {
             _fusedShape = null;
             _plainShape = null;
+            _segmentCache = null;
             _shapeVersion = _version;
         }
 
@@ -805,10 +893,9 @@ public sealed class ProcessingPlan
             return cached;
 
         var steps = BuildExecutionSteps(fold, out var firsts, out var counts);
-        var segments = fold ? FusionPlanner.Segment(steps) : SingleSteps(steps.Count);
 
         var boundary = false;
-        foreach (var (first, _) in segments)
+        foreach (var (first, _) in FusionPlanner.Segment(steps))
         {
             if (FusionPlanner.IsBandable(steps[first]))
                 continue;
@@ -819,7 +906,6 @@ public sealed class ProcessingPlan
         var shape = new ExecutionShape
         {
             Steps = steps,
-            Segments = segments,
             FirstOriginal = firsts,
             OriginalCount = counts,
             HasCategoryBoundary = boundary,
@@ -891,29 +977,19 @@ public sealed class ProcessingPlan
         return steps;
     }
 
-    /// <summary>One segment per step: the segmentation the executor uses when fusion is off, so the
-    /// report always describes what actually ran.</summary>
-    internal static List<(int First, int Count)> SingleSteps(int count)
+    /// <summary>Bands executed, counted with the band height the run actually used: the policy height would
+    /// report a different number for an automatic plan whose band the executor corrected.</summary>
+    private int CountBands(IReadOnlyList<PlanStep> steps, List<(int First, int Count)> segments,
+        int height, int bandRows)
     {
-        var single = new List<(int First, int Count)>(count);
-        for (var i = 0; i < count; i++)
-            single.Add((i, 1));
-
-        return single;
-    }
-
-    private int CountBands(IReadOnlyList<PlanStep> steps, List<(int First, int Count)> segments, bool fused,
-        int width, int height)
-    {
-        var rows = BandRowsFor(width, height);
         var bands = 0;
         foreach (var (first, count) in segments)
-            bands += (fused && count > 1) || FusionPlanner.IsBandable(steps[first]) ? BandCountFor(height, rows) : 1;
+            bands += count > 1 || FusionPlanner.IsBandable(steps[first]) ? BandCountFor(height, bandRows) : 1;
         return bands;
     }
 
     private static List<PlanSegment> DescribeSegments(IReadOnlyList<PlanStep> steps,
-        List<(int First, int Count)> segments, bool fused, int[] firstOriginal, int[] originalCount)
+        List<(int First, int Count)> segments, int[] firstOriginal, int[] originalCount)
     {
         var described = new List<PlanSegment>(segments.Count);
         foreach (var (first, count) in segments)
@@ -926,8 +1002,7 @@ public sealed class ProcessingPlan
                 originalSteps += originalCount[first + i];
             }
 
-            described.Add(new PlanSegment(firstOriginal[first], originalSteps,
-                fused && count > 1 && FusionPlanner.IsBandable(steps[first]), name));
+            described.Add(new PlanSegment(firstOriginal[first], originalSteps, count > 1, name));
         }
 
         return described;

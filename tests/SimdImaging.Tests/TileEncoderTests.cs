@@ -24,7 +24,7 @@ public sealed class TileEncoderTests
             source.Height.ShouldBe(29);
             source.Format.ShouldBe(WorkingFormat.Rgba8);
 
-            using var tiled = Image.ProcessTiles(source, plan, 16, 12);
+            using var tiled = Image.ProcessTiles(source, plan, 16, 12, new ExecuteOptions(), null, out _);
             using var loaded = Image.Load(path);
             using var expected = loaded.Pipe().Invert().ToImage();
 
@@ -41,7 +41,7 @@ public sealed class TileEncoderTests
     {
         using var image = TestImages.Gradient(37, 23, WorkingFormat.Rgba8);
         var plan = new ProcessingPlan().Add(PlanOps.Invert());
-        using var expected = Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View), plan, 16, 12);
+        using var expected = Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View), plan, 16, 12, new ExecuteOptions(), null, out _);
 
         using var encoded = new MemoryStream();
         var report = Image.ProcessTilesTo(new ViewRegionSource(image[0].Pixels.View), encoded, ImageFormat.Png,
@@ -139,26 +139,39 @@ public sealed class TileEncoderTests
     }
 
     [Fact]
-    public void ProcessTilesTo_RefusesAWholeImageStep()
+    public void ProcessTilesTo_EncodesTheWholeImageFallback()
     {
         using var image = TestImages.Gradient(24, 18, WorkingFormat.Rgba8);
         var plan = new ProcessingPlan().Add(PlanOps.Equalize());
         using var encoded = new MemoryStream();
 
-        var error = Should.Throw<NotSupportedException>(() =>
-            Image.ProcessTilesTo(new ViewRegionSource(image[0].Pixels.View), encoded, ImageFormat.Png, plan, 8, 8));
-        error.Message.ShouldContain("GlobalStep");
+        var report = Image.ProcessTilesTo(new ViewRegionSource(image[0].Pixels.View), encoded,
+            ImageFormat.Png, plan, 8, 8);
+
+        report.Mode.ShouldBe(ProcessMode.Materialized);
+        encoded.Position = 0;
+        using var actual = Image.Load(encoded);
+        using var expected = plan.Execute(image[0].Pixels.View);
+        actual[0].Pixels.View.Span.ToArray().ShouldBe(expected.View.Span.ToArray());
     }
 
     [Fact]
-    public void ProcessTilesTo_RefusesAResize()
+    public void ProcessTilesTo_EncodesTheResizeFallback()
     {
         using var image = TestImages.Gradient(24, 18, WorkingFormat.Rgba8);
         var plan = new ProcessingPlan().Add(PlanOps.Invert()).Resize(12, 9);
         using var encoded = new MemoryStream();
 
-        Should.Throw<NotSupportedException>(() =>
-            Image.ProcessTilesTo(new ViewRegionSource(image[0].Pixels.View), encoded, ImageFormat.Png, plan, 8, 8));
+        var report = Image.ProcessTilesTo(new ViewRegionSource(image[0].Pixels.View), encoded,
+            ImageFormat.Png, plan, 8, 8);
+
+        report.Mode.ShouldBe(ProcessMode.Materialized);
+        report.Width.ShouldBe(12);
+        report.Height.ShouldBe(9);
+        encoded.Position = 0;
+        using var actual = Image.Load(encoded);
+        using var expected = plan.Execute(image[0].Pixels.View);
+        actual[0].Pixels.View.Span.ToArray().ShouldBe(expected.View.Span.ToArray());
     }
 
     private static byte[] Pattern(int width, int height)

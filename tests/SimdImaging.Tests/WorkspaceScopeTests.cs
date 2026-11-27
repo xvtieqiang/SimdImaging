@@ -26,8 +26,10 @@ public sealed class WorkspaceScopeTests
     {
         var perWorker = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
             [new PlanStep(ScopedOp(WorkspaceScope.PerWorker))], 64, allowFusion: false, degree: 4);
+        // 64 rows is four bands at this height, which is what keeps four workers busy; 128 would be two bands
+        // since an explicit 128 is a literal geometry now, not the default sentinel.
         var wholeImage = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
-            [new PlanStep(ScopedOp(WorkspaceScope.WholeImage))], 128, allowFusion: false, degree: 4);
+            [new PlanStep(ScopedOp(WorkspaceScope.WholeImage))], 64, allowFusion: false, degree: 4);
 
         perWorker.PerWorkerBytes.ShouldBe(1024);
         perWorker.WholeImageScratchBytes.ShouldBe(0);
@@ -40,7 +42,7 @@ public sealed class WorkspaceScopeTests
         // PerCall has no current user. A banded step calls once per band, so the contract's honest reading is the
         // per-worker term; the point of the test is that it is counted, not silently dropped.
         var perCall = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
-            [new PlanStep(ScopedOp(WorkspaceScope.PerCall))], 128, allowFusion: false, degree: 4);
+            [new PlanStep(ScopedOp(WorkspaceScope.PerCall))], 64, allowFusion: false, degree: 4);
         perCall.PerWorkerBytes.ShouldBe(1024);
         perCall.OperatorScratchBytes.ShouldBe(4096);
     }

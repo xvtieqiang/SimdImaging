@@ -24,7 +24,7 @@ public sealed class TilePublicEntryTests
         using var image = TestImages.Gradient(64, 48, format);
 
         using var expected = plan.Execute(image[0].Pixels.View);
-        using var actual = Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View), plan, 16, 12);
+        using var actual = Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View), plan, 16, 12, new ExecuteOptions(), null, out _);
 
         Rows(actual.View).ShouldBe(Rows(expected.View));
     }
@@ -36,7 +36,7 @@ public sealed class TilePublicEntryTests
         using var image = TestImages.Gradient(50, 33, WorkingFormat.Rgba8);
         var sink = new CollectSink(50, 33, WorkingFormat.Rgba8);
 
-        Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View), sink, plan, 16, 10);
+        Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View), sink, plan, 16, 10, new ExecuteOptions(), null, out _);
 
         sink.Tiles.Count.ShouldBe(16);
         using var expected = plan.Execute(image[0].Pixels.View);
@@ -44,14 +44,15 @@ public sealed class TilePublicEntryTests
     }
 
     [Fact]
-    public void AGlobalPlan_IsRefusedWithTheCompilerReason()
+    public void AGlobalPlan_FallsBackToWholeImage()
     {
         var plan = new ProcessingPlan().Add(PlanOps.Equalize());
         using var image = TestImages.Gradient(32, 24, WorkingFormat.Rgba8);
 
-        var error = Should.Throw<NotSupportedException>(() =>
-            Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View), plan, 16, 12));
-        error.Message.ShouldContain("GlobalStep");
+        using var tiled = Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View), plan, 16, 12, new ExecuteOptions(), null, out _);
+        using var expected = plan.Execute(image[0].Pixels.View);
+
+        tiled.View.Span.ToArray().ShouldBe(expected.View.Span.ToArray());
     }
 
     private static byte[] Rows(PixelView view)

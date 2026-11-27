@@ -62,9 +62,10 @@ public class ProcessingPlanLeakTests
         using (plan.ExecuteWithOptions(source.View, options, pool))
         {
             // Six rows / two-row bands = three bands, capped at two workers: the fused pair rents one
-            // full output plus two windows per worker; the global step then rents its own output.
+            // full output plus ONE window per worker — a halo-free segment ping-pongs between the output and
+            // that window — and the global step then rents its own output.
             pool.FullRentCount.ShouldBe(2);
-            pool.WindowRentCount.ShouldBe(4);
+            pool.WindowRentCount.ShouldBe(2);
             pool.DisposeCount.ShouldBe(pool.RentCount - 1); // only the returned frame is still alive
         }
 

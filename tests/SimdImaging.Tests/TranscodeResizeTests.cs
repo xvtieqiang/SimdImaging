@@ -159,7 +159,8 @@ public class TranscodeResizeTests
             using (var image = TestImages.Gradient(64, 48, WorkingFormat.Rgba8))
                 Image.Save(image, source);
 
-            var plan = new ProcessingPlan().Add(PlanOps.Equalize());
+            // Equalize at the head is now two-pass capable on a path; use a global step with no analysis form.
+            var plan = new ProcessingPlan().Add(PlanOps.Noise(0.05f, seed: 3));
             var report = ImageTranscode.From(source).Append(plan).Resize(31, 23).Run(streamed);
 
             using (var loaded = Image.Load(source))

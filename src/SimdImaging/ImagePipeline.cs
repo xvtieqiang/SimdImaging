@@ -42,7 +42,7 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
     private PipelineRecipeBuilder _recipe = new();
     private ImageOrientation _orientation;
     private Image? _current;
-    private int _bandRows = ProcessingPlan.DefaultBandRows;
+    private int _bandRows;
     private bool _finished;
 
     internal ImagePipeline(Image source, IPixelPool? pool = null)
@@ -52,10 +52,10 @@ public sealed class ImagePipeline : ImageOpPipeline<ImagePipeline>
         _orientation = source.Info.Orientation;
     }
 
-    /// <summary>Rows per band; smaller bands trade bookkeeping for less working memory.</summary>
+    /// <summary>Rows per band; 0 lets the executor size it, a positive value pins the geometry.</summary>
     public ImagePipeline BandRows(int rows)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rows);
+        ArgumentOutOfRangeException.ThrowIfNegative(rows);
         _bandRows = rows;
         return this;
     }

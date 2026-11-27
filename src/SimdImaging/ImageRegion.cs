@@ -107,7 +107,7 @@ public sealed partial class Image
     }
 
     /// <summary>
-    /// Opens a file as a random-region source for <see cref="ProcessTiles(IRegionSource, ProcessingPlan, int, int, ExecuteOptions?, IPixelPool?)"/>
+    /// Opens a file as a random-region source for <c>ProcessTiles(..., out ExecutionReport)</c>
     /// or <see cref="ProcessTilesTo(IRegionSource, Stream, ImageFormat, ProcessingPlan, int, int, ExecuteOptions?, SaveOptions?, IPixelPool?, CancellationToken)"/>.
     /// The caller disposes it to close the file. TIFF only: it is the one layout this build reads as arbitrary
     /// rectangles, and the same layout refusals as <see cref="DescribeRegion(string, int)"/> apply.

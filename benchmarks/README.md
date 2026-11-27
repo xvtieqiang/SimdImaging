@@ -32,6 +32,7 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks -- [轮次]
 | `perf32 <宽x高>` | 8 项，`Rgba32F` |
 | `matrix` | 四尺寸 × 三格式，全量 |
 | `perfpipe` | 处理链场景（融合 vs 原地链） |
+| `randomchain <宽x高>` | 随机链按长度分档（短 2–4 / 中 5–9 / 长 10–20）：时间 + 分配 + 一致性 |
 
 **本库自测（无对手）**
 
@@ -49,6 +50,7 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks -- [轮次]
 | `disposecheck` | 忘记 `using` 的代价 |
 | `nlm-ablate` | NLM 内层消融 |
 | `nlm-bench <宽x高> <S> <P>` | NLM 端到端秒表 + 输出 SHA 字节锚点 |
+| `chaindiag <宽> <高>` | 同一条长链的五条路径（编译器决定 / 强制不融合 / 强制融合 / 仅编译 / 对手）+ 带高扫描 |
 
 **脚本**
 

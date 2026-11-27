@@ -80,14 +80,14 @@ Measure("crop 1000x1000", () =>
 Measure("tile invert 512x512", () =>
 {
     using var result = Image.ProcessTiles(new BenchmarkRegionSource(source[0].Pixels.View),
-        new ProcessingPlan().Add(PlanOps.Invert()), 512, 512);
+        new ProcessingPlan().Add(PlanOps.Invert()), 512, 512, new ExecuteOptions(), null, out _);
     return result.Width * result.Height;
 });
 
 Measure("tile gaussian 512x512", () =>
 {
     using var result = Image.ProcessTiles(new BenchmarkRegionSource(source[0].Pixels.View),
-        new ProcessingPlan().Add(PlanOps.GaussianBlur(3f)), 512, 512);
+        new ProcessingPlan().Add(PlanOps.GaussianBlur(3f)), 512, 512, new ExecuteOptions(), null, out _);
     return result.Width * result.Height;
 });
 

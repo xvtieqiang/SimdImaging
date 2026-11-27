@@ -31,8 +31,9 @@ internal static class CompiledPlanExecutor
         var hasCompletedSection = false;
         try
         {
-            foreach (var section in plan.Sections)
+            for (var sectionIndex = 0; sectionIndex < plan.Sections.Count; sectionIndex++)
             {
+                var section = plan.Sections[sectionIndex];
                 // The caller's original source remains live after the first section has produced an owned frame.
                 // Keep that baseline in the shared account while later sections operate on their own intermediates.
                 if (hasCompletedSection && !retainedSourceReserved)
@@ -47,7 +48,6 @@ internal static class CompiledPlanExecutor
                 WorkingBuffer next;
                 if (section.Kind == CompiledSectionKind.OperatorRun)
                 {
-                    var steps = Slice(plan.Steps, section.FirstStep, section.StepCount);
                     var sectionObserver = observe is null
                         ? null
                         : new PlanObserver((index, name, view) => observe(section.FirstStep + index, name, view));
@@ -57,7 +57,16 @@ internal static class CompiledPlanExecutor
                         {
                             MaxWorkingBytes = options.MaxWorkingBytes - sourceBytes,
                         };
-                    next = ProcessingPlan.FromCompiled(steps, plan.BandRows)
+
+                    // The compiler already decided this run. Force the nested plan to make the same decision:
+                    // without this the section flag was dead metadata and the runtime re-decided from scratch,
+                    // so a compiled plan and a direct plan could fuse different runs.
+                    sectionOptions = sectionOptions with
+                    {
+                        AllowFusion = options.AllowFusion && section.Fused,
+                        ForceFusion = options.ForceFusion || section.Fused,
+                    };
+                    next = plan.SectionPlan(sectionIndex)!
                         .ExecuteWithOptions(current, sectionOptions, pool, sectionObserver);
                 }
                 else if (section.Kind == CompiledSectionKind.Format)
@@ -182,8 +191,7 @@ internal static class CompiledPlanExecutor
             throw new InvalidOperationException(
                 $"The compiler chose {plan.Backend}, so there is no tile walk to run ({plan.TileRefusal}).");
 
-        TileExecutor.Execute(ProcessingPlan.FromCompiled(plan.Steps, plan.BandRows), source, sink, tileWidth,
-            tileHeight, options, pool);
+        TileExecutor.Execute(plan.WholePlan, source, sink, tileWidth, tileHeight, options, pool);
     }
 
     /// <summary>
@@ -208,16 +216,16 @@ internal static class CompiledPlanExecutor
         IRowSource current = source;
         try
         {
-            foreach (var section in plan.Sections)
+            for (var sectionIndex = 0; sectionIndex < plan.Sections.Count; sectionIndex++)
             {
+                var section = plan.Sections[sectionIndex];
                 if (section.Kind == CompiledSectionKind.Format)
                     throw new InvalidOperationException(
                         "A format-changing section has no row form; the compiler must not choose Stream for it.");
 
                 if (section.Kind == CompiledSectionKind.OperatorRun)
                 {
-                    var steps = Slice(plan.Steps, section.FirstStep, section.StepCount);
-                    var stage = new PlanRowSource(ProcessingPlan.FromCompiled(steps, plan.BandRows), current, options);
+                    var stage = new PlanRowSource(plan.SectionPlan(sectionIndex)!, current, options);
                     owned.Add(stage);
                     current = stage;
                     continue;
@@ -253,8 +261,7 @@ internal static class CompiledPlanExecutor
             throw new InvalidOperationException(
                 $"The compiler chose {plan.Backend}, so there is no region run ({plan.RegionRefusal}).");
 
-        return RegionExecutor.Execute(ProcessingPlan.FromCompiled(plan.Steps, plan.BandRows), source, region,
-            destination, options, pool);
+        return RegionExecutor.Execute(plan.WholePlan, source, region, destination, options, pool);
     }
 
     private static void CheckBudget(ExecuteOptions options, long bytes, string what)
@@ -262,14 +269,6 @@ internal static class CompiledPlanExecutor
         if (options.MaxWorkingBytes > 0 && bytes > options.MaxWorkingBytes)
             throw new InvalidOperationException(
                 $"{what} needs {bytes} bytes, above ExecuteOptions.MaxWorkingBytes = {options.MaxWorkingBytes}.");
-    }
-
-    private static PlanStep[] Slice(IReadOnlyList<PlanStep> steps, int first, int count)
-    {
-        var slice = new PlanStep[count];
-        for (var i = 0; i < count; i++)
-            slice[i] = steps[first + i];
-        return slice;
     }
 
     private sealed class OwnedRowChain(IRowSource inner, List<IDisposable> owned) : IRowSource, IDisposable

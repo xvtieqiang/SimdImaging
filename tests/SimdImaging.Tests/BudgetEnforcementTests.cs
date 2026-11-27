@@ -111,7 +111,7 @@ public sealed class BudgetEnforcementTests
         // One 16x16 target tile (1024 bytes) and two 16x16 windows (2048 bytes) are resident together.
         Should.Throw<InvalidOperationException>(() =>
             Image.ProcessTiles(source, new DiscardSink(16, 16), plan, 16, 16,
-                new ExecuteOptions { MaxWorkingBytes = 2500, MaxDegreeOfParallelism = 1 }));
+                new ExecuteOptions { MaxWorkingBytes = 2500, MaxDegreeOfParallelism = 1 }, null, out _));
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public sealed class BudgetEnforcementTests
         // The returned 16x16 frame (1024 bytes) coexists with the 16x16 tile and its two windows (3072 bytes).
         Should.Throw<InvalidOperationException>(() =>
             Image.ProcessTiles(source, plan, 16, 16,
-                new ExecuteOptions { MaxWorkingBytes = 4000, MaxDegreeOfParallelism = 1 }));
+                new ExecuteOptions { MaxWorkingBytes = 4000, MaxDegreeOfParallelism = 1 }, null, out _));
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public sealed class BudgetEnforcementTests
         // A 16x16 tile walk holds the tile, two windows and the point step's declared scratch (about 5 KiB);
         // any whole-frame accounting would need the 512x512 frame's 1 MiB and refuse this budget.
         Image.ProcessTiles(source, new DiscardSink(512, 512), plan, 16, 16,
-            new ExecuteOptions { MaxWorkingBytes = 8192, MaxDegreeOfParallelism = 1 });
+            new ExecuteOptions { MaxWorkingBytes = 8192, MaxDegreeOfParallelism = 1 }, null, out _);
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public sealed class BudgetEnforcementTests
         formatted.Format.ShouldBe(WorkingFormat.Rgba32F);
 
         using var tiled = Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View),
-            new ProcessingPlan().Add(PlanOps.Invert()), 16, 12, new ExecuteOptions { MaxWorkingBytes = 1 << 20 });
+            new ProcessingPlan().Add(PlanOps.Invert()), 16, 12, new ExecuteOptions { MaxWorkingBytes = 1 << 20 }, null, out _);
         tiled.Width.ShouldBe(32);
     }
 

@@ -202,10 +202,15 @@ public class ProcessingPlanTests
     }
 
     [Fact]
-    public void Plan_RejectsNonPositiveBandRows()
+    public void Plan_RejectsNegativeBandRowsAndAcceptsZeroAsAutomatic()
     {
         using var source = Ramp(4, 4);
         Should.Throw<ArgumentOutOfRangeException>(() =>
-            source.Apply(new ProcessingPlan { BandRows = 0 }));
+            source.Apply(new ProcessingPlan { BandRows = -1 }));
+
+        // Zero is the sentinel for "the executor sizes the band", so an empty plan at 0 is valid; so is a
+        // positive height, including 128, which is now a literal request rather than the default value.
+        using var automatic = source.Apply(new ProcessingPlan { BandRows = 0 });
+        automatic.Width.ShouldBe(4);
     }
 }

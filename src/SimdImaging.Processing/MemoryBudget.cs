@@ -115,17 +115,23 @@ public static class MemoryEstimator
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentOutOfRangeException.ThrowIfNegative(degree);
-        var fusionAllowed = plan.Steps.All(step =>
-            !step.Definition.Contract.Requirements.RequiresWholeImageInvocation);
-        var fuse = fusionAllowed && FusionDecision.ShouldFuse(
-            plan.Steps, source.Width, source.Height, source.Format.BytesPerPixel());
+        var segments = FusionDecision.PlanSegments(plan.Steps, source.Width, source.Height,
+            source.Format.BytesPerPixel(), allowFusion: true, forceFusion: false);
         var bandRows = plan.BandRowsFor(source.Width, source.Height);
+        if (plan.BandRows == 0)
+            bandRows = FusionDecision.ExecBandRows(plan.Steps, segments, source.Width, source.Height,
+                source.Format.BytesPerPixel(), bandRows);
         var stepwiseRows = plan.StepwiseRowsFor(source.Height, bandRows, degree);
         return EstimateCore(source.Width, source.Height, source.Format, plan.Steps, bandRows,
-            stepwiseRows, allowFusion: fuse, degree);
+            stepwiseRows, segments, degree);
     }
 
     /// <summary>Estimates a plan from geometry alone, without an image in hand.</summary>
+    /// <remarks>
+    /// <paramref name="bandRows"/> follows the same convention as <see cref="ProcessingPlan.BandRows"/>: 0 means
+    /// "the executor sizes it", and the halo- and cache-aware band is computed from the steps; any positive value
+    /// is the caller's geometry and is estimated literally.
+    /// </remarks>
     /// <param name="width">Source width.</param>
     /// <param name="height">Source height.</param>
     /// <param name="format">Working format.</param>
@@ -136,21 +142,29 @@ public static class MemoryEstimator
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive, or the degree is negative.</exception>
     /// <exception cref="OverflowException">The image is large enough that the estimate overflows 64 bits.</exception>
     public static MemoryEstimate Estimate(int width, int height, WorkingFormat format,
-        IReadOnlyList<PlanStep> steps, int bandRows = ProcessingPlan.DefaultBandRows,
+        IReadOnlyList<PlanStep> steps, int bandRows = 0,
         bool allowFusion = true, int degree = 0)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(bandRows);
+        var auto = bandRows == 0;
+        if (auto)
+            bandRows = ProcessingPlan.DefaultBandRows;
         ValidateEstimateArguments(width, height, steps, bandRows, degree);
-        var stepwiseRows = ProcessingPlan.ResolveStepwiseRows(height, bandRows, degree,
-            useDefaultPolicy: bandRows == ProcessingPlan.DefaultBandRows);
-        return EstimateCore(width, height, format, steps, bandRows, stepwiseRows, allowFusion, degree);
+        var segments = FusionDecision.PlanSegments(steps, width, height, format.BytesPerPixel(),
+            allowFusion, forceFusion: false);
+        if (auto)
+            bandRows = FusionDecision.ExecBandRows(steps, segments, width, height, format.BytesPerPixel(), bandRows);
+        var stepwiseRows = ProcessingPlan.ResolveStepwiseRows(height, bandRows, degree, useDefaultPolicy: auto);
+        return EstimateCore(width, height, format, steps, bandRows, stepwiseRows, segments, degree);
     }
 
     internal static MemoryEstimate EstimateForExecution(int width, int height, WorkingFormat format,
-        IReadOnlyList<PlanStep> steps, int bandRows, int stepwiseRows, bool allowFusion, int degree)
+        IReadOnlyList<PlanStep> steps, int bandRows, int stepwiseRows,
+        IReadOnlyList<(int First, int Count)> segments, int degree)
     {
         ValidateEstimateArguments(width, height, steps, bandRows, degree);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(stepwiseRows);
-        return EstimateCore(width, height, format, steps, bandRows, stepwiseRows, allowFusion, degree);
+        return EstimateCore(width, height, format, steps, bandRows, stepwiseRows, segments, degree);
     }
 
     private static void ValidateEstimateArguments(int width, int height, IReadOnlyList<PlanStep> steps,
@@ -164,7 +178,8 @@ public static class MemoryEstimator
     }
 
     private static MemoryEstimate EstimateCore(int width, int height, WorkingFormat format,
-        IReadOnlyList<PlanStep> steps, int bandRows, int stepwiseRows, bool allowFusion, int degree)
+        IReadOnlyList<PlanStep> steps, int bandRows, int stepwiseRows,
+        IReadOnlyList<(int First, int Count)> segments, int degree)
     {
         var bytesPerPixel = format.BytesPerPixel();
         var full = checked((long)width * height * bytesPerPixel);
@@ -177,8 +192,8 @@ public static class MemoryEstimator
         // Keep the segmentation for both structural buffers and per-step adapter scratch: in a fused run, step k
         // receives the band widened by its own halo and every later step's halo (Point adapters consume the
         // destination rows, so they only include later halos).
-        var fusedSegments = allowFusion && steps.Count > 1 ? FusionPlanner.Segment(steps) : null;
-        var segmentCount = fusedSegments?.Count ?? steps.Count;
+        var fusedSegments = segments.Count > 0 ? segments : null;
+        var segmentCount = segments.Count;
         var segmentRentedBytes = new long[segmentCount];
         var segmentScratchPeaks = new long[segmentCount];
         var rented = full;

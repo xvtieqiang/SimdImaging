@@ -64,4 +64,8 @@ public sealed class PlanReport
 
     /// <summary>Wall-clock ticks for the whole call. Only meaningful with Diagnostics on.</summary>
     public long ElapsedTicks { get; internal init; }
+
+    /// <summary>The execution planner's decision, when the run used one. Fusion fallback stays in
+    /// <see cref="FallbackReason"/>; backend fallback is in <see cref="ExecutionReport.FallbackReason"/>.</summary>
+    public ExecutionReport? Execution { get; internal init; }
 }

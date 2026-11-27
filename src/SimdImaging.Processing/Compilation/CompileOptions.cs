@@ -29,7 +29,9 @@ internal sealed record CompileOptions
     /// stream backend cannot avoid materialising.</summary>
     internal bool ObserveSteps { get; init; }
 
-    /// <summary>Rows per band; 0 keeps <see cref="ProcessingPlan.DefaultBandRows"/>.</summary>
+    /// <summary>Rows per band; 0 lets the executor size it, any positive value (128 included) is literal. The
+    /// workspace prediction resolves 0 to <see cref="ProcessingPlan.DefaultBandRows"/>, which bounds the automatic
+    /// band from above.</summary>
     internal int BandRows { get; init; }
 
     /// <summary>The rectangle the caller asked for, when the region backend is being considered.</summary>

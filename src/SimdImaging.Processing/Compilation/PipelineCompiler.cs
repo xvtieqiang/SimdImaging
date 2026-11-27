@@ -67,14 +67,25 @@ internal static class PipelineCompiler
                 }
 
                 var count = steps.Count - first;
-                var fused = DecideFusion(steps, first, count, width, height,
-                    currentFormat.BytesPerPixel(), options, explanation);
-                sections.Add(new CompiledSection(CompiledSectionKind.OperatorRun, first, count, recipeFirst)
+                var runSegments = FusionDecision.PlanSegments(steps, first, count, width, height,
+                    currentFormat.BytesPerPixel(), options.Execute.AllowFusion && !options.ObserveSteps,
+                    options.Execute.ForceFusion);
+                foreach (var (segmentFirst, segmentCount) in runSegments)
                 {
-                    Fused = fused,
-                });
-                states.Add(new SectionState(CompiledSectionKind.OperatorRun, first, count, recipeFirst, runWidth,
-                    runHeight, runWidth, runHeight, runFormat, currentFormat) { Fused = fused });
+                    var fused = segmentCount > 1;
+                    var segmentRecipeFirst = recipeFirst + (segmentFirst - first);
+                    explanation.Add(fused
+                        ? $"steps {segmentFirst}-{segmentFirst + segmentCount - 1}: fused ({FusionReason(steps, segmentFirst, segmentCount, options)})"
+                        : $"step {segmentFirst}: stepwise ({FusionReason(steps, segmentFirst, segmentCount, options)})");
+                    sections.Add(new CompiledSection(CompiledSectionKind.OperatorRun, segmentFirst, segmentCount,
+                        segmentRecipeFirst) { Fused = fused });
+                    states.Add(new SectionState(CompiledSectionKind.OperatorRun, segmentFirst, segmentCount,
+                        segmentRecipeFirst, runWidth, runHeight, runWidth, runHeight, runFormat, currentFormat)
+                    {
+                        Fused = fused,
+                    });
+                }
+
                 continue;
             }
 
@@ -119,8 +130,10 @@ internal static class PipelineCompiler
         }
         else if (tileRefusal is not null)
         {
-            backend = ExecutionBackend.TileRefused;
-            explanation.Add($"backend: TileRefused ({tileRefusal})");
+            // A refusal is not a backend. The plan falls through to the ordinary frame form and the reason lives
+            // in TileRefusal for the planner to consume.
+            backend = ExecutionBackend.Frame;
+            explanation.Add($"backend: Frame (tile refused: {tileRefusal})");
         }
         else if (options.Region is { } region && regionBlocked is null && regionRefusal == RegionRefusal.None)
         {
@@ -179,9 +192,11 @@ internal static class PipelineCompiler
                 "the chain, or raise the limit.");
         }
 
-        var bandRows = options.BandRows > 0 ? options.BandRows : ProcessingPlan.DefaultBandRows;
+        // Pass the option through unchanged: 0 means "the executor sizes the band", any positive value (128
+        // included) is the caller's geometry. The workspace above was already estimated with the resolved policy
+        // band, so the prediction stays an upper bound for the automatic case.
         return new CompiledExecutionPlan(recipe, steps, sections, backend, streamRefusal, regionRefusal,
-            tileRefusal, width, height, sizeKnown, bandRows, workspace, stepInfo, regionCost, explanation);
+            tileRefusal, width, height, sizeKnown, options.BandRows, workspace, stepInfo, regionCost, explanation);
     }
 
     /// <summary>
@@ -303,35 +318,19 @@ internal static class PipelineCompiler
                 $"(it declares {step.Operator.Contract.Formats}). Chain the operator differently or convert first.");
     }
 
-    private static bool DecideFusion(IReadOnlyList<PlanStep> steps, int first, int count, int width, int height,
-        int bytesPerPixel, CompileOptions options, List<string> explanation)
+    private static string FusionReason(IReadOnlyList<PlanStep> steps, int first, int count, CompileOptions options)
     {
-        var allowed = options.Execute.AllowFusion && !options.ObserveSteps;
-        var incompatible = -1;
-        for (var i = first; i < first + count; i++)
-        {
-            var requirements = steps[i].Definition.Contract.Requirements;
-            if (requirements.Partition != Partitioning.RowBands ||
-                requirements.State != StateScope.None ||
-                requirements.Order != ExecutionOrder.Any ||
-                requirements.Threading != ThreadSafety.Concurrent ||
-                requirements.Determinism != Determinism.CoordinateDeterministic)
-            {
-                incompatible = i;
-                break;
-            }
-        }
+        if (!options.Execute.AllowFusion)
+            return "fusion disabled";
+        if (options.ObserveSteps)
+            return "observer needs full steps";
+        if (count > 1)
+            return "fusion chosen";
 
-        var fused = allowed && incompatible < 0 &&
-            (options.Execute.ForceFusion || FusionDecision.ShouldFuse(steps, first, count, width, height, bytesPerPixel));
-
-        var reason = !options.Execute.AllowFusion ? "fusion disabled"
-            : options.ObserveSteps ? "observer needs full steps"
-            : incompatible >= 0 ? $"step {incompatible} has execution requirements incompatible with fusion"
-            : fused ? "fusion chosen"
-            : "stepwise";
-        explanation.Add($"steps {first}-{first + count - 1}: {(fused ? "fused" : "stepwise")} ({reason})");
-        return fused;
+        var step = steps[first];
+        if (step.Definition.Contract.Requirements.RequiresWholeImageInvocation)
+            return "execution requirements incompatible with fusion";
+        return FusionPlanner.IsBandable(step) ? "stepwise" : "category boundary";
     }
 
     private static void ApplyGeometrySize(GeometryStep step, ref int width, ref int height, ref bool known)

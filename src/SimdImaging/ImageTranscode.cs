@@ -50,6 +50,8 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
     private PixelRect? _region;
     private TranscodeOptions _options = TranscodeOptions.Default;
     private long _predictedBytes;
+    private byte[]? _twoPassTable;
+    private CompiledExecutionPlan? _streamPlan;
     private bool _ran;
 
     private ImageTranscode(string? path, Stream? stream)
@@ -239,7 +241,11 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             // Stream for the recipe alone, so the prediction is compiled without a row sink and the reason is
             // reported on top.
             var wholeInput = Image.RequiresWholeInput(load);
-            var compiled = PipelineCompiler.Compile(_recipe.Build(), new CompileOptions
+            var recipe = _recipe.Build();
+            var twoPass = _path is not null && !wholeInput && TryFindTwoPassEqualize(recipe, out _);
+            if (twoPass)
+                recipe = ReplaceEqualize(recipe, new byte[4 * 256]); // geometry only; the LUT values do not size it
+            var compiled = PipelineCompiler.Compile(recipe, new CompileOptions
             {
                 SourceWidth = width,
                 SourceHeight = height,
@@ -250,6 +256,12 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             });
 
             var explanation = PlanExplanation.From(compiled);
+            if (twoPass)
+                explanation = explanation with
+                {
+                    Notes = [.. explanation.Notes,
+                        "Equalize: the first pass analyzes decoded rows, the second applies the table as a point step"],
+                };
             return wholeInput
                 ? explanation with
                 {
@@ -343,8 +355,11 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             var report = ExecuteCore(destinationPath, destination, format, cancellationToken);
             return report with
             {
-                PeakWorkingBytes = workspace.PeakBytes,
-                PredictedWorkingBytes = _predictedBytes,
+                Execution = report.Execution with
+                {
+                    PeakWorkingBytes = workspace.PeakBytes,
+                    PredictedWorkingBytes = _predictedBytes,
+                },
             };
         }
         finally
@@ -357,6 +372,39 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         CancellationToken cancellationToken)
     {
         var recipe = _recipe.Build();
+        _twoPassTable = null;
+
+        // Equalize followed by streamable steps is the one global pattern with a cheap analysis: one pass over
+        // the decoded rows builds the same LUT the frame kernel would build, and a second pass applies it as a
+        // point table. It is only possible when the source can be reopened (a path), because the row pump is
+        // forward-only. A stream source keeps the materialised fallback and its GlobalStep refusal.
+        // Only invest the first pass when the rest of the chain can actually stream without it: a later global
+        // step would still force the materialised path, and reading the source twice would be wasted work.
+        var sourcePath = _path;
+        var twoPassProbe = sourcePath is not null && _region is null &&
+            !Image.RequiresWholeInput(_options.Load) && TryFindTwoPassEqualize(recipe, out _)
+            ? ReplaceEqualize(recipe, new byte[4 * 256])
+            : null;
+        if (sourcePath is not null && twoPassProbe is not null &&
+            PipelineCompiler.CanStream(twoPassProbe, PreflightOptions(), out _) == StreamRefusal.None)
+        {
+            try
+            {
+                using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                byte[]? table = null;
+                Image.ScanRows(input, _options.Load,
+                    rows => table = HistogramOps.AnalyzeEqualizeTable(rows, _options.Execute),
+                    cancellationToken);
+                _twoPassTable = table ?? throw new InvalidOperationException(
+                    "The two-pass equalize analysis produced no table.");
+                recipe = CurrentRecipe(recipe);
+            }
+            catch (NotSupportedException)
+            {
+                // The resolved working format is not Rgba8; the byte-domain LUT does not apply.
+                _twoPassTable = null;
+            }
+        }
 
         if (_region is { } region)
         {
@@ -365,18 +413,10 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             return Write(image, destinationPath, destination, format, StreamRefusal.None, cancellationToken);
         }
 
-        // The plan-level refusals first: they keep the reason the caller sees, and materialising is the only thing a
-        // whole-image step can do.
-        var refusal = PipelineCompiler.CanStream(recipe, PreflightOptions(), out _);
-        if (refusal != StreamRefusal.None)
-        {
-            using var image = ToImageCore(cancellationToken);
-            using var materialized = ReserveImage(image);
-            return Write(image, destinationPath, destination, format, refusal, cancellationToken);
-        }
+        _streamPlan = null;
 
-        // A whole-input decode cannot stream before the decoder has settled its size, so it is read exactly once:
-        // ToImageCore is the whole-image path, and a forward-only source is safe because nothing is replayed.
+        // A whole-input decode has to be read once; planning cannot probe a header that the decoder only settles
+        // after reading the pixels. It is materialised exactly as before.
         if (Image.RequiresWholeInput(_options.Load))
         {
             using var image = ToImageCore(cancellationToken);
@@ -385,10 +425,79 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 cancellationToken);
         }
 
+        // Paths and seekable streams can be probed without consuming the pixel data: plan on the real geometry
+        // before opening the encoder, so the budget decision is not made from a 1x1 preflight.
+        ExecutionDecision? plannedDecision = null;
+        ProcessReport WithPlan(ProcessReport report) => plannedDecision is null
+            ? report
+            : report with
+            {
+                Execution = plannedDecision.ToReport(OutputStrategy.Banded)
+                    with { PeakWorkingBytes = report.PeakWorkingBytes },
+            };
+
+        if (_path is not null)
+        {
+            var geometry = ProbeGeometry(cancellationToken);
+            if (geometry is { } probed)
+            {
+                var decision = ExecutionPlanner.Plan(new ExecutionRequest
+                {
+                    Recipe = recipe,
+                    Width = probed.Width,
+                    Height = probed.Height,
+                    Format = probed.Format,
+                    Source = PlanSourceCapabilities(),
+                    Sink = SinkCapabilities.RowWritable,
+                    Preferred = ExecutionBackend.Stream,
+                    Policy = _options.Execute.Policy,
+                    Execute = _options.Execute,
+                });
+
+                plannedDecision = decision;
+                if (!decision.Succeeded)
+                    throw new InvalidOperationException(decision.Message ??
+                        "The chain cannot run with the requested constraints.");
+
+                if (decision.Plan!.Backend == ExecutionBackend.Frame)
+                {
+                    // The planner's fallback is whole-image; keep the historical reason in the report.
+                    var reason = PipelineCompiler.CanStream(recipe, PreflightOptions(), out _);
+                    using var image = ToImageCore(cancellationToken);
+                    using var materialized = ReserveImage(image);
+                    var materializedReport = Write(image, destinationPath, destination, format, reason,
+                        cancellationToken);
+                    return materializedReport with
+                    {
+                        Execution = decision.ToReport(OutputStrategy.Buffered)
+                            with { PeakWorkingBytes = materializedReport.PeakWorkingBytes },
+                    };
+                }
+
+                if (decision.Plan.Backend != ExecutionBackend.Stream)
+                    throw new InvalidOperationException(
+                        $"The planner selected {decision.Plan.Backend}, which the transcode entry cannot execute.");
+
+                _streamPlan = decision.Plan;
+            }
+        }
+
+        // The plan-level refusals next: they keep the reason the caller sees, and materialising is the only thing a
+        // whole-image step can do. A planned stream skips this preflight entirely.
+        var refusal = _streamPlan is null
+            ? PipelineCompiler.CanStream(recipe, PreflightOptions(), out _)
+            : StreamRefusal.None;
+        if (refusal != StreamRefusal.None)
+        {
+            using var image = ToImageCore(cancellationToken);
+            using var materialized = ReserveImage(image);
+            return Write(image, destinationPath, destination, format, refusal, cancellationToken);
+        }
+
         // Source first: a missing input must not truncate an existing destination.
         if (destinationPath is not null)
         {
-            return WritePathAtomically(destinationPath, temporaryPath =>
+            return WithPlan(WritePathAtomically(destinationPath, temporaryPath =>
             {
                 using var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
                     FileShare.None);
@@ -401,18 +510,18 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
 
                 return Image.ProcessChain(_stream!, output, format, SizeOf, BuildChain, ProcessOptions(),
                     cancellationToken);
-            });
+            }));
         }
 
         if (_path is not null)
         {
             using var input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            return Image.ProcessChain(input, destination!, format, SizeOf, BuildChain, ProcessOptions(),
-                cancellationToken);
+            return WithPlan(Image.ProcessChain(input, destination!, format, SizeOf, BuildChain, ProcessOptions(),
+                cancellationToken));
         }
 
-        return Image.ProcessChain(_stream!, destination!, format, SizeOf, BuildChain, ProcessOptions(),
-            cancellationToken);
+        return WithPlan(Image.ProcessChain(_stream!, destination!, format, SizeOf, BuildChain, ProcessOptions(),
+            cancellationToken));
     }
 
 
@@ -481,11 +590,113 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
             : SourceCapabilities.ForwardOnly;
     }
 
+    /// <summary>The recipe as this run will execute it: the caller's chain, or the same chain with Equalize
+    /// replaced by the table its first pass produced.</summary>
+    private PipelineRecipe CurrentRecipe() => CurrentRecipe(_recipe.Build());
+
+    private PipelineRecipe CurrentRecipe(PipelineRecipe recipe) =>
+        _twoPassTable is null ? recipe : ReplaceEqualize(recipe, _twoPassTable);
+
+    /// <summary>Only an Equalize at the head of the chain qualifies: the analysis must see the same pixels the
+    /// table is applied to, so a crop or resize in front of it would need its own analysis stage.</summary>
+    private static bool TryFindTwoPassEqualize(PipelineRecipe recipe, out int index)
+    {
+        index = -1;
+        for (var i = 0; i < recipe.Steps.Count; i++)
+        {
+            if (recipe.Steps[i] is not OperatorStep step ||
+                step.Operator.Category != OpCategory.Global ||
+                step.Operator.Name != nameof(HistogramOps.Equalize))
+                continue;
+
+            if (index >= 0)
+                return false;
+            index = i;
+        }
+
+        return index == 0;
+    }
+
+    private static PipelineRecipe ReplaceEqualize(PipelineRecipe recipe, byte[] table)
+    {
+        var builder = new PipelineRecipeBuilder();
+        foreach (var step in recipe.Steps)
+        {
+            switch (step)
+            {
+                case OperatorStep op when op.Operator.Category == OpCategory.Global &&
+                                          op.Operator.Name == nameof(HistogramOps.Equalize):
+                    builder.Append(ImageOp.PointLut("Equalize (two-pass)", table));
+                    break;
+                case OperatorStep op:
+                    builder.Append(op.Operator, op.Lut, op.Second);
+                    break;
+                case GeometryStep geometry:
+                    builder.Append(geometry.Descriptor);
+                    break;
+            }
+        }
+
+        return builder.Build();
+    }
+
+    /// <summary>Header geometry, read without consuming pixels. Paths reopen; a seekable stream is restored.
+    /// A forward-only stream returns null and keeps the preflight path.</summary>
+    private (int Width, int Height, WorkingFormat Format)? ProbeGeometry(CancellationToken cancellationToken)
+    {
+        FileStream? file = null;
+        var stream = _stream;
+        if (_path is not null)
+            stream = file = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream is null)
+            return null;
+
+        var start = stream.CanSeek ? stream.Position : 0;
+        try
+        {
+            var load = _options.Load ?? LoadOptions.Default;
+            var (working, rowStream, _) = Image.ResolveFormat(stream, start, load,
+                preserveMetadata: false, cancellationToken);
+            var decode = new DecodeOptions
+            {
+                Region = load.Region,
+                ScaleDenominator = load.ScaleDenominator ?? 1,
+                ApplyOrientation = load.ApplyOrientation,
+            };
+            using var reader = ImageCodecs.OpenRowReader(rowStream, working.ToPixelFormat(), decode,
+                leaveOpen: true, cancellationToken);
+            return (reader.Width, reader.Height, working);
+        }
+        finally
+        {
+            if (stream.CanSeek)
+                stream.Position = start;
+            file?.Dispose();
+        }
+    }
+
+    private SourceCapabilities PlanSourceCapabilities()
+    {
+        if (_path is not null)
+            return SourceCapabilities.Seekable | SourceCapabilities.Replayable |
+                   SourceCapabilities.StableContent;
+        if (_stream?.CanSeek == true)
+            return SourceCapabilities.Seekable | SourceCapabilities.Replayable;
+        return SourceCapabilities.ForwardOnly;
+    }
+
     /// <summary>The pull chain the compiled sections describe, with every stage's buffers owned by the returned
     /// source.</summary>
     private IRowSource BuildChain(IRowSource source)
     {
-        var recipe = _recipe.Build();
+        if (_streamPlan is { } planned)
+        {
+            _predictedBytes = planned.Workspace.BoundedBytes;
+            return CompiledPlanExecutor.CreateStreamChain(planned, source, _options.Execute,
+                _options.Region?.Pool);
+        }
+
+        var recipe = CurrentRecipe();
         var compiled = PipelineCompiler.Compile(recipe, new CompileOptions
         {
             SourceWidth = source.Width,
@@ -583,7 +794,7 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                 "supported. Use Region for the rectangle and run the rest on the returned image.");
         }
 
-        var plan = ProcessingPlan.FromCompiled(steps, ProcessingPlan.DefaultBandRows);
+        var plan = ProcessingPlan.FromCompiled(steps, 0);
 
         var width = 0;
         var height = 0;
@@ -662,7 +873,15 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
     }
 
     private ProcessReport MaterializedReport(Image image, StreamRefusal refusal) =>
-        new(ProcessMode.Materialized, refusal, ReaderIsStreaming: false, EncoderIsStreaming: false,
+        new(new ExecutionReport
+        {
+            SelectedMode = ExecutionMode.Materialized,
+            RequestedPolicy = _options.Execute.Policy,
+            FallbackReason = refusal == StreamRefusal.None
+                ? ExecutionFallbackReason.None
+                : ExecutionFallbackReason.Capability,
+            OutputStrategy = OutputStrategy.Buffered,
+        }, refusal, ReaderIsStreaming: false, EncoderIsStreaming: false,
             image.Width, image.Height, image.Height,
             _options.Save.Metadata is not null || !image.Metadata.IsEmpty);
 }

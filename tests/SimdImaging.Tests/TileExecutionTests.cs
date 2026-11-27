@@ -50,7 +50,7 @@ public sealed class TileExecutionTests
     {
         var plan = Compile(Recipe(PlanOps.Equalize()), TileOptions(64, 48, WorkingFormat.Rgba8));
 
-        plan.Backend.ShouldBe(ExecutionBackend.TileRefused);
+        plan.Backend.ShouldBe(ExecutionBackend.Frame);
         plan.TileRefusal.ShouldBe(TileRefusal.GlobalStep);
     }
 
@@ -96,7 +96,7 @@ public sealed class TileExecutionTests
         var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
 
         Image.ProcessTiles(new BufferRegionSource(image[0].Pixels.View), new DiscardSink(512, 512),
-            plan, 64, 64, pool: pool);
+            plan, 64, 64, new ExecuteOptions(), pool, out _);
 
         pool.PeakBytes.ShouldBeLessThan(512L * 512 * 4 / 2,
             $"a 64x64 tile should not need half a 512x512 frame; peaked at {pool.PeakBytes}");
@@ -122,7 +122,7 @@ public sealed class TileExecutionTests
 
         Image.ProcessTiles(new BufferRegionSource(image[0].Pixels.View), new DiscardSink(size, size),
             new ProcessingPlan().Add(step), size, size,
-            new ExecuteOptions { Workspace = workspace, MaxDegreeOfParallelism = 1 });
+            new ExecuteOptions { Workspace = workspace, MaxDegreeOfParallelism = 1 }, null, out _);
 
         workspace.PeakBytes.ShouldBe(tileBytes + windowBytes + scratchBytes,
             "one target tile, its windows and the operator's declared scratch, not the tile twice");

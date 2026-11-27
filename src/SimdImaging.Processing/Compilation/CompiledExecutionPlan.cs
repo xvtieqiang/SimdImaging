@@ -13,11 +13,8 @@ internal enum ExecutionBackend : byte
     /// <summary>A rectangle decoded and processed on its own.</summary>
     Region = 2,
 
-    /// <summary>A tile request that cannot be honoured; the reason is in <see cref="CompiledExecutionPlan.TileRefusal"/>.</summary>
-    TileRefused = 3,
-
     /// <summary>Rectangles in, rectangles out.</summary>
-    Tile = 4,
+    Tile = 3,
 }
 
 /// <summary>A contiguous run of compiled steps: either operator steps or one geometry change.</summary>
@@ -116,7 +113,37 @@ internal sealed class CompiledExecutionPlan
         StepInfo = Array.AsReadOnly(stepInfo.ToArray());
         RegionCost = regionCost;
         Explanation = Array.AsReadOnly(explanation.ToArray());
+
+        // A compiled plan is built once and executed many times. Keep each operator section's nested plan here
+        // so the section's ExecutionShapeFor cache (folded steps + segment split) survives across runs. Building
+        // them on every Execute was the last per-call allocation the shape cache could not remove: the compiler
+        // had already segmented the run, but the executor re-derived the shape from scratch every time.
+        _sectionPlans = new ProcessingPlan?[Sections.Count];
+        for (var i = 0; i < Sections.Count; i++)
+        {
+            var section = Sections[i];
+            if (section.Kind != CompiledSectionKind.OperatorRun)
+                continue;
+
+            var planSteps = new PlanStep[section.StepCount];
+            for (var j = 0; j < section.StepCount; j++)
+                planSteps[j] = Steps[section.FirstStep + j];
+            _sectionPlans[i] = ProcessingPlan.FromCompiled(planSteps, bandRows);
+        }
+
+        // The tile and region executors run the whole step list in one nested plan. It is a different shape from
+        // any section, so it gets its own cached instance rather than reusing a section's.
+        _wholePlan = ProcessingPlan.FromCompiled(Steps, bandRows);
     }
+
+    private readonly ProcessingPlan?[] _sectionPlans;
+    private readonly ProcessingPlan _wholePlan;
+
+    /// <summary>The nested plan for one operator section; null for a geometry or format section.</summary>
+    internal ProcessingPlan? SectionPlan(int index) => _sectionPlans[index];
+
+    /// <summary>The whole step list, for the tile and region executors.</summary>
+    internal ProcessingPlan WholePlan => _wholePlan;
 
     internal PipelineRecipe Recipe { get; }
 

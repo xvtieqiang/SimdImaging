@@ -58,7 +58,7 @@ public enum ProcessMode : byte
 /// the row API: the plan still streams, the decode did not. Reporting one boolean would make that case
 /// indistinguishable from a real stream.
 /// </remarks>
-/// <param name="Mode">Whether the plan ran over rows or over a whole image.</param>
+/// <param name="Execution">The planner's decision and measured outcome. <see cref="Mode"/> is derived from it.</param>
 /// <param name="Refusal">Why the plan was materialised; <see cref="StreamRefusal.None"/> when it streamed. A region
 /// run also reports <see cref="StreamRefusal.None"/>: it is materialised because the caller selected a rectangle,
 /// not because the plan refused rows. The two are told apart by the entry point that was called.</param>
@@ -72,16 +72,19 @@ public enum ProcessMode : byte
 /// (<see cref="ProcessOptions.PreserveMetadata"/> for a streamed run; a materialised run decodes the file whole and
 /// carries what it holds) or from <see cref="ProcessOptions.Save"/>. False is the default for a streamed run and is
 /// reported rather than left to be discovered.</param>
-public readonly record struct ProcessReport(ProcessMode Mode, StreamRefusal Refusal, bool ReaderIsStreaming,
-    bool EncoderIsStreaming, int Width, int Height, int RowsWritten, bool MetadataCarried)
+public readonly record struct ProcessReport(ExecutionReport Execution, StreamRefusal Refusal,
+    bool ReaderIsStreaming, bool EncoderIsStreaming, int Width, int Height, int RowsWritten, bool MetadataCarried)
 {
-    /// <summary>The peak engine-managed working set the run reserved; 0 when the run did not measure one. When the
-    /// caller supplied <see cref="ExecuteOptions.Workspace"/> through the transcode options, this is that account's
-    /// peak, which includes reservations made before the run.</summary>
-    public long PeakWorkingBytes { get; init; }
+    /// <summary>The compatibility view of <see cref="Execution"/>: the two never hold separate state.</summary>
+    public ProcessMode Mode => Execution.SelectedMode switch
+    {
+        ExecutionMode.Streaming => ProcessMode.Streamed,
+        ExecutionMode.Tiled => ProcessMode.Tiled,
+        _ => ProcessMode.Materialized,
+    };
 
-    /// <summary>The compiler's upper-bound working-set prediction for the run; 0 when no compiled plan was involved.</summary>
-    public long PredictedWorkingBytes { get; init; }
+    public long PeakWorkingBytes => Execution.PeakWorkingBytes;
+    public long PredictedWorkingBytes => Execution.PredictedWorkingBytes;
 
     /// <summary>Every layer streamed: the plan, the decoder and the encoder.</summary>
     public bool FullyStreamed => Mode == ProcessMode.Streamed && ReaderIsStreaming && EncoderIsStreaming;
@@ -95,6 +98,41 @@ public sealed partial class Image
     /// </summary>
     internal static bool RequiresWholeInput(LoadOptions load) =>
         load.PreferNativeScale && (load.ScaleDenominator ?? 1) > 1;
+
+    /// <summary>
+    /// Decodes a stream into rows and hands them to a consumer without opening an encoder. The two-pass equalize
+    /// analysis uses this for its first pass; the consumer reads every row exactly once.
+    /// </summary>
+    internal static void ScanRows(Stream source, LoadOptions load, Action<IRowSource> consume,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(load);
+        ArgumentNullException.ThrowIfNull(consume);
+
+        var start = source.CanSeek ? source.Position : 0;
+        var (working, rowStream, _) = ResolveFormat(source, start, load, preserveMetadata: false,
+            cancellationToken);
+        if (working == WorkingFormat.Rgba32F)
+            throw new NotSupportedException(
+                "Float32 samples have no row reader: a two-pass analysis cannot decode them.");
+
+        var decodeOptions = new DecodeOptions
+        {
+            Region = load.Region,
+            ScaleDenominator = load.ScaleDenominator ?? 1,
+            ApplyOrientation = load.ApplyOrientation,
+        };
+
+        using var reader = ImageCodecs.OpenRowReader(rowStream, working.ToPixelFormat(), decodeOptions,
+            leaveOpen: true, cancellationToken);
+        if ((long)reader.Width * reader.Height > load.MaxPixels)
+            throw new InvalidOperationException(
+                $"The decoded image would be {reader.Width}x{reader.Height} = " +
+                $"{(long)reader.Width * reader.Height} pixels, above the {load.MaxPixels} pixel limit.");
+
+        consume(new CodecRowSource(reader, working, cancellationToken));
+    }
 
     /// <summary>
     /// Runs a caller-built stage chain: decode, wrap the rows through each stage, encode. The output size must be
@@ -163,7 +201,15 @@ public sealed partial class Image
             var sink = new CodecRowSink(frame, cancellationToken);
             var writtenRows = Pipeline.Copy(chained, sink, cancellationToken, transfer);
 
-            var report = new ProcessReport(ProcessMode.Streamed, StreamRefusal.None, reader.IsStreaming,
+            var execution = new ExecutionReport
+            {
+                SelectedMode = ExecutionMode.Streaming,
+                RequestedPolicy = options.Execute?.Policy ?? ExecutionPolicy.Auto,
+                OutputStrategy = OutputStrategy.Banded,
+                Passes = 1,
+                SourceReads = 1,
+            };
+            var report = new ProcessReport(execution, StreamRefusal.None, reader.IsStreaming,
                 session.IsStreaming, outputWidth, outputHeight, writtenRows, metadata is not null);
             session.Commit(cancellationToken);
             return report;

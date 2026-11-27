@@ -2,6 +2,7 @@ using SimdImaging.Processing;
 using SimdImaging.Processing.Geometry;
 using SimdImaging.Processing.Internal;
 using SimdImaging.Processing.Contracts;
+using SimdImaging.Processing.Fusion;
 
 namespace SimdImaging.Tests;
 
@@ -508,8 +509,16 @@ public class MemoryEstimateTests : IDisposable
             var plan = new ProcessingPlan()
                 .Add(PlanOps.Invert())
                 .Add(PlanOps.Contrast(1.1f));
-            var actualBandRows = plan.BandRowsFor(source.Width, source.Height);
-            actualBandRows.ShouldBe(192);
+            // The policy band here is 192 rows; the executor then shrinks it for a halo-free chain, because the
+            // band loop is pure streaming and what matters is that both buffers stay in cache (16 rows at 1280
+            // wide Rgba8 is 80 KiB). The public estimator must report the band the executor actually uses.
+            var policyBandRows = plan.BandRowsFor(source.Width, source.Height);
+            policyBandRows.ShouldBe(192);
+            var segments = FusionDecision.PlanSegments(plan.Steps, source.Width, source.Height,
+                source.Format.BytesPerPixel(), allowFusion: true, forceFusion: false);
+            var actualBandRows = FusionDecision.ExecBandRows(plan.Steps, segments, source.Width, source.Height,
+                source.Format.BytesPerPixel(), policyBandRows);
+            actualBandRows.ShouldBe(16);
 
             var publicEstimate = MemoryEstimator.Estimate(source.View, plan, degree: 1);
             var geometryEstimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, plan.Steps,
@@ -645,17 +654,19 @@ public class MemoryEstimateTests : IDisposable
     [Fact]
     public void Estimate_ReportsBandWindowsWhenTheHaloIsTallerThanTheBand()
     {
-        // Six steps of ±64 rows stack into a 640-row window on a 64-row band: the executor then holds more
-        // than two images, which is exactly what the working-set ceiling exists to catch.
-        var plan = new ProcessingPlan { BandRows = 64 };
-        for (var i = 0; i < 6; i++)
+        // Four ±8-row steps on an 8-row band stack into a 72-row window: nine bands tall, so the executor holds
+        // more than one image, which is exactly what the working-set ceiling exists to catch. Rgba32F is used
+        // because each avoided frame is 33 MB: three intermediates clear the 64 MiB traffic rule while Σhalo = 32
+        // stays inside the halo budget — fusion is still the path this test is about.
+        var plan = new ProcessingPlan { BandRows = 8 };
+        for (var i = 0; i < 4; i++)
         {
             plan.Add($"blur{i}", OpCategory.Neighborhood,
-                PlanSteps.Neighborhood(v => FilterOps.GaussianBlur(v, 1.1f), 64, 64), 64, 64);
+                PlanSteps.Neighborhood(v => FilterOps.GaussianBlur(v, 1.1f), 8, 8), 8, 8);
         }
 
-        var fused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps, allowFusion: true, degree: 4);
-        var unfused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps, allowFusion: false, degree: 4);
+        var fused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba32F, plan.Steps, allowFusion: true, degree: 16);
+        var unfused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba32F, plan.Steps, allowFusion: false, degree: 16);
 
         fused.PlanScratchBytes.ShouldBeGreaterThan(0);
         fused.PlanScratchBytes.ShouldBeGreaterThan(unfused.PlanScratchBytes);
@@ -689,7 +700,8 @@ public class MemoryEstimateTests : IDisposable
     public void Estimate_LocksTheFusedArithmeticForATwoPointPlan()
     {
         // Stepwise execution keeps the prior full-frame result alive while the next destination is being written.
-        // Fusion instead keeps two bounded windows per worker. Both simultaneous lifetimes must be represented.
+        // Fusion instead keeps bounded windows: one per worker for a halo-free chain (the band ping-pongs between
+        // that window and the output), two once halo rectangles appear. Both lifetimes must be represented.
         var plan = new ProcessingPlan { BandRows = 64 }
             .Add("a", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v)))
             .Add("b", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 1.2f)));
@@ -706,8 +718,8 @@ public class MemoryEstimateTests : IDisposable
         unfused.PlanScratchBytes.ShouldBe(full);
         unfused.PeakBytes.ShouldBe(3 * full);
 
-        fused.PlanScratchBytes.ShouldBe(2 * workers * window);
-        fused.PeakBytes.ShouldBe((2 * full) + (2 * workers * window));
+        fused.PlanScratchBytes.ShouldBe(workers * window);
+        fused.PeakBytes.ShouldBe((2 * full) + (workers * window));
         fused.PeakBytes.ShouldBeLessThan(unfused.PeakBytes);
     }
 
@@ -750,19 +762,29 @@ public class MemoryEstimateTests : IDisposable
     [Fact]
     public void Estimate_WorkerCountFollowsTheBandRule()
     {
-        // 1080 rows in 128-row bands is 9 bands, so nine workers can be useful however many cores exist.
-        // A bandable run fuses, so the reported worker count follows the band rule; each step declares
-        // per-worker scratch, which is what the property describes.
-        var plan = new ProcessingPlan { BandRows = 128 }
+        // Two band rules again, now distinguishable by value alone: 0 means "the executor sizes it" (a
+        // halo-free chain gets a cache-sized 12-row band at 1920 wide Rgba16, so the degree caps the workers),
+        // and any positive value — 128 included — is the caller's geometry, 9 bands for 1080 rows.
+        var plan = new ProcessingPlan()
             .Add(PlanOps.Invert()).Add(PlanOps.Invert()).Add(PlanOps.Invert());
         MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba16, plan.Steps, degree: 32)
-            .Workers.ShouldBe(9);
+            .Workers.ShouldBe(32);
 
         MemoryEstimator.Estimate(1920, 300, WorkingFormat.Rgba16, plan.Steps, bandRows: 128, degree: 32)
             .Workers.ShouldBe(3);
 
         MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba16, plan.Steps, degree: 2)
             .Workers.ShouldBe(2);
+
+        // The same distinction end to end, through a plan rather than a bare step list: 0 is automatic (cache
+        // band, degree-capped workers) and 128 is a literal 9-band geometry. This is the pin that an explicit
+        // value survives the compile boundary instead of being folded back into "default".
+        using var source = WorkingBuffer.Rent(1920, 1080, WorkingFormat.Rgba16);
+        var automatic = new ProcessingPlan().Add(PlanOps.Invert()).Add(PlanOps.Invert()).Add(PlanOps.Invert());
+        var pinned = new ProcessingPlan { BandRows = 128 }.Add(PlanOps.Invert()).Add(PlanOps.Invert())
+            .Add(PlanOps.Invert());
+        MemoryEstimator.Estimate(source.View, automatic, degree: 32).Workers.ShouldBe(32);
+        MemoryEstimator.Estimate(source.View, pinned, degree: 32).Workers.ShouldBe(9);
     }
 
     [Fact]
@@ -795,8 +817,9 @@ public class MemoryEstimateTests : IDisposable
     {
         Should.Throw<ArgumentOutOfRangeException>(() =>
             MemoryEstimator.Estimate(0, 10, WorkingFormat.Rgba8, []));
+        // Zero is the sentinel ("the executor sizes it"), so only a negative height is a geometry error.
         Should.Throw<ArgumentOutOfRangeException>(() =>
-            MemoryEstimator.Estimate(10, 10, WorkingFormat.Rgba8, [], bandRows: 0));
+            MemoryEstimator.Estimate(10, 10, WorkingFormat.Rgba8, [], bandRows: -1));
         Should.Throw<ArgumentOutOfRangeException>(() =>
             MemoryEstimator.Estimate(10, 10, WorkingFormat.Rgba8, [], degree: -1));
     }

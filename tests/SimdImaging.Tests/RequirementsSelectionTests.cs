@@ -31,13 +31,15 @@ public sealed class RequirementsSelectionTests
     }
 
     [Fact]
-    public void AStatefulRowStep_IsRefusedByTile()
+    public void AStatefulRowStep_FallsBackToWholeImage()
     {
         using var image = TestImages.Gradient(24, 18, WorkingFormat.Rgba8);
+        var plan = new ProcessingPlan().Add(StatefulNeighborhood());
 
-        Should.Throw<NotSupportedException>(() =>
-            Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View),
-                new ProcessingPlan().Add(StatefulNeighborhood()), 8, 8));
+        using var tiled = Image.ProcessTiles(new ViewRegionSource(image[0].Pixels.View), plan, 8, 8, new ExecuteOptions(), null, out _);
+        using var expected = plan.Execute(image[0].Pixels.View);
+
+        tiled.View.Span.ToArray().ShouldBe(expected.View.Span.ToArray());
     }
 
     /// <summary>A neighbourhood step whose declared state says "this depends on the call sequence".</summary>

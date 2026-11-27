@@ -51,6 +51,9 @@ public enum StreamRefusal : byte
 /// <param name="WorkerCount">Workers the last band's row loop used; 0 when refused.</param>
 public readonly record struct StreamResult(StreamRefusal Refusal, int RowsWritten, int BandCount, int WorkerCount)
 {
+    /// <summary>The planner's decision, when the strict streaming preflight used one.</summary>
+    public ExecutionReport? Execution { get; init; }
+
     /// <summary>True when the plan ran.</summary>
     public bool Succeeded => Refusal == StreamRefusal.None;
 

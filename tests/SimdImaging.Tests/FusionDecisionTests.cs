@@ -1,5 +1,6 @@
 using SimdImaging.Abstractions;
 using SimdImaging.Processing;
+using SimdImaging.Processing.Compilation;
 using Shouldly;
 using Xunit;
 
@@ -42,10 +43,12 @@ public sealed class FusionDecisionTests
         { 1920, 1080, "blur4", WorkingFormat.Rgba16, 4 },  // 49.8 MB, still stepwise
         { 1920, 1080, "blur4", WorkingFormat.Rgba8, 4 },   // 24.9 MB
 
-        // A Global step splits the chain, so only the steps on each side of it are intermediates fusion can remove.
-        // Counting steps-1 credited this plan with four frames (133 MB) and fused it; the two runs of two steps
-        // only avoid one frame each (66.4 MB, under the threshold), so it runs stepwise.
-        { 1920, 1080, "blur-global-point", WorkingFormat.Rgba32F, 5 },
+        // A Global step splits the chain, and each side is now decided on its own: the blur pair avoids one
+        // frame (33.2 MB, under the threshold) so it runs stepwise, while the trailing halo-free point pair
+        // fuses because a zero-halo chain costs nothing to fuse. That is four segments (blur, brightness,
+        // equalize, fused point pair), not the five a plan-wide decision produced when the blur's halo
+        // dragged the point pair down with it.
+        { 1920, 1080, "blur-global-point", WorkingFormat.Rgba32F, 4 },
     };
 
     [Theory]
@@ -71,5 +74,73 @@ public sealed class FusionDecisionTests
 
         report!.SegmentCount.ShouldBe(segments,
             $"{chain}/{format} at {width}x{height}: the decision table pins the measured path");
+    }
+
+    [Fact]
+    public void AHaloBudgetKeepsATallChainStepwiseEvenWhenItWouldRemoveFrames()
+    {
+        // Six ±64-row steps stack to 384 halo rows on a 64-row band: every band would re-run all six steps over a
+        // 768-row overlap. The 4K chain removes five 33 MB frames (166 MB, above the 64 MiB traffic rule), so the
+        // traffic rule alone would still fuse it — the halo budget is what keeps it stepwise, and the measurement
+        // behind the budget is 252 ms fused versus 157 ms step by step at 1080p (986 vs 607 at 4K).
+        var plan = new ProcessingPlan { BandRows = 64 };
+        for (var i = 0; i < 6; i++)
+        {
+            plan.Add($"blur{i}", OpCategory.Neighborhood,
+                PlanSteps.Neighborhood(v => FilterOps.GaussianBlur(v, 1.1f), 64, 64), 64, 64);
+        }
+
+        using var image = Image.Create(3840, 2160, WorkingFormat.Rgba8);
+        using var result = plan.ExecuteWithOptions(image[0].Pixels.View,
+            new ExecuteOptions { Diagnostics = true }, out var report);
+
+        report!.SegmentCount.ShouldBe(6);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CompiledSectionsAndTheRuntimeReportShareThePerRunDecision(bool forceFusion)
+    {
+        // A halo pair (stepwise at 640x360), a Global boundary, and a zero-halo pair (always worth fusing).
+        // The compiler and the direct executor must cut this into the same segments with the same decisions.
+        var ops = new[]
+        {
+            PlanOps.GaussianBlur(1f), PlanOps.GaussianBlur(1f), PlanOps.Equalize(),
+            PlanOps.Invert(), PlanOps.Invert(),
+        };
+        var plan = new ProcessingPlan { BandRows = 64 };
+        foreach (var op in ops)
+            plan.Add(op);
+
+        var builder = new PipelineRecipeBuilder();
+        foreach (var op in ops)
+            builder.Append(op);
+        var compileOptions = new CompileOptions
+        {
+            SourceWidth = 640,
+            SourceHeight = 360,
+            SourceFormat = WorkingFormat.Rgba8,
+            Sink = SinkCapabilities.None,
+            Execute = new ExecuteOptions { ForceFusion = forceFusion },
+        };
+        var compiled = PipelineCompiler.Compile(builder.Build(), compileOptions);
+        var compiledShape = compiled.Sections
+            .Where(section => section.Kind == CompiledSectionKind.OperatorRun)
+            .Select(section => (section.StepCount, section.Fused))
+            .ToArray();
+
+        using var image = Image.Create(640, 360, WorkingFormat.Rgba8);
+        using var result = plan.ExecuteWithOptions(image[0].Pixels.View,
+            new ExecuteOptions { Diagnostics = true, ForceFusion = forceFusion }, out var report);
+        var runtimeShape = report!.Segments.Select(segment => (segment.StepCount, segment.Fused)).ToArray();
+
+        runtimeShape.ShouldBe(compiledShape,
+            $"compiled and direct execution disagreed (forceFusion={forceFusion})");
+
+        if (forceFusion)
+            compiledShape.ShouldBe([(2, true), (1, false), (2, true)]);
+        else
+            compiledShape.ShouldBe([(1, false), (1, false), (1, false), (2, true)]);
     }
 }

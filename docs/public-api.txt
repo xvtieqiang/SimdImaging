@@ -27,10 +27,45 @@
   SimdImaging.Abstractions.ExecuteOptions.GetHashCode() -> System.Int32
   SimdImaging.Abstractions.ExecuteOptions.MaxDegreeOfParallelism : System.Int32 { get; set; }
   SimdImaging.Abstractions.ExecuteOptions.MaxWorkingBytes : System.Int64 { get; set; }
+  SimdImaging.Abstractions.ExecuteOptions.Policy : SimdImaging.Abstractions.ExecutionPolicy { get; set; }
   SimdImaging.Abstractions.ExecuteOptions.ToString() -> System.String
   SimdImaging.Abstractions.ExecuteOptions.Workspace : SimdImaging.Abstractions.WorkspaceManager { get; set; }
   SimdImaging.Abstractions.ExecuteOptions.op_Equality(SimdImaging.Abstractions.ExecuteOptions? left, SimdImaging.Abstractions.ExecuteOptions? right) -> System.Boolean
   SimdImaging.Abstractions.ExecuteOptions.op_Inequality(SimdImaging.Abstractions.ExecuteOptions? left, SimdImaging.Abstractions.ExecuteOptions? right) -> System.Boolean
+  SimdImaging.Abstractions.ExecutionFallbackReason.Budget = 3
+  SimdImaging.Abstractions.ExecutionFallbackReason.BudgetUnverifiable = 4
+  SimdImaging.Abstractions.ExecutionFallbackReason.Capability = 2
+  SimdImaging.Abstractions.ExecutionFallbackReason.InvalidPlan = 5
+  SimdImaging.Abstractions.ExecutionFallbackReason.InvalidRequest = 6
+  SimdImaging.Abstractions.ExecutionFallbackReason.None = 0
+  SimdImaging.Abstractions.ExecutionFallbackReason.PolicyMismatch = 1
+  SimdImaging.Abstractions.ExecutionMode.Materialized = 0
+  SimdImaging.Abstractions.ExecutionMode.Region = 3
+  SimdImaging.Abstractions.ExecutionMode.Streaming = 1
+  SimdImaging.Abstractions.ExecutionMode.Tiled = 2
+  SimdImaging.Abstractions.ExecutionPolicy.Auto = 0
+  SimdImaging.Abstractions.ExecutionPolicy.RequireStreaming = 2
+  SimdImaging.Abstractions.ExecutionPolicy.RequireTiled = 1
+  SimdImaging.Abstractions.ExecutionReport.#ctor()
+  SimdImaging.Abstractions.ExecutionReport.BudgetBestEffort : System.Boolean { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.Equals(SimdImaging.Abstractions.ExecutionReport? other) -> System.Boolean
+  SimdImaging.Abstractions.ExecutionReport.Equals(System.Object? obj) -> System.Boolean
+  SimdImaging.Abstractions.ExecutionReport.FallbackReason : SimdImaging.Abstractions.ExecutionFallbackReason { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.GetHashCode() -> System.Int32
+  SimdImaging.Abstractions.ExecutionReport.Message : System.String { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.OutputStrategy : SimdImaging.Abstractions.OutputStrategy { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.Passes : System.Int32 { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.PeakWorkingBytes : System.Int64 { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.PredictedWorkingBytes : System.Int64 { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.RefusingStep : System.String { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.ReplayRequired : System.Boolean { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.RequestedPolicy : SimdImaging.Abstractions.ExecutionPolicy { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.SelectedMode : SimdImaging.Abstractions.ExecutionMode { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.SourceReads : System.Int32 { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.Steps : System.Collections.Generic.IReadOnlyList<System.String> { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.ToString() -> System.String
+  SimdImaging.Abstractions.ExecutionReport.op_Equality(SimdImaging.Abstractions.ExecutionReport? left, SimdImaging.Abstractions.ExecutionReport? right) -> System.Boolean
+  SimdImaging.Abstractions.ExecutionReport.op_Inequality(SimdImaging.Abstractions.ExecutionReport? left, SimdImaging.Abstractions.ExecutionReport? right) -> System.Boolean
   SimdImaging.Abstractions.GainMapParameters.#ctor(System.Double GainMapMin, System.Double GainMapMax, System.Double Gamma, System.Double OffsetSdr, System.Double OffsetHdr, System.Double HdrCapacityMin, System.Double HdrCapacityMax, System.Boolean BaseRenditionIsHdr)
   SimdImaging.Abstractions.GainMapParameters.BaseRenditionIsHdr : System.Boolean { get; set; }
   SimdImaging.Abstractions.GainMapParameters.Deconstruct(System.Double& GainMapMin, System.Double& GainMapMax, System.Double& Gamma, System.Double& OffsetSdr, System.Double& OffsetHdr, System.Double& HdrCapacityMin, System.Double& HdrCapacityMax, System.Boolean& BaseRenditionIsHdr) -> System.Void
@@ -116,6 +151,10 @@
   SimdImaging.Abstractions.OutOfGamutPolicy.Clamp = 1
   SimdImaging.Abstractions.OutOfGamutPolicy.Preserve = 0
   SimdImaging.Abstractions.OutOfGamutPolicy.Throw = 2
+  SimdImaging.Abstractions.OutputStrategy.Banded = 1
+  SimdImaging.Abstractions.OutputStrategy.Buffered = 0
+  SimdImaging.Abstractions.OutputStrategy.Direct = 3
+  SimdImaging.Abstractions.OutputStrategy.Region = 2
   SimdImaging.Abstractions.PixelPoint.#ctor(System.Int32 X, System.Int32 Y)
   SimdImaging.Abstractions.PixelPoint.Deconstruct(System.Int32& X, System.Int32& Y) -> System.Void
   SimdImaging.Abstractions.PixelPoint.Equals(SimdImaging.Abstractions.PixelPoint other) -> System.Boolean
@@ -291,8 +330,8 @@
   SimdImaging.Image.MinMax() -> System.ValueTuple<SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange, SimdImaging.Processing.ChannelRange>
   SimdImaging.Image.Mutate(System.Action<SimdImaging.ImagePipeline> steps, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Image
   SimdImaging.Image.OpenRegionSource(System.String path, SimdImaging.RegionOptions? options) -> SimdImaging.ImageRegionSource
-  SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Abstractions.IRegionSink sink, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.IPixelPool? pool) -> System.Void
-  SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
+  SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Abstractions.IRegionSink sink, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions options, SimdImaging.Abstractions.IPixelPool? pool, SimdImaging.Abstractions.ExecutionReport& report) -> System.Void
+  SimdImaging.Image.ProcessTiles(SimdImaging.Abstractions.IRegionSource source, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions options, SimdImaging.Abstractions.IPixelPool? pool, SimdImaging.Abstractions.ExecutionReport& report) -> SimdImaging.Abstractions.WorkingBuffer
   SimdImaging.Image.ProcessTilesTo(SimdImaging.Abstractions.IRegionSource source, System.IO.Stream destination, Sdcb.SimdCodecs.Abstractions.ImageFormat format, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.Abstractions.ExecuteOptions? options, SimdImaging.Abstractions.SaveOptions? save, SimdImaging.Abstractions.IPixelPool? pool, System.Threading.CancellationToken cancellationToken) -> SimdImaging.ProcessReport
   SimdImaging.Image.ProcessTilesTo(System.String sourcePath, System.String destinationPath, SimdImaging.Processing.ProcessingPlan plan, System.Int32 tileWidth, System.Int32 tileHeight, SimdImaging.TranscodeOptions? options, System.Threading.CancellationToken cancellationToken) -> SimdImaging.ProcessReport
   SimdImaging.Image.Psnr(SimdImaging.Image other) -> System.Double
@@ -467,7 +506,6 @@
   SimdImaging.PlanBackend.Region = 2
   SimdImaging.PlanBackend.Stream = 1
   SimdImaging.PlanBackend.Tile = 3
-  SimdImaging.PlanBackend.TileRefused = 4
   SimdImaging.PlanExplanation.#ctor(SimdImaging.PlanBackend Backend, SimdImaging.PlanRefusals Refusals, SimdImaging.PlanOutputGeometry Output, SimdImaging.PlanWorkspaceReport Workspace, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSectionExplanation> Sections, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanStepExplanation> Steps, System.Collections.Generic.IReadOnlyList<System.String> Notes)
   SimdImaging.PlanExplanation.Backend : SimdImaging.PlanBackend { get; set; }
   SimdImaging.PlanExplanation.Deconstruct(SimdImaging.PlanBackend& Backend, SimdImaging.PlanRefusals& Refusals, SimdImaging.PlanOutputGeometry& Output, SimdImaging.PlanWorkspaceReport& Workspace, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanSectionExplanation>& Sections, System.Collections.Generic.IReadOnlyList<SimdImaging.PlanStepExplanation>& Steps, System.Collections.Generic.IReadOnlyList<System.String>& Notes) -> System.Void
@@ -634,18 +672,19 @@
   SimdImaging.ProcessOptions.ToString() -> System.String
   SimdImaging.ProcessOptions.op_Equality(SimdImaging.ProcessOptions? left, SimdImaging.ProcessOptions? right) -> System.Boolean
   SimdImaging.ProcessOptions.op_Inequality(SimdImaging.ProcessOptions? left, SimdImaging.ProcessOptions? right) -> System.Boolean
-  SimdImaging.ProcessReport.#ctor(SimdImaging.ProcessMode Mode, SimdImaging.Processing.StreamRefusal Refusal, System.Boolean ReaderIsStreaming, System.Boolean EncoderIsStreaming, System.Int32 Width, System.Int32 Height, System.Int32 RowsWritten, System.Boolean MetadataCarried)
-  SimdImaging.ProcessReport.Deconstruct(SimdImaging.ProcessMode& Mode, SimdImaging.Processing.StreamRefusal& Refusal, System.Boolean& ReaderIsStreaming, System.Boolean& EncoderIsStreaming, System.Int32& Width, System.Int32& Height, System.Int32& RowsWritten, System.Boolean& MetadataCarried) -> System.Void
+  SimdImaging.ProcessReport.#ctor(SimdImaging.Abstractions.ExecutionReport Execution, SimdImaging.Processing.StreamRefusal Refusal, System.Boolean ReaderIsStreaming, System.Boolean EncoderIsStreaming, System.Int32 Width, System.Int32 Height, System.Int32 RowsWritten, System.Boolean MetadataCarried)
+  SimdImaging.ProcessReport.Deconstruct(SimdImaging.Abstractions.ExecutionReport& Execution, SimdImaging.Processing.StreamRefusal& Refusal, System.Boolean& ReaderIsStreaming, System.Boolean& EncoderIsStreaming, System.Int32& Width, System.Int32& Height, System.Int32& RowsWritten, System.Boolean& MetadataCarried) -> System.Void
   SimdImaging.ProcessReport.EncoderIsStreaming : System.Boolean { get; set; }
   SimdImaging.ProcessReport.Equals(SimdImaging.ProcessReport other) -> System.Boolean
   SimdImaging.ProcessReport.Equals(System.Object obj) -> System.Boolean
+  SimdImaging.ProcessReport.Execution : SimdImaging.Abstractions.ExecutionReport { get; set; }
   SimdImaging.ProcessReport.FullyStreamed : System.Boolean { get; }
   SimdImaging.ProcessReport.GetHashCode() -> System.Int32
   SimdImaging.ProcessReport.Height : System.Int32 { get; set; }
   SimdImaging.ProcessReport.MetadataCarried : System.Boolean { get; set; }
-  SimdImaging.ProcessReport.Mode : SimdImaging.ProcessMode { get; set; }
-  SimdImaging.ProcessReport.PeakWorkingBytes : System.Int64 { get; set; }
-  SimdImaging.ProcessReport.PredictedWorkingBytes : System.Int64 { get; set; }
+  SimdImaging.ProcessReport.Mode : SimdImaging.ProcessMode { get; }
+  SimdImaging.ProcessReport.PeakWorkingBytes : System.Int64 { get; }
+  SimdImaging.ProcessReport.PredictedWorkingBytes : System.Int64 { get; }
   SimdImaging.ProcessReport.ReaderIsStreaming : System.Boolean { get; set; }
   SimdImaging.ProcessReport.Refusal : SimdImaging.Processing.StreamRefusal { get; set; }
   SimdImaging.ProcessReport.RowsWritten : System.Int32 { get; set; }
@@ -1210,6 +1249,7 @@
   SimdImaging.Processing.PlanReport.#ctor()
   SimdImaging.Processing.PlanReport.BandCount : System.Int32 { get; }
   SimdImaging.Processing.PlanReport.ElapsedTicks : System.Int64 { get; }
+  SimdImaging.Processing.PlanReport.Execution : SimdImaging.Abstractions.ExecutionReport { get; }
   SimdImaging.Processing.PlanReport.FallbackReason : SimdImaging.Processing.FusionFallbackReason { get; }
   SimdImaging.Processing.PlanReport.PoolRentCount : System.Int32 { get; }
   SimdImaging.Processing.PlanReport.PoolReturnCount : System.Int32 { get; }
@@ -1361,6 +1401,7 @@
   SimdImaging.Processing.StreamResult.Deconstruct(SimdImaging.Processing.StreamRefusal& Refusal, System.Int32& RowsWritten, System.Int32& BandCount, System.Int32& WorkerCount) -> System.Void
   SimdImaging.Processing.StreamResult.Equals(SimdImaging.Processing.StreamResult other) -> System.Boolean
   SimdImaging.Processing.StreamResult.Equals(System.Object obj) -> System.Boolean
+  SimdImaging.Processing.StreamResult.Execution : SimdImaging.Abstractions.ExecutionReport { get; set; }
   SimdImaging.Processing.StreamResult.GetHashCode() -> System.Int32
   SimdImaging.Processing.StreamResult.Refusal : SimdImaging.Processing.StreamRefusal { get; set; }
   SimdImaging.Processing.StreamResult.RefusingStep : System.String { get; set; }
@@ -1449,6 +1490,7 @@
 class SimdImaging.Abstractions.ArrayPixelPool
 class SimdImaging.Abstractions.ColorPalette
 class SimdImaging.Abstractions.ExecuteOptions
+class SimdImaging.Abstractions.ExecutionReport
 class SimdImaging.Abstractions.LoadOptions
 class SimdImaging.Abstractions.SaveOptions
 class SimdImaging.Abstractions.WorkingBuffer
@@ -1533,9 +1575,13 @@ delegate SimdImaging.Processing.PointOps.RowTransform
 enum SimdImaging.Abstractions.AlphaMode
 enum SimdImaging.Abstractions.BorderMode
 enum SimdImaging.Abstractions.EdgeMode
+enum SimdImaging.Abstractions.ExecutionFallbackReason
+enum SimdImaging.Abstractions.ExecutionMode
+enum SimdImaging.Abstractions.ExecutionPolicy
 enum SimdImaging.Abstractions.Morphology
 enum SimdImaging.Abstractions.OpCategory
 enum SimdImaging.Abstractions.OutOfGamutPolicy
+enum SimdImaging.Abstractions.OutputStrategy
 enum SimdImaging.Abstractions.SampleAaMode
 enum SimdImaging.Abstractions.SampleDomain
 enum SimdImaging.Abstractions.SampleTransferCurve
