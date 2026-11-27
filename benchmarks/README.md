@@ -33,6 +33,8 @@ dotnet run -c Release --project benchmarks/SimdImaging.Benchmarks -- [轮次]
 | `matrix` | 四尺寸 × 三格式，全量 |
 | `perfpipe` | 处理链场景（融合 vs 原地链） |
 | `randomchain <宽x高>` | 随机链按长度分档（短 2–4 / 中 5–9 / 长 10–20）：时间 + 分配 + 一致性 |
+| `transcode <宽x高>` | 文件级转码 PNG→PNG：我方流式 / 我方整图 / 对手，时间 + 分配 + **冷进程峰值** |
+| `fusionab <宽x高>` | 融合决策 A/B（我方流式）：按 `ShouldFuse` 决策 vs `ForceFusion`，段数 + 时间 + 冷进程峰值 |
 
 **本库自测（无对手）**
 

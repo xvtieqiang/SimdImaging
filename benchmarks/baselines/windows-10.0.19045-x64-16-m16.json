@@ -286,7 +286,7 @@
       "metric": "milliseconds",
       "value": 5.89,
       "unit": "ms",
-      "thresholdPercent": 38.0,
+      "thresholdPercent": null,
       "megapixelsPerSecond": 157.14,
       "allocatedBytes": 5192
     },
