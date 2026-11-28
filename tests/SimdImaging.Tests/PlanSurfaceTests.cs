@@ -150,7 +150,7 @@ public class PointScratchEstimateTests
     [Fact]
     public void Rgba16AboveTheFloor_DeclaresTheTable()
     {
-        var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba16, OnePointStep().Steps);
+        var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba16, OnePointStep().Steps, new ExecuteOptions());
 
         estimate.PerWorkerBytes.ShouldBeGreaterThanOrEqualTo(512 * 1024);
         estimate.UndeclaredSteps.ShouldBe(0);
@@ -161,7 +161,7 @@ public class PointScratchEstimateTests
     [Fact]
     public void Rgba16BelowTheFloor_DeclaresNoTable()
     {
-        var estimate = MemoryEstimator.Estimate(320, 200, WorkingFormat.Rgba16, OnePointStep().Steps);
+        var estimate = MemoryEstimator.Estimate(320, 200, WorkingFormat.Rgba16, OnePointStep().Steps, new ExecuteOptions());
 
         estimate.PerWorkerBytes.ShouldBeGreaterThan(0);
         estimate.PerWorkerBytes.ShouldBeLessThan(512 * 1024);
@@ -171,7 +171,7 @@ public class PointScratchEstimateTests
     [Fact]
     public void Rgba8_DeclaresTheSmallTable()
     {
-        var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, OnePointStep().Steps);
+        var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, OnePointStep().Steps, new ExecuteOptions());
 
         estimate.PerWorkerBytes.ShouldBe(4L * 4 * 256);
     }

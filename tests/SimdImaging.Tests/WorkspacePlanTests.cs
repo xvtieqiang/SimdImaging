@@ -59,7 +59,7 @@ public sealed class WorkspacePlanTests
         plan.Workspace.Terms.ShouldContain(term => term.Kind == WorkspaceTermKind.Source);
         plan.Workspace.Terms.ShouldContain(term => term.Kind == WorkspaceTermKind.Destination);
         var predictedPeak = MemoryEstimator.Estimate(128, 96, WorkingFormat.Rgba8, plan.Steps,
-            bandRows: 0, allowFusion: plan.Sections[0].Fused).PeakBytes;
+            new ExecuteOptions { AllowFusion = plan.Sections[0].Fused }, bandRows: 0).PeakBytes;
         plan.Workspace.BoundedBytes.ShouldBe(predictedPeak);
 
         using var source = TestImages.Gradient(128, 96, WorkingFormat.Rgba8);
@@ -85,9 +85,9 @@ public sealed class WorkspacePlanTests
         var fused = plan.Sections[0].Fused;
 
         var resolved = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
-            bandRows: 0, allowFusion: fused);
+            new ExecuteOptions { AllowFusion = fused }, bandRows: 0);
         var literal128 = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
-            ProcessingPlan.DefaultBandRows, allowFusion: fused);
+            new ExecuteOptions { AllowFusion = fused }, ProcessingPlan.DefaultBandRows);
 
         plan.Workspace.BoundedBytes.ShouldBe(resolved.PeakBytes);
         resolved.PeakBytes.ShouldBeLessThan(literal128.PeakBytes,

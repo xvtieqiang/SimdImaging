@@ -34,7 +34,7 @@ internal static class MemEstimate
         var rows = new List<string[]>();
         foreach (var shape in Shapes)
         {
-            var estimate = MemoryEstimator.Estimate(probe[0].Pixels.View, Build(shape));
+            var estimate = MemoryEstimator.Estimate(probe[0].Pixels.View, Build(shape), new ExecuteOptions());
             var measured = Median(Measure(shape, width, height));
             var ratio = estimate.PeakBytes == 0 ? 0 : (double)measured / estimate.PeakBytes;
 

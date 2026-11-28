@@ -220,8 +220,11 @@ internal static class WorkspacePlanner
             for (var i = 0; i < slice.Length; i++)
                 slice[i] = steps[state.FirstStep + i];
 
+            // The section was already segmented by the compiler, so the estimate must be told what that decision
+            // was rather than re-deriving it from the options: a section the compiler left stepwise is estimated
+            // stepwise even when the caller allowed fusion.
             var estimate = MemoryEstimator.Estimate(state.InputWidth, state.InputHeight, state.InputFormat, slice,
-                bandRows, allowFusion: state.Fused, options.Execute.MaxDegreeOfParallelism);
+                options.Execute with { AllowFusion = state.Fused }, bandRows);
             maxPlan = Math.Max(maxPlan, estimate.PlanScratchBytes);
             maxOperatorScratchPeak = Math.Max(maxOperatorScratchPeak, estimate.OperatorScratchPeakBytes);
             var retainedSourceBytes = state.RecipeIndex > 0 ? sourceBytes : 0L;

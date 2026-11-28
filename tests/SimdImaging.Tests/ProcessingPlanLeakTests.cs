@@ -372,7 +372,7 @@ public class ProcessingPlanLeakTests
             var plan = new ProcessingPlan().Add(op);
             using var source = WorkingBuffer.Rent(width, height, WorkingFormat.Rgba8);
 
-            var estimate = MemoryEstimator.Estimate(source.View, plan, degree: 2);
+            var estimate = MemoryEstimator.Estimate(source.View, plan, new ExecuteOptions { MaxDegreeOfParallelism = 2 });
             using var result = plan.ExecuteWithOptions(source.View,
                 new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 2 });
 

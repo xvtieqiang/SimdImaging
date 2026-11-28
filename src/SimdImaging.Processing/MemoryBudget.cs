@@ -110,13 +110,30 @@ public static class MemoryEstimator
     /// <summary>Estimates a plan against a concrete source.</summary>
     /// <param name="source">The pixels the plan would run on.</param>
     /// <param name="plan">The plan.</param>
-    /// <param name="degree">Worker count the executor would use; 0 means "the machine default".</param>
-    public static MemoryEstimate Estimate(PixelView source, ProcessingPlan plan, int degree = 0)
+    /// <param name="options">The same options the executor will read: the fusion switch, the force flag, the
+    /// degree and the band policy. Passing the executor's own object is the point — an estimate built from a
+    /// different set of knobs describes a shape nothing runs.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> or <paramref name="options"/> is null.</exception>
+    public static MemoryEstimate Estimate(PixelView source, ProcessingPlan plan, ExecuteOptions options) =>
+        Estimate(source, plan, options, observe: false);
+
+    /// <summary>
+    /// The same estimate for a run with a <see cref="PlanObserver"/>. An observer forces the step-by-step path
+    /// (it must see every step's full output), so the fusion switch is overruled exactly as
+    /// <c>ProcessingPlan</c> overrules it. Internal because a caller outside this assembly cannot supply one.
+    /// </summary>
+    internal static MemoryEstimate Estimate(PixelView source, ProcessingPlan plan, ExecuteOptions options,
+        bool observe)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        ArgumentOutOfRangeException.ThrowIfNegative(degree);
+        ArgumentNullException.ThrowIfNull(options);
+
+        // The three knobs below are read exactly as `ProcessingPlan.ExecuteSameSize` reads them. Two copies of
+        // the decision are what let an estimate describe a shape the run never takes.
+        var fusionAllowed = options.AllowFusion && !observe;
+        var degree = options.MaxDegreeOfParallelism;
         var segments = FusionDecision.PlanSegments(plan.Steps, source.Width, source.Height,
-            source.Format.BytesPerPixel(), allowFusion: true, forceFusion: false);
+            source.Format.BytesPerPixel(), fusionAllowed, options.ForceFusion);
         var bandRows = plan.BandRowsFor(source.Width, source.Height);
         if (plan.BandRows == 0)
             bandRows = FusionDecision.ExecBandRows(plan.Steps, segments, source.Width, source.Height,
@@ -136,22 +153,23 @@ public static class MemoryEstimator
     /// <param name="height">Source height.</param>
     /// <param name="format">Working format.</param>
     /// <param name="steps">The steps that would run.</param>
-    /// <param name="bandRows">Rows per band.</param>
-    /// <param name="allowFusion">Whether the executor would fuse consecutive bandable steps.</param>
-    /// <param name="degree">Worker count the executor would use; 0 means "the machine default".</param>
+    /// <param name="options">The executor's options: fusion switch, force flag and degree.</param>
+    /// <param name="bandRows">Rows per band; 0 lets the estimator size it.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="steps"/> or <paramref name="options"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive, or the degree is negative.</exception>
     /// <exception cref="OverflowException">The image is large enough that the estimate overflows 64 bits.</exception>
     public static MemoryEstimate Estimate(int width, int height, WorkingFormat format,
-        IReadOnlyList<PlanStep> steps, int bandRows = 0,
-        bool allowFusion = true, int degree = 0)
+        IReadOnlyList<PlanStep> steps, ExecuteOptions options, int bandRows = 0)
     {
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentOutOfRangeException.ThrowIfNegative(bandRows);
         var auto = bandRows == 0;
         if (auto)
             bandRows = ProcessingPlan.DefaultBandRows;
+        var degree = options.MaxDegreeOfParallelism;
         ValidateEstimateArguments(width, height, steps, bandRows, degree);
         var segments = FusionDecision.PlanSegments(steps, width, height, format.BytesPerPixel(),
-            allowFusion, forceFusion: false);
+            options.AllowFusion, options.ForceFusion);
         if (auto)
             bandRows = FusionDecision.ExecBandRows(steps, segments, width, height, format.BytesPerPixel(), bandRows);
         var stepwiseRows = ProcessingPlan.ResolveStepwiseRows(height, bandRows, degree, useDefaultPolicy: auto);

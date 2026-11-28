@@ -25,11 +25,13 @@ public sealed class WorkspaceScopeTests
     public void WholeImageScope_IsCountedOnce_AndPerWorkerScope_IsCountedPerWorker()
     {
         var perWorker = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
-            [new PlanStep(ScopedOp(WorkspaceScope.PerWorker))], 64, allowFusion: false, degree: 4);
+            [new PlanStep(ScopedOp(WorkspaceScope.PerWorker))],
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 }, 64);
         // 64 rows is four bands at this height, which is what keeps four workers busy; 128 would be two bands
         // since an explicit 128 is a literal geometry now, not the default sentinel.
         var wholeImage = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
-            [new PlanStep(ScopedOp(WorkspaceScope.WholeImage))], 64, allowFusion: false, degree: 4);
+            [new PlanStep(ScopedOp(WorkspaceScope.WholeImage))],
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 }, 64);
 
         perWorker.PerWorkerBytes.ShouldBe(1024);
         perWorker.WholeImageScratchBytes.ShouldBe(0);
@@ -42,7 +44,8 @@ public sealed class WorkspaceScopeTests
         // PerCall has no current user. A banded step calls once per band, so the contract's honest reading is the
         // per-worker term; the point of the test is that it is counted, not silently dropped.
         var perCall = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
-            [new PlanStep(ScopedOp(WorkspaceScope.PerCall))], 64, allowFusion: false, degree: 4);
+            [new PlanStep(ScopedOp(WorkspaceScope.PerCall))],
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 }, 64);
         perCall.PerWorkerBytes.ShouldBe(1024);
         perCall.OperatorScratchBytes.ShouldBe(4096);
     }
@@ -59,7 +62,7 @@ public sealed class WorkspaceScopeTests
             .Add(concurrent);
 
         var estimate = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8, plan.Steps,
-            bandRows: 64, allowFusion: false, degree: 4);
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 }, bandRows: 64);
 
         estimate.PerWorkerBytes.ShouldBe(2000);
         estimate.Workers.ShouldBe(4);
@@ -114,7 +117,8 @@ public sealed class WorkspaceScopeTests
         model.Estimate!(1024, 256, 256, WorkingFormat.Rgba8).ShouldBe(3072);
 
         var estimate = MemoryEstimator.Estimate(1024, 256, WorkingFormat.Rgba8,
-            [new PlanStep(op)], bandRows: 64, allowFusion: false, degree: 4);
+            [new PlanStep(op)], new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 },
+            bandRows: 64);
 
         estimate.PerWorkerBytes.ShouldBe(1024);
         estimate.Workers.ShouldBe(4);
@@ -145,7 +149,8 @@ public sealed class WorkspaceScopeTests
         workspace.EstimateWholeImage(width, height, WorkingFormat.Rgba8).ShouldBe(wholeImageBytes);
 
         var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8,
-            [new PlanStep(op)], bandRows: 16, allowFusion: false, degree: 4);
+            [new PlanStep(op)], new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 },
+            bandRows: 16);
         estimate.PerWorkerBytes.ShouldBe(0);
         estimate.WholeImageScratchBytes.ShouldBe(wholeImageBytes);
     }
@@ -164,7 +169,8 @@ public sealed class WorkspaceScopeTests
         model.EstimateWholeImage(width, height, WorkingFormat.Rgba8).ShouldBe(2048 + 512);
 
         var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8,
-            [new PlanStep(op)], bandRows: 64, allowFusion: false, degree: 4);
+            [new PlanStep(op)], new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 },
+            bandRows: 64);
         estimate.PerWorkerPeakBytes.ShouldBe(4L * 1024);
         estimate.WholeImageScratchBytes.ShouldBe(2048 + 512);
         estimate.OperatorScratchPeakBytes.ShouldBe((4L * 1024) + 2048 + 512);

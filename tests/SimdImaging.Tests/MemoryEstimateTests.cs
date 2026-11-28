@@ -31,7 +31,7 @@ public class MemoryEstimateTests : IDisposable
         using var source = Image.Create(width, height, WorkingFormat.Rgba8);
         var plan = ThreeSteps();
 
-        var estimate = MemoryEstimator.Estimate(source[0].Pixels.View, plan);
+        var estimate = MemoryEstimator.Estimate(source[0].Pixels.View, plan, new ExecuteOptions());
 
         // The test suite defines its own CountingPool in another file; this is the production one.
         var pool = new SimdImaging.Processing.Fusion.CountingPool(ArrayPixelPool.Shared);
@@ -343,7 +343,7 @@ public class MemoryEstimateTests : IDisposable
             }));
         var plan = new ProcessingPlan { BandRows = 64 }.Add(singleThread).Add(wholeImage);
         var estimate = MemoryEstimator.Estimate(32, 64, WorkingFormat.Rgba8, plan.Steps,
-            bandRows: 64, allowFusion: false, degree: 4);
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 }, bandRows: 64);
 
         var full = 32L * 64 * WorkingFormat.Rgba8.BytesPerPixel();
         estimate.PerWorkerPeakBytes.ShouldBe(32000);
@@ -457,7 +457,7 @@ public class MemoryEstimateTests : IDisposable
         var op = PlanOps.Clahe(tilesX: 4, tilesY: 8);
         var plan = new ProcessingPlan { BandRows = height }.Add(op);
         var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
-            bandRows: height, allowFusion: false, degree: degree);
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = degree }, bandRows: height);
         var fullBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
         var perWorker = op.Contract.Workspace.EstimatePerWorker(width, height, height, WorkingFormat.Rgba8);
         var wholeImage = op.Contract.Workspace.EstimateWholeImage(width, height, WorkingFormat.Rgba8);
@@ -479,7 +479,7 @@ public class MemoryEstimateTests : IDisposable
         var op = new ImageOp(contract, new KernelImplementations((_, _, _, _) => { }));
         var plan = new ProcessingPlan { BandRows = 8 }.Add(op);
         var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
-            bandRows: 8, allowFusion: false, degree: 4);
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 }, bandRows: 8);
         var fullBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
 
         estimate.Workers.ShouldBe(1);
@@ -494,9 +494,9 @@ public class MemoryEstimateTests : IDisposable
             .Add(PlanOps.GaussianBlur(1f))
             .Add(PlanOps.GaussianBlur(1f));
 
-        var publicEstimate = MemoryEstimator.Estimate(source.View, plan, degree: 1);
+        var publicEstimate = MemoryEstimator.Estimate(source.View, plan, new ExecuteOptions { MaxDegreeOfParallelism = 1 });
         var stepwiseEstimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, plan.Steps,
-            plan.BandRows, allowFusion: false, degree: 1);
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 1 }, plan.BandRows);
 
         publicEstimate.PlanScratchBytes.ShouldBe(stepwiseEstimate.PlanScratchBytes);
         publicEstimate.PeakBytes.ShouldBe(stepwiseEstimate.PeakBytes);
@@ -523,9 +523,9 @@ public class MemoryEstimateTests : IDisposable
                 source.Format.BytesPerPixel(), policyBandRows);
             actualBandRows.ShouldBe(16);
 
-            var publicEstimate = MemoryEstimator.Estimate(source.View, plan, degree: 1);
+            var publicEstimate = MemoryEstimator.Estimate(source.View, plan, new ExecuteOptions { MaxDegreeOfParallelism = 1 });
             var geometryEstimate = MemoryEstimator.Estimate(source.Width, source.Height, source.Format, plan.Steps,
-                bandRows: actualBandRows, allowFusion: true, degree: 1);
+                new ExecuteOptions { MaxDegreeOfParallelism = 1 }, bandRows: actualBandRows);
 
             publicEstimate.PeakBytes.ShouldBe(geometryEstimate.PeakBytes);
             publicEstimate.PlanScratchBytes.ShouldBe(geometryEstimate.PlanScratchBytes);
@@ -560,7 +560,8 @@ public class MemoryEstimateTests : IDisposable
                 PlanSteps.Neighborhood(v => RichardsonLucyOps.RichardsonLucy(v, 1.2f, 2), 4, 4), 4, 4,
                 (w, _, rows, f) => RichardsonLucyOps.ScratchBytes(w, rows, f));
 
-        var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps, degree: 4);
+        var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps,
+            new ExecuteOptions { MaxDegreeOfParallelism = 4 });
 
         estimate.HasEstimatedTerms.ShouldBeTrue();
         estimate.Workers.ShouldBe(4);
@@ -630,7 +631,7 @@ public class MemoryEstimateTests : IDisposable
             .Add(PlanOps.Invert())
             .Add(PlanOps.Clahe(tilesX: 4, tilesY: 8));
         var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
-            bandRows: height, allowFusion: true, degree: 2);
+            new ExecuteOptions { MaxDegreeOfParallelism = 2 }, bandRows: height);
         var fullBytes = (long)width * height * WorkingFormat.Rgba8.BytesPerPixel();
         var operatorScratch = PlanOps.Clahe(tilesX: 4, tilesY: 8).Contract.Workspace;
         var perWorker = operatorScratch.EstimatePerWorker(width, height, height, WorkingFormat.Rgba8);
@@ -643,7 +644,7 @@ public class MemoryEstimateTests : IDisposable
     public void Estimate_WithoutDeclarationsSaysSoInsteadOfGuessing()
     {
         var plan = ThreeSteps();
-        var estimate = MemoryEstimator.Estimate(320, 240, WorkingFormat.Rgba8, plan.Steps);
+        var estimate = MemoryEstimator.Estimate(320, 240, WorkingFormat.Rgba8, plan.Steps, new ExecuteOptions());
 
         estimate.HasEstimatedTerms.ShouldBeFalse();
         estimate.PerWorkerBytes.ShouldBe(0);
@@ -668,12 +669,49 @@ public class MemoryEstimateTests : IDisposable
                 PlanSteps.Neighborhood(v => FilterOps.GaussianBlur(v, 1.1f), 8, 8), 8, 8);
         }
 
-        var fused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba32F, plan.Steps, allowFusion: true, degree: 16);
-        var unfused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba32F, plan.Steps, allowFusion: false, degree: 16);
+        var fused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba32F, plan.Steps,
+            new ExecuteOptions { MaxDegreeOfParallelism = 16 });
+        var unfused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba32F, plan.Steps,
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 16 });
 
         fused.PlanScratchBytes.ShouldBeGreaterThan(0);
         fused.PlanScratchBytes.ShouldBeGreaterThan(unfused.PlanScratchBytes);
         fused.PeakBytes.ShouldBeGreaterThan(unfused.PeakBytes);
+    }
+
+    /// <summary>
+    /// The pixel-view estimator reads the fusion switch from the options it is given, the same object the executor
+    /// reads. It used to hard-code `allowFusion: true`, so a caller that turned fusion off got a prediction for a
+    /// shape the run never took: the estimate described the fused window set while the executor ran stepwise.
+    /// <para>
+    /// The assertions are a three-way check rather than a constant: the two switches must differ (so the value is
+    /// really read), the pixel-view form must agree with the geometry form given the same options (so the two
+    /// entries cannot drift), and the unfused figure must be the larger of the two on this chain.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void PixelViewEstimatorHonorsAllowFusion()
+    {
+        var plan = new ProcessingPlan();
+        plan.Add(PlanOps.Invert()).Add(PlanOps.Contrast(1.1f)).Add(PlanOps.Grayscale());
+
+        using var source = TestImages.Gradient(1920, 1080, WorkingFormat.Rgba8);
+        var fusedOptions = new ExecuteOptions { MaxDegreeOfParallelism = 4 };
+        var stepwiseOptions = new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 };
+
+        var fused = MemoryEstimator.Estimate(source[0].Pixels.View, plan, fusedOptions);
+        var stepwise = MemoryEstimator.Estimate(source[0].Pixels.View, plan, stepwiseOptions);
+
+        // The switch has to change the answer; otherwise the test would pass on a hard-coded `true` too, because a
+        // three-point chain fuses into one window either way it is read.
+        fused.PeakBytes.ShouldNotBe(stepwise.PeakBytes,
+            "the estimate must describe the fused and the stepwise shape differently");
+
+        // Both entries read the same options, so the pixel-view form and the geometry form cannot disagree.
+        MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps, fusedOptions)
+            .PeakBytes.ShouldBe(fused.PeakBytes);
+        MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps, stepwiseOptions)
+            .PeakBytes.ShouldBe(stepwise.PeakBytes);
     }
 
     [Fact]
@@ -688,7 +726,7 @@ public class MemoryEstimateTests : IDisposable
         var third = PlanOps.GaussianBlur(1f);
         var plan = new ProcessingPlan { BandRows = bandRows }.Add(first).Add(second).Add(third);
         var estimate = MemoryEstimator.Estimate(width, height, WorkingFormat.Rgba8, plan.Steps,
-            bandRows, allowFusion: true, degree: 1);
+            new ExecuteOptions { MaxDegreeOfParallelism = 1 }, bandRows);
         var firstWindowRows = bandRows + (2 * halo * 3);
         var secondWindowRows = bandRows + (2 * halo * 2);
         var thirdWindowRows = bandRows + (2 * halo);
@@ -710,9 +748,9 @@ public class MemoryEstimateTests : IDisposable
             .Add("b", OpCategory.Point, PlanSteps.Point(v => PointOps.Contrast(v, 1.2f)));
 
         var fused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps,
-            bandRows: 64, allowFusion: true, degree: 4);
+            new ExecuteOptions { MaxDegreeOfParallelism = 4 }, bandRows: 64);
         var unfused = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8, plan.Steps,
-            bandRows: 64, allowFusion: false, degree: 4);
+            new ExecuteOptions { AllowFusion = false, MaxDegreeOfParallelism = 4 }, bandRows: 64);
 
         const long full = 1920L * 1080 * 4;
         const long window = 1920L * 64 * 4;
@@ -770,13 +808,16 @@ public class MemoryEstimateTests : IDisposable
         // and any positive value — 128 included — is the caller's geometry, 9 bands for 1080 rows.
         var plan = new ProcessingPlan()
             .Add(PlanOps.Invert()).Add(PlanOps.Invert()).Add(PlanOps.Invert());
-        MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba16, plan.Steps, degree: 32)
+        MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba16, plan.Steps,
+            new ExecuteOptions { MaxDegreeOfParallelism = 32 })
             .Workers.ShouldBe(32);
 
-        MemoryEstimator.Estimate(1920, 300, WorkingFormat.Rgba16, plan.Steps, bandRows: 128, degree: 32)
+        MemoryEstimator.Estimate(1920, 300, WorkingFormat.Rgba16, plan.Steps,
+            new ExecuteOptions { MaxDegreeOfParallelism = 32 }, bandRows: 128)
             .Workers.ShouldBe(3);
 
-        MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba16, plan.Steps, degree: 2)
+        MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba16, plan.Steps,
+            new ExecuteOptions { MaxDegreeOfParallelism = 2 })
             .Workers.ShouldBe(2);
 
         // The same distinction end to end, through a plan rather than a bare step list: 0 is automatic (cache
@@ -786,8 +827,10 @@ public class MemoryEstimateTests : IDisposable
         var automatic = new ProcessingPlan().Add(PlanOps.Invert()).Add(PlanOps.Invert()).Add(PlanOps.Invert());
         var pinned = new ProcessingPlan { BandRows = 128 }.Add(PlanOps.Invert()).Add(PlanOps.Invert())
             .Add(PlanOps.Invert());
-        MemoryEstimator.Estimate(source.View, automatic, degree: 32).Workers.ShouldBe(32);
-        MemoryEstimator.Estimate(source.View, pinned, degree: 32).Workers.ShouldBe(9);
+        MemoryEstimator.Estimate(source.View, automatic, new ExecuteOptions { MaxDegreeOfParallelism = 32 })
+            .Workers.ShouldBe(32);
+        MemoryEstimator.Estimate(source.View, pinned, new ExecuteOptions { MaxDegreeOfParallelism = 32 })
+            .Workers.ShouldBe(9);
     }
 
     [Fact]
@@ -798,7 +841,7 @@ public class MemoryEstimateTests : IDisposable
         {
             RowParallel.DegreeOverride = 2;
             var estimate = MemoryEstimator.Estimate(1920, 1080, WorkingFormat.Rgba8,
-                [new PlanStep(PlanOps.Invert())], bandRows: 64, allowFusion: false, degree: 0);
+                [new PlanStep(PlanOps.Invert())], new ExecuteOptions { AllowFusion = false }, bandRows: 64);
 
             estimate.Workers.ShouldBe(2);
         }
@@ -812,18 +855,19 @@ public class MemoryEstimateTests : IDisposable
     public void Estimate_OverflowsLoudlyRatherThanWrapping()
     {
         Should.Throw<OverflowException>(() =>
-            MemoryEstimator.Estimate(int.MaxValue, int.MaxValue, WorkingFormat.Rgba32F, []));
+            MemoryEstimator.Estimate(int.MaxValue, int.MaxValue, WorkingFormat.Rgba32F, [], new ExecuteOptions()));
     }
 
     [Fact]
     public void Estimate_RejectsNonPositiveGeometry()
     {
         Should.Throw<ArgumentOutOfRangeException>(() =>
-            MemoryEstimator.Estimate(0, 10, WorkingFormat.Rgba8, []));
+            MemoryEstimator.Estimate(0, 10, WorkingFormat.Rgba8, [], new ExecuteOptions()));
         // Zero is the sentinel ("the executor sizes it"), so only a negative height is a geometry error.
         Should.Throw<ArgumentOutOfRangeException>(() =>
-            MemoryEstimator.Estimate(10, 10, WorkingFormat.Rgba8, [], bandRows: -1));
+            MemoryEstimator.Estimate(10, 10, WorkingFormat.Rgba8, [], new ExecuteOptions(), bandRows: -1));
         Should.Throw<ArgumentOutOfRangeException>(() =>
-            MemoryEstimator.Estimate(10, 10, WorkingFormat.Rgba8, [], degree: -1));
+            MemoryEstimator.Estimate(10, 10, WorkingFormat.Rgba8, [],
+                new ExecuteOptions { MaxDegreeOfParallelism = -1 }));
     }
 }

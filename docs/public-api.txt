@@ -1086,8 +1086,8 @@
   SimdImaging.Processing.MemoryBudgetSnapshot.WeightCache : SimdImaging.Processing.Geometry.WeightCacheStatistics { get; set; }
   SimdImaging.Processing.MemoryBudgetSnapshot.op_Equality(SimdImaging.Processing.MemoryBudgetSnapshot? left, SimdImaging.Processing.MemoryBudgetSnapshot? right) -> System.Boolean
   SimdImaging.Processing.MemoryBudgetSnapshot.op_Inequality(SimdImaging.Processing.MemoryBudgetSnapshot? left, SimdImaging.Processing.MemoryBudgetSnapshot? right) -> System.Boolean
-  SimdImaging.Processing.MemoryEstimator.Estimate(SimdImaging.Abstractions.PixelView source, SimdImaging.Processing.ProcessingPlan plan, System.Int32 degree) -> SimdImaging.Abstractions.MemoryEstimate
-  SimdImaging.Processing.MemoryEstimator.Estimate(System.Int32 width, System.Int32 height, SimdImaging.Abstractions.WorkingFormat format, System.Collections.Generic.IReadOnlyList<SimdImaging.Processing.PlanStep> steps, System.Int32 bandRows, System.Boolean allowFusion, System.Int32 degree) -> SimdImaging.Abstractions.MemoryEstimate
+  SimdImaging.Processing.MemoryEstimator.Estimate(SimdImaging.Abstractions.PixelView source, SimdImaging.Processing.ProcessingPlan plan, SimdImaging.Abstractions.ExecuteOptions options) -> SimdImaging.Abstractions.MemoryEstimate
+  SimdImaging.Processing.MemoryEstimator.Estimate(System.Int32 width, System.Int32 height, SimdImaging.Abstractions.WorkingFormat format, System.Collections.Generic.IReadOnlyList<SimdImaging.Processing.PlanStep> steps, SimdImaging.Abstractions.ExecuteOptions options, System.Int32 bandRows) -> SimdImaging.Abstractions.MemoryEstimate
   SimdImaging.Processing.NoiseKind.Gaussian = 1
   SimdImaging.Processing.NoiseKind.Uniform = 0
   SimdImaging.Processing.NoiseOps.Noise(SimdImaging.Abstractions.PixelView source, System.Single amount, SimdImaging.Processing.NoiseKind kind, System.UInt32 seed, SimdImaging.Abstractions.IPixelPool? pool) -> SimdImaging.Abstractions.WorkingBuffer
