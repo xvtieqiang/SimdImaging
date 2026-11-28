@@ -77,7 +77,10 @@ public class MemoryEstimateTests : IDisposable
             options: new ExecuteOptions { MaxDegreeOfParallelism = 1024 });
 
         var pullWorkers = RowParallel.ResolveWorkers(8, ResizeWorkspace.MaxChunkRows, 1024);
-        var emitWorkers = ResizeWorkspace.OutputBatchRows;
+        // Emit parallelises one batch of OutputBatchRows rows, and below the 64 K pixel gate it runs on one
+        // thread: 8x64 = 512 pixels. The estimate charges one worker row, not sixty-four. The row scratch is the
+        // larger of the two passes, so it is still the pull figure.
+        var emitWorkers = 1;
         workspace.Workers.ShouldBe(Math.Max(pullWorkers, emitWorkers));
         var tapWorkers = emitWorkers;
         workspace.WorkerTapBytes.ShouldBe((long)tapWorkers * 300 * (sizeof(int) + sizeof(float)));

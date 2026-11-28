@@ -458,6 +458,36 @@ public class StreamingTests
     }
 
     [Fact]
+    public void ReportedWorkerCount_IsThisRunNotTheLast()
+    {
+        // LastWorkerCount is thread-static and survives the call, so a run that reaches no row loop used to report
+        // whatever the previous call left behind: an empty plan is one straight copy and a Nearest resize runs its
+        // point loop on the caller, and both reported the 16 workers of an earlier bicubic resize on this thread.
+        using var image = TestImages.Gradient(512, 512, WorkingFormat.Rgba8);
+
+        var priming = new ProcessingPlan();
+        priming.Resize(1024, 1024, Resampler.Bicubic);
+        var primed = priming.TryExecuteTo(new ViewRowSource(image[0].Pixels.View),
+            new CollectingSink(1024, 1024, WorkingFormat.Rgba8));
+        primed.Succeeded.ShouldBeTrue();
+        RowParallel.LastWorkerCount.ShouldBeGreaterThan(1,
+            "the priming run has to leave a multi-worker figure for the test to mean anything");
+
+        var empty = new ProcessingPlan();
+        var copied = empty.TryExecuteTo(new ViewRowSource(image[0].Pixels.View),
+            new CollectingSink(512, 512, WorkingFormat.Rgba8));
+        copied.Succeeded.ShouldBeTrue();
+        copied.WorkerCount.ShouldBe(1, "a straight row copy launches no worker");
+
+        var nearest = new ProcessingPlan();
+        nearest.Resize(64, 64, Resampler.Nearest);
+        var shrunk = nearest.TryExecuteTo(new ViewRowSource(image[0].Pixels.View),
+            new CollectingSink(64, 64, WorkingFormat.Rgba8));
+        shrunk.Succeeded.ShouldBeTrue();
+        shrunk.WorkerCount.ShouldBe(1, "the Nearest resize runs its point loop on the caller");
+    }
+
+    [Fact]
     public void EnterTopLevel_OverridesTheDegreeOnThisThreadOnly()
     {
         using (RowParallel.EnterTopLevel(1))

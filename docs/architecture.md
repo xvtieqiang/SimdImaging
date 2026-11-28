@@ -1276,7 +1276,51 @@ Region 执行器产出（与 `Load → 处理 → Crop` 逐字节相同），随
 `Rotate90` / `Transpose` / `Affine` / `Perspective` 需要整行重排或随机访问，前向流不可做。异步入口（`RunAsync` / `SaveAsync` / `ToImageAsync`）是把同步
 管线放到线程池，不是重叠 IO。
 
-仍未做：多级缩放（两次 resize 连用）、Affine/Perspective 的行流式形式。
+仍未做：Affine/Perspective 的行流式形式。
+
+**多级缩放（2026-11-28）**：一条文件链可以有任意多个 `Resize`。每个缩放是拉式链上的独立一段
+（`ResizeRowSource` 拉取上一段的行、按需产出），所以 `decode → 缩到 ½ → 算子 → 缩到 ¼ → encode` 是一趟过文件，
+中间尺寸不落整帧——与 `Load → Pipe → Resize → … → Save` 逐字节相同（`TwoResizes_RunInTheSamePass`，4 种格式/滤镜
+组合；把垂直遍的目标行偏移一行会让它变红）。实测（`transcode` 模式，PNG→PNG）：
+
+| 链 `Lanczos3 ½ → Invert → Lanczos3 ¼` | 流式 | 整图 | 流式÷整图 | 耗时 |
+|---|---|---|---|---|
+| 1080p 峰值 | 22.1 MiB | 35.0 MiB | **0.63×** | 43.4 / 36.9 ms（1.18×） |
+| 4K 峰值 | 38.6 MiB | 100.9 MiB | **0.38×** | 111.7 / 103.8 ms（1.08×） |
+| 8K 峰值 | 58.6 MiB | 326.0 MiB | **0.18×** | 388.2 / 367.0 ms（1.06×） |
+
+省下的比例随尺寸增大（整图那一侧要同时持有两个中间尺寸），代价是一趟额外的行搬运且比例的倒数在变小：
+8K 上多 5.8% 的耗时换掉 82% 的峰值。`ProcessingPlan`（内存侧）仍只表达尾部缩放；多级由
+`ImageTranscode` 的行段承载。
+
+**报告里的 worker 数是本次的，不是上次的**（2026-11-28 修）：`RowParallel.LastWorkerCount` 是 ThreadStatic 且
+不自动复位，空计划（纯行拷贝）与 `Resampler.Nearest`（点采样在调用线程上跑）都不进入行循环，因此曾报告上一趟
+留在该线程上的 16。两个流式入口现在都在开工前复位为 1（`ReportedWorkerCount_IsThisRunNotTheLast`）。
+
+**缩放段不再向短图收高图的底数**（2026-11-28 修）：`ResizeWorkspace` 的 chunk 上限是常量 256 行，与图像无关。
+640×360 下那是图高的 71%，于是阶段常驻 = ring + 256 行暂存 + 64 行输出批 + 每 worker 一行浮点 ≈ **4 帧**，
+比它存在的理由（不落一张整帧）更费，而且更慢：实测 `resize-two` 640×360 流式 12.6 MiB / 8.5 ms 对整图
+11.7 MiB / 5.5 ms，**两个指标同时亏损**。现在预算按「不超过一张源帧」收紧——与 `SequentialBands` 对行泵用的是
+同一条比较——并且**只在收紧后仍留下可用 chunk（≥8 行）时**才收紧：Rgba16 的 ring 是 float 行（16 B/px），
+一张 8 B/px 的帧在 160×100 上只买得到 4 行，那里跳过收紧、交回 `MaxWorkingBytes` 判定。
+
+修复后 `resize-two` 的峰值（流式 ÷ 整图）：640×360 **0.90×**（原 1.08×）、1280×720 **0.76×**、
+1920×1080 **0.59×**；预测值与实测峰值逐字节相等（640×360 均为 1,553,920 B）。
+
+**一条被数据否定的设计**：曾考虑让 `ExecutionPlanner` 在 `Auto` 下比较各候选的 `RequiredBytes` 并取最小。
+`ExecutionPlanner.Plan` 现在确实是**按候选顺序取第一个可行**（`Auto` 下探针实测只评估了 Stream 一项），所以
+「比较代价」看起来是明显的缺口——但预测比与实测比在中间尺寸上**方向相反**：
+
+| `resize-two` | Stream/Frame 预测比 | Stream/Frame 实测峰值比 |
+|---|---|---|
+| 640×360 | 2.24 | 1.08 → 0.90（修复后） |
+| 1280×720 | 1.46 | 0.85 |
+| 1920×1080 | 1.04 | **0.63** |
+| 3840×2160 | 0.59 | 0.38 |
+
+预测衡量的是引擎托管的活动内存，实测是进程 RSS（含未及时回收的 GC 垃圾与编解码器缓冲，后者是
+`WorkspacePlan` 明列在 `Unmanaged` 里的）。按预测值选后端会在 720p/1080p 把实测省 37% 的一侧翻成亏损，所以
+这条规则没有落地：选择仍按候选顺序，**内存问题在估算器和执行器里修，而不是在选路里猜**。
 
 ---
 
@@ -1522,7 +1566,7 @@ Console.WriteLine($"Tier: Avx512={SimdTier.Avx512} Avx2={SimdTier.Avx2} V128={Si
 
 | **M16 文件级流式（完成；静态入口 2026-11-25 内部化，2026-11-26 删除，公开面为 `ImageTranscode`）** | S1：`IRowSource` / `IRowSink`（Abstractions）+ `ProcessingPlan.CanStream` / `TryExecuteTo` + `ProcessChain`（`ImageTranscode` 的流式路由）+ `StreamRefusal` / `StreamResult` / `ProcessReport` + `FusedExecutor.RunWindow`（整图与流式共用同一段递归）+ `PlanStep.NeedsWholeSource`。S2：`RowParallel.EnterTopLevel(degree)` 把 `MaxDegreeOfParallelism` 接进带泵、`PreserveMetadata` 显式保留元数据（默认只读头部：I/O 从 2.0–3.4× 降到 1.01–1.41×）、`stream.plan` 进 AotSmoke `REQUIRED`；**有序带队列测量后取消**（见 §6.5.3） | ✅ 2026-11-25：`gates.sh --aot` observed `warnings=0 errors=0`、`failed=0 passed=1169`、快照只有新增、`stream.plan` 三档（jit / avx2 / base）sha 相同且条目内部断言「流式 == 整图」。`StreamingTests` 26 例：逐字节等价（5 链 × 2 深度、带高 1/2/7/64、PNG 8/16-bit、带 Exif 的 JPEG 走 `PreserveMetadata`）、默认丢元数据且如实报告、读量 ≤1.5×、行缓存不随高度增长、四种回退、串行度一致、取消。实拍 JPEG→PNG 实测流式/整图 **1.00–1.02×**（1280×720）、**1.06–1.09×**（3069×2653），输出逐字节相同（含 9.4 KB Exif）。**未做**：`Global` 两遍（TIFF 区域源由 M17 补上） |
 | **M17 区域执行（完成；静态入口 2026-11-25 起内部化）** | `IRegionSource`（Abstractions）+ `RegionExecutor` / `RegionRefusal` / `RegionResult` + `ProcessingPlan.CanExecuteRegion` / `TryExecuteRegion` + `Image.DescribeRegion` / `ProcessRegion` + `TiffRegionSource`（`TiffReader.ReadLayout` / `ReadSegment`，显式引用 `Sdcb.SimdCodecs.Tiff`）+ 运行期 TIFF 夹具（codec 写条带、手写 tile / MinIsWhite / float / 4 通道） | ✅ 2026-11-25：`gates.sh --aot` observed `warnings=0 errors=0`、`failed=0 passed=1211`（1 skip）、快照 128 行**只有新增、0 删除 0 改写**、AOT 三路 `region.plan` / `region.tiff` sha 相同且条目内部断言「区域 == 整图裁剪」。`RegionExecutorTests` 25 + `TiffRegionTests` 13 + `RegionEndToEndTests` 4；等价（4 链 × 2 深度 × 6 矩形、带高 1/7/64、非对称 5×3 halo、1×1 区 + halo 18）、读量（16² 区域：512 高 3.06 KB / 2048 高 3.44 KB）、内存（100 000² 源读 64² 与 4096² 同级）、拒绝表逐项、取消。**不做**：`Load(path, Region)` 快路径、4 通道 / Palette / CMYK、Geometric / Global 两遍；区域/tile sink 于 P5 由 `IRegionSink` + `Image.ProcessTilesTo` 补上 |
-| **M18 几何进入执行模型（完成）** | 拉式流水线：`PlanRowSource`（按需出一带）/ `ResizeRowSource`（按需出缩放行）/ `CropRowSource` / `Pipeline` 驱动；`ImageTranscode.Resize`（算子可夹在缩放前后）；`ImageTranscode.Region(...).Resize(...)`（区域 + 尾部缩放，2026-11-26 改为编译区域 + 编译缩放段）；`Resample.TryNearestTap` 共享；AOT `resize.stream` / `resize.plan` / `resize.after` / `plan.resize` / `region.resize` / `region.resizeplan` / `file.builder` / `file.geometry`。未做（行流式）：多级缩放、Affine/Perspective | ✅ 2026-11-25：40 组（4 尺寸 × 2 深度 × 5 滤波器）与 `Resample.Resize` 逐字节；8K→1080p 纯缩放 **390 vs 426 ms（0.92×）**、blur+contrast→缩放→sharpen **835 vs 791 ms（1.06×）**；区域链与 `Load → Apply/Crop → Resize` 逐字节；AOT 六条三档一致；`plan.resize` 与 `resize.plan` 的 sha 相同（两条路径、同一份字节） |
+| **M18 几何进入执行模型（完成）** | 拉式流水线：`PlanRowSource`（按需出一带）/ `ResizeRowSource`（按需出缩放行）/ `CropRowSource` / `Pipeline` 驱动；`ImageTranscode.Resize`（算子可夹在缩放前后）；`ImageTranscode.Region(...).Resize(...)`（区域 + 尾部缩放，2026-11-26 改为编译区域 + 编译缩放段）；`Resample.TryNearestTap` 共享；AOT `resize.stream` / `resize.plan` / `resize.after` / `plan.resize` / `region.resize` / `region.resizeplan` / `file.builder` / `file.geometry`。未做（行流式）：Affine/Perspective（多级缩放已于 2026-11-28 落地，见 §6.5） | ✅ 2026-11-25：40 组（4 尺寸 × 2 深度 × 5 滤波器）与 `Resample.Resize` 逐字节；8K→1080p 纯缩放 **390 vs 426 ms（0.92×）**、blur+contrast→缩放→sharpen **835 vs 791 ms（1.06×）**；区域链与 `Load → Apply/Crop → Resize` 逐字节；AOT 六条三档一致；`plan.resize` 与 `resize.plan` 的 sha 相同（两条路径、同一份字节） |
 
 > **状态口径**：M2–M4 的功能（算子、测试、公开 API）都已落地；上表「出口条件」是当初写进设计的验收标准。
 > 2026-11-11 补测的实数：M2 模糊达标；M4 的 8K 峰值 3/4 达标，`gaussian-blur` 超 7.1%（见

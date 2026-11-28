@@ -71,7 +71,20 @@ internal sealed class ResizeRowSource : IRowSource, IDisposable
         _srcRowBytes = checked(_sourceWidth * _format.BytesPerPixel());
         _destStride = checked(width * 4);
         _cancellation = options.CancellationToken;
-        _degree = options.MaxDegreeOfParallelism > 0 ? options.MaxDegreeOfParallelism : RowParallel.Degree;
+
+        // The degree is capped by the work, not just by the configured value. `Emit` splits ONE batch of
+        // `OutputBatchRows` destination rows with `ForBands`, which (unlike `For`) has no pixel gate: on a
+        // 320x180 source a 160x90 resize handed sixteen workers six rows each and measured 1.19x SLOWER than one
+        // thread, while 1920x1080 -> 960x540 measured 0.35x. The rule is `ResolveWorkers`': below MinWorkPixels
+        // run on one thread, above it one worker per RowsPerWorker rows. Both limits are on the batch, because that
+        // is the unit `ForBands` splits.
+        var configured = options.MaxDegreeOfParallelism > 0
+            ? options.MaxDegreeOfParallelism
+            : RowParallel.Degree;
+        var batchRows = Math.Min(OutputBatchRows, _destHeight);
+        _degree = (long)_destWidth * batchRows < RowParallel.MinWorkPixels
+            ? 1
+            : Math.Max(1, Math.Min(configured, (batchRows + RowParallel.RowsPerWorker - 1) / RowParallel.RowsPerWorker));
 
         _weightsX = WeightTable.Build(_sourceWidth, width, resampler);
         _weightsY = WeightTable.Build(_sourceHeight, height, resampler);

@@ -179,4 +179,45 @@ public class StreamingResizeTests
             StreamingResize.Execute(source, sink, 4000, 4, Resampler.Box));
         error.Message.ShouldContain("ring");
     }
+
+    /// <summary>
+    /// A short image must not pay a tall image's floor. The chunk cap is 256 rows, which at 640x360 is 71% of the
+    /// height: the stage then held four frames' worth while the whole-image path it replaces needs 1.3, so streaming
+    /// was both slower and larger there. The stage is now capped by one source frame, which is the same comparison
+    /// the row pump makes — and the cap is skipped when a frame cannot hold a usable chunk at all.
+    /// </summary>
+    [Theory]
+    [InlineData(640, 360, 320, 180)]
+    [InlineData(320, 200, 160, 100)]
+    [InlineData(1920, 1080, 960, 540)]
+    public void AShortImage_StaysWithinOneFrame(int sourceWidth, int sourceHeight, int width, int height)
+    {
+        var source = new SyntheticSource(sourceWidth, sourceHeight, WorkingFormat.Rgba8);
+        using var rows = new ResizeRowSource(source, width, height, Resampler.Lanczos3);
+
+        var oneFrame = (long)sourceWidth * sourceHeight * 4;
+        rows.ResidentBytes.ShouldBeLessThanOrEqualTo(oneFrame,
+            $"a {sourceWidth}x{sourceHeight} stage holds {rows.ResidentBytes} bytes, above its "
+            + $"{oneFrame}-byte source frame");
+    }
+
+    /// <summary>
+    /// The cap must not turn a run that fits its ceiling into a refusal. Rgba16 doubles the source frame while the
+    /// ring stays float rows (16 bytes per pixel), so one frame buys a handful of chunk rows on a small stage:
+    /// 160x100 → 80x50 would drop from 256 rows to 4. There the cap is skipped rather than paid for.
+    /// </summary>
+    [Theory]
+    [InlineData(160, 100, 80, 50)]
+    [InlineData(320, 200, 160, 100)]
+    public void AHighBitDepthStage_KeepsAUsableChunk(int sourceWidth, int sourceHeight, int width, int height)
+    {
+        var source = new SyntheticSource(sourceWidth, sourceHeight, WorkingFormat.Rgba16);
+        using var rows = new ResizeRowSource(source, width, height, Resampler.Bicubic);
+
+        // A chunk of a few rows pays for round-trips and saves nothing, so the stage holds more than one frame
+        // rather than shrinking the chunk to nothing — what it must never do is refuse a run that fits.
+        ResizeWorkspace.Estimate(sourceWidth, sourceHeight, width, height, tapsY: 2, nearest: false,
+            WorkingFormat.Rgba16, new ExecuteOptions()).ChunkRows.ShouldBeGreaterThanOrEqualTo(
+                ResizeWorkspace.MinUsefulChunkRows);
+    }
 }

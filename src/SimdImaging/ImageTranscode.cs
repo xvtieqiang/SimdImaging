@@ -150,14 +150,16 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         return this;
     }
 
-    /// <summary>Ends the chain with a resize; later operator calls run at the new size.</summary>
-    /// <exception cref="InvalidOperationException">The chain already has a resize.</exception>
+    /// <summary>
+    /// Ends the current stage with a resize; later operator calls run at the new size, at row cost.
+    /// <para>A chain may resize more than once. Each resize is its own row stage — it pulls the rows the previous
+    /// stage produced and hands out resized rows — so <c>decode → shrink → sharpen → shrink → encode</c> runs in one
+    /// pass over the file with one ring per stage, instead of decoding and encoding the intermediate size.</para>
+    /// </summary>
     public ImageTranscode Resize(int width, int height, Resampler resampler = Resampler.Bicubic)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
-        if (_recipe.Steps.Any(step => step is GeometryStep { Kind: GeometryKind.Resize }))
-            throw new InvalidOperationException("The chain already has a resize; a second one is a second call.");
 
         _recipe.Append(GeometrySteps.Resize(width, height, resampler));
         return this;

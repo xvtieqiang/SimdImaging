@@ -2,7 +2,7 @@ using System.Globalization;
 using SimdImaging.Comparison;
 
 // Comparison harness. Usage:
-//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|realworld|icc|disposecheck|fusion|batch|chainab|perf32|sizes|mem|seamprofile|matrix|cores|peakmem|memsteady|perf16|perfpipe|randomchain|transcode|fusionab|budget|profile|allocplan|nearest-ablate|records-ablate|trimcost|batchmem|bandcost|pixelate-ablate|singletime|verify-matrix|demo|plan-overhead|chaindiag|one-step|lut-cost] [WxH]
+//   dotnet run -c Release --project benchmarks/SimdImaging.Comparison [all|surface|parity|perf|realworld|icc|disposecheck|fusion|batch|chainab|perf32|sizes|mem|seamprofile|matrix|cores|peakmem|memsteady|perf16|perfpipe|randomchain|transcode|fusionab|budget|profile|allocplan|nearest-ablate|records-ablate|trimcost|batchmem|bandcost|pixelate-ablate|singletime|verify-matrix|demo|plan-overhead|chaindiag|one-step|lut-cost|crossover] [WxH]
 // Not part of SimdImaging.slnx on purpose: the shipped solution must stay buildable without the
 // git-ignored Six Labors licence file (AGENTS.md clean-room rules).
 
@@ -364,6 +364,12 @@ try
     {
         Console.WriteLine($"[transcode] PNG -> PNG at {width}x{height}...");
         Transcode.Write(report, width, height);
+    }
+
+    if (mode is "crossover")
+    {
+        Console.WriteLine($"[crossover] stream vs whole, across chains and sizes...");
+        Transcode.WriteCrossover(report, width, height);
     }
 
     if (mode is "fusionab")

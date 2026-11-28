@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using SimdImaging;
 using SimdImaging.Abstractions;
+using SimdImaging.Processing;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Processing;
@@ -29,8 +30,18 @@ internal static class Transcode
 {
     /// <summary>The chains, expressed once so the timed table and the fresh-process children run the same work.</summary>
     private static (string Name, string Chain, Func<ImageTranscode, ImageTranscode> Stream,
-        Func<OurImage, OurImage> Whole, Action<TheirImage> Oracle)[] Cases() =>
+        Func<OurImage, OurImage> Whole, Action<TheirImage> Oracle)[] Cases(int width, int height) =>
     [
+        // The shape every server actually runs: decode, shrink, encode. It is the one chain where the row pump has a
+        // geometry stage in it — the resize pulls decoded rows, produces destination rows on demand, and the encoder
+        // never sees a source-sized frame. The target is half the source, so the measurement scales with the image.
+        ("resize-half", $"Lanczos3 → {Math.Max(1, width / 2)}×{Math.Max(1, height / 2)}",
+            t => t.Resize(Math.Max(1, width / 2), Math.Max(1, height / 2), Resampler.Lanczos3),
+            image => image.Pipe().Resize(Math.Max(1, width / 2), Math.Max(1, height / 2), Resampler.Lanczos3)
+                .ToImage(),
+            image => image.Mutate(x =>
+                x.Resize(Math.Max(1, width / 2), Math.Max(1, height / 2), KnownResamplers.Lanczos3))),
+
         // No operators: the floor is the codec pair plus the copies, and it is what streaming has to beat before a
         // chain is worth discussing.
         ("copy", "（无算子：解码 + 编码）",
@@ -42,6 +53,22 @@ internal static class Transcode
             t => t.Invert().Contrast(1.1f).Grayscale(),
             image => image.Pipe().Invert().Contrast(1.1f).Grayscale().ToImage(),
             image => image.Mutate(x => x.Invert().Contrast(1.1f).Grayscale(GrayscaleMode.Bt601))),
+
+        // Two size changes in one file pass: the second resize pulls the rows the first one produced. The comparison
+        // that matters here is against the whole-image path, which holds an intermediate frame at the first size.
+        ("resize-two", "Lanczos3 ½ → Invert → Lanczos3 ¼",
+            t => t.Resize(Math.Max(1, width / 2), Math.Max(1, height / 2), Resampler.Lanczos3)
+                .Invert()
+                .Resize(Math.Max(1, width / 4), Math.Max(1, height / 4), Resampler.Lanczos3),
+            image => image.Pipe()
+                .Resize(Math.Max(1, width / 2), Math.Max(1, height / 2), Resampler.Lanczos3)
+                .Invert()
+                .Resize(Math.Max(1, width / 4), Math.Max(1, height / 4), Resampler.Lanczos3)
+                .ToImage(),
+            image => image.Mutate(x => x
+                .Resize(Math.Max(1, width / 2), Math.Max(1, height / 2), KnownResamplers.Lanczos3)
+                .Invert()
+                .Resize(Math.Max(1, width / 4), Math.Max(1, height / 4), KnownResamplers.Lanczos3))),
 
         // A halo step: the streaming window is band + 2 × 5 rows, so this is where "no whole frame" either pays for
         // itself or does not.
@@ -71,7 +98,7 @@ internal static class Transcode
             using (var source = Fixture.Ours(Fixture.Make(width, height), width, height))
                 OurImage.Save(source, input);
 
-            var cases = Cases();
+            var cases = Cases(width, height);
 
             report.Heading(3, "时间与分配（同进程交错）");
             var rows = new List<string[]>();
@@ -232,7 +259,7 @@ internal static class Transcode
                 OurImage.Save(source, input);
 
             var rows = new List<string[]>();
-            foreach (var testCase in Cases())
+            foreach (var testCase in Cases(width, height))
             {
                 var decided = Run("stream", testCase, input, decidedPath);
                 var fused = Run("fused", testCase, input, fusedPath);
@@ -282,7 +309,7 @@ internal static class Transcode
         var input = args[5];
         var output = args[6];
 
-        var testCase = Cases().First(candidate => candidate.Name == name);
+        var testCase = Cases(width, height).First(candidate => candidate.Name == name);
 
         GC.Collect();
         GC.WaitForPendingFinalizers();
@@ -366,4 +393,121 @@ internal static class Transcode
         bytes >= 1024 * 1024
             ? (bytes / 1024.0 / 1024.0).ToString("F1", CultureInfo.InvariantCulture) + " MiB"
             : (bytes / 1024.0).ToString("F0", CultureInfo.InvariantCulture) + " KiB";
+
+    /// <summary>
+    /// Where streaming stops paying, across shapes rather than one chain. The band floor is a constant (a 256-row
+    /// chunk, a 64-row output batch, one float row per worker), so the smaller the image the larger that floor is
+    /// relative to the frame streaming exists to avoid. One chain cannot locate the crossover: a point chain has no
+    /// halo and a chain of two resizes holds two stages, and they cross at different heights. This sweeps several
+    /// chains down the size axis and reports both sides of the trade — time and peak resident — because a decision
+    /// needs them to point the same way.
+    /// </summary>
+    public static void WriteCrossover(Report report, int width, int height)
+    {
+        report.Heading(2, "X 组 · 流式与整图的交叉点（多链 × 多尺寸）");
+        report.Line("> 每一格是同一张图、同一条链，流式（`ImageTranscode`）对整图（`Load → Pipe → Save`）。");
+        report.Line("> 时间：同进程交错 5 轮取中位。峰值：每格一个全新子进程，冷启动，3 次取中位。");
+        report.Line("> `流式÷整图` <1 表示流式更好。判定只看两列**同向**：一个指标赢、另一个输，就不是这条链的结论。");
+        report.Line();
+
+        var sizes = new (int Width, int Height)[]
+        {
+            (320, 180), (480, 270), (640, 360), (854, 480), (960, 540),
+            (1280, 720), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160),
+        };
+
+        var root = Directory.CreateTempSubdirectory("simd-cross-");
+        try
+        {
+            var rows = new List<string[]>();
+            foreach (var (w, h) in sizes)
+            {
+                var input = Path.Combine(root.FullName, $"in-{w}x{h}.png");
+                var streamPath = Path.Combine(root.FullName, $"s-{w}x{h}.png");
+                var framePath = Path.Combine(root.FullName, $"f-{w}x{h}.png");
+
+                using (var source = Fixture.Ours(Fixture.Make(w, h), w, h))
+                    OurImage.Save(source, input);
+
+                foreach (var testCase in Cases(w, h))
+                {
+                    if (testCase.Name is "copy" or "point-3" or "blur-invert"
+                        or "resize-half" or "resize-two")
+                    {
+                        var streamMs = TimeCase(testCase, "stream", input, streamPath);
+                        var frameMs = TimeCase(testCase, "frame", input, framePath);
+
+                        if (!File.ReadAllBytes(streamPath).AsSpan().SequenceEqual(File.ReadAllBytes(framePath)))
+                            throw new InvalidOperationException(
+                                $"{testCase.Name} {w}x{h}: the streamed and whole-image paths disagree.");
+
+                        var streamPeak = MeasureFresh("stream", testCase.Name, w, h, input, streamPath);
+                        var framePeak = MeasureFresh("frame", testCase.Name, w, h, input, framePath);
+
+                        var t = streamMs / frameMs;
+                        var m = streamPeak / (double)framePeak;
+
+                        // The tolerance is the noise floor, not a preference: two independent runs of this sweep
+                        // differed by 6.9% at the median and 15.1% at p75 on the time ratio, while the peak ratio
+                        // held to 2.2%. A 5% band therefore turned 19 of 50 cells into a different verdict between
+                        // runs — all of them straddling 1.00. 15% is the p75 spread, so a verdict flips only when
+                        // the effect is larger than the measurement.
+                        const double NoiseBand = 1.15;
+                        var verdict = t <= NoiseBand && m <= 1.05 ? "流式不亏"
+                            : t > NoiseBand && m > 1.05 ? "**流式全亏**"
+                            : t <= NoiseBand ? "时间不亏"
+                            : "内存赢";
+
+                        rows.Add([testCase.Name, $"{w}x{h}",
+                            Timing.F(streamMs), Timing.F(frameMs), t.ToString("F2", CultureInfo.InvariantCulture) + "×",
+                            MiB(streamPeak), MiB(framePeak), m.ToString("F2", CultureInfo.InvariantCulture) + "×",
+                            verdict]);
+                    }
+                }
+            }
+
+            report.Table(["场景", "尺寸", "流式 ms", "整图 ms", "时间比", "流式峰值", "整图峰值", "内存比", "判定"],
+                rows);
+
+            // The crossover per chain: the first size where the stream stops losing on both axes, and the first
+            // where it still wins on memory while losing on time. A single number would hide that these differ.
+            report.Line();
+            report.Line("> 每种链按尺寸看「时间比 / 内存比」怎么走。`内存赢` 是时间略慢、峰值更省——那是有记录的权衡，");
+            report.Line("> 不是缺陷；`**流式全亏**` 是两个指标同时更差，那才是这条链在这个尺寸上不该流式。");
+            report.Line();
+            var summary = new List<string[]>();
+            foreach (var name in new[] { "copy", "point-3", "blur-invert", "resize-half", "resize-two" })
+            {
+                var cells = rows.Where(r => r[0] == name).ToList();
+                var bothLose = cells.Where(r => r[8] == "**流式全亏**").Select(r => r[1]).ToList();
+                var memoryOnly = cells.Count(r => r[8] == "内存赢");
+                var even = cells.Count(r => r[8] == "流式不亏");
+                summary.Add([name,
+                    bothLose.Count == 0 ? "无" : string.Join(", ", bothLose),
+                    memoryOnly.ToString(CultureInfo.InvariantCulture),
+                    even.ToString(CultureInfo.InvariantCulture)]);
+            }
+
+            report.Table(["场景", "两指标同亏的尺寸", "内存赢的格数", "不亏的格数"], summary);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    /// <summary>One side of one case, timed in-process with the same interleaving the main table uses.</summary>
+    private static double TimeCase(
+        (string Name, string Chain, Func<ImageTranscode, ImageTranscode> Stream, Func<OurImage, OurImage> Whole,
+            Action<TheirImage> Oracle) testCase,
+        string side, string input, string output)
+    {
+        var runners = new[]
+        {
+            new Runner("stream", () => Run("stream", testCase, input, output)),
+            new Runner("frame", () => Run("frame", testCase, input, output)),
+        };
+        var times = Timing.Time(runners, rounds: 5);
+        return times[side];
+    }
 }

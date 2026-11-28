@@ -180,6 +180,68 @@ public class TranscodeResizeTests
         }
     }
 
+    [Theory]
+    [InlineData("Rgba8", "Bicubic", "Lanczos3")]
+    [InlineData("Rgba8", "Nearest", "Bilinear")]
+    [InlineData("Rgba8", "Box", "Bilinear")]
+    [InlineData("Rgba16", "Bicubic", "Lanczos3")]
+    public void TwoResizes_RunInTheSamePass(string format, string firstFilter, string secondFilter)
+    {
+        var workingFormat = format switch
+        {
+            "Rgba16" => WorkingFormat.Rgba16,
+            _ => WorkingFormat.Rgba8,
+        };
+        var first = Filter(firstFilter);
+        var second = Filter(secondFilter);
+
+        var source = Temp(".png");
+        var streamed = Temp(".png");
+        var expected = Temp(".png");
+        try
+        {
+            using (var image = TestImages.Gradient(320, 200, workingFormat))
+                Image.Save(image, source);
+
+            // Two size changes in one chain: the second resize pulls the rows the first one produced, so the chain
+            // holds one ring per stage and never a full frame at either size. The point step between them keeps the
+            // two geometry stages from being adjacent — the harder shape to get right, and the one a real chain has.
+            var report = ImageTranscode.From(source)
+                .Resize(160, 100, first)
+                .Invert()
+                .Resize(80, 50, second)
+                .Run(streamed);
+
+            using (var loaded = Image.Load(source))
+            using (var result = loaded.Pipe()
+                       .Resize(160, 100, first)
+                       .Invert()
+                       .Resize(80, 50, second)
+                       .ToImage())
+                Image.Save(result, expected);
+
+            File.ReadAllBytes(streamed).ShouldBe(File.ReadAllBytes(expected), $"{format} {first}/{second}");
+            report.Mode.ShouldBe(ProcessMode.Streamed);
+            report.Width.ShouldBe(80);
+            report.Height.ShouldBe(50);
+        }
+        finally
+        {
+            foreach (var path in new[] { source, streamed, expected })
+                File.Delete(path);
+        }
+    }
+
+    private static Resampler Filter(string name) => name switch
+    {
+        "Nearest" => Resampler.Nearest,
+        "Bilinear" => Resampler.Bilinear,
+        "Bicubic" => Resampler.Bicubic,
+        "Lanczos3" => Resampler.Lanczos3,
+        "Box" => Resampler.Box,
+        _ => throw new ArgumentOutOfRangeException(nameof(name), name, "Unknown resampler."),
+    };
+
     [Fact]
     public void AnUpscale_MatchesLoadResize()
     {

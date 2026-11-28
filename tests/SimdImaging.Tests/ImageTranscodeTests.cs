@@ -642,7 +642,11 @@ public class ImageTranscodeTests
     public void MisorderedChains_AreRefused()
     {
         ImageTranscode.From("x.png").Resize(10, 10);
-        Should.Throw<InvalidOperationException>(() => ImageTranscode.From("x.png").Resize(10, 10).Resize(5, 5));
+
+        // Two size changes are a chain of two row stages, not a misorder: each pulls the rows the previous one
+        // produced. The bytes of that chain are pinned in TranscodeResizeTests.TwoResizes_RunInTheSamePass.
+        Should.NotThrow(() => ImageTranscode.From("x.png").Resize(10, 10).Resize(5, 5));
+
         Should.Throw<InvalidOperationException>(() =>
             ImageTranscode.From("x.png").Region(new PixelRect(0, 0, 1, 1)).Region(new PixelRect(0, 0, 2, 2)));
     }

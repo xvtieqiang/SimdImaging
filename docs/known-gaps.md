@@ -27,7 +27,7 @@
 | `SimdImaging.Drawing` 包 | 未创建（暂无计划） |
 | `NativePixelPool` / `NullPixelPool` | 未提供；只有 `ArrayPixelPool`，实现 `IPixelPool` 即可接入自备池 |
 | 公开 API 门禁 | 不接 RS0016 分析器，改用 `docs/public-api.txt` 快照：`PublicApiTests` 反射出全部公开签名（含可空标注）逐行比对，改动必须显式重新生成并 review diff |
-| 分块 / 行带 / 区域 / 几何 | 已实现：整图；行带（`ImageTranscode`，内部 `ProcessChain`）；矩形（`ImageTranscode.Region`，内部 `ProcessRegion` / `CompiledPlanExecutor.ExecuteRegion`）；tile（`Image.ProcessTiles` 的缓冲与 sink 两个重载、`Image.ProcessTilesTo`，sink 契约 `IRegionSink`）；行流式缩放（`ImageTranscode.Resize`，可夹在算子之间）；区域 + 尾部缩放（编译区域执行产出矩形 + 编译缩放段）；行局部几何（Crop / Pad / FlipHorizontal / Resize）进拉式链。未做：`Global` 两遍、多级缩放连用、Affine/Perspective 的行流式形式、把 Region 结果直接写回文件（Region 入口返回内存图） |
+| 分块 / 行带 / 区域 / 几何 | 已实现：整图；行带（`ImageTranscode`，内部 `ProcessChain`）；矩形（`ImageTranscode.Region`，内部 `ProcessRegion` / `CompiledPlanExecutor.ExecuteRegion`）；tile（`Image.ProcessTiles` 的缓冲与 sink 两个重载、`Image.ProcessTilesTo`，sink 契约 `IRegionSink`）；行流式缩放（`ImageTranscode.Resize`，可夹在算子之间）；区域 + 尾部缩放（编译区域执行产出矩形 + 编译缩放段）；行局部几何（Crop / Pad / FlipHorizontal / Resize）进拉式链，缩放可连用多次（每级一个行段）。未做：`Global` 两遍、Affine/Perspective 的行流式形式、把 Region 结果直接写回文件（Region 入口返回内存图） |
 | 公开参考向量包 | 已实现（M6 起，2026-11-14）：`tests/Fixtures/vectors/` 固定输入 / 期望 / SHA-256 + 独立高精度生成脚本；现有 8 组（`warp-identity-{rgba8,rgba16,rgba32f}`、`sample-options-encoded-midpoint`、`warp.tap.bilinear-phase`、`resize.background-edge`、`ewa.identity`、`ewa.minify`），`VectorTests` 独立重算哈希。新增向量允许，为过测试改已有 `expected` 禁止 |
 | 像素差异工具 | 已实现（M6）：`src/Shared/PixelDiff.cs` 单一源码共享，测试项目与 Comparison 工程链接复用，不造第二把尺子；补首个不匹配位置、每通道误差、Top N、SHA-256、P6 差异热图，分级沿用 `Metrics.Grade` |
 | SIMD 档位自动化 | 已实现（M6）：`benchmarks/simd-tiers.sh` 三档 JIT 全量测试 + 算子输出 body SHA-256 逐档比对。修正了 §7.5 设计稿的 `--filter "FullyQualifiedName~Kernel"` —— 它实际只匹配名字里恰好带 Kernel 的用例，不匹配 scalar-twin 测试，现改为跑全量 |
@@ -770,8 +770,31 @@ Apache-2.0 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精
   仍只用于解释与预算，不改变后端选择（当前非默认项都是 Global，分类已被 Category 拦下）。
 - **单步行流式缩放已落地**：`ImageTranscode` 的行流式缩放与 `Load → Resize` 逐字节相同，8K→1080p 工作集约 19 MiB
   （ring + staging + 输出批 + worker 行，一个账本；超限先缩 chunk 再拒绝）。
-- **一次流水线只支持一个缩放**：`ImageTranscode.Resize` 两侧都可以挂算子（`GaussianBlur → Resize → Sharpen`）；
-  两次缩放连用仍要分两次调用（中间落一张整图）。真正的多级流水线需要 plan 自带尺寸变换，见 `architecture.md` §6.7。
+- **一次流水线可以有多个缩放（2026-11-28）**：`ImageTranscode.Resize` 两侧都可以挂算子
+  （`GaussianBlur → Resize → Sharpen`），并且可以连用两次以上。每次缩放是**自己的一个行段**——它拉取上一段产出的行、
+  按需发放缩放后的行，所以 `decode → 缩到 ½ → 算子 → 缩到 ¼ → encode` 是一趟过文件，每段一个 ring，**中间尺寸从不落整帧**。
+  与 `Load → Pipe → Resize → …` 逐字节相同（`TwoResizes_RunInTheSamePass`，4 种格式/滤镜组合）。
+- **流式对整图：不是一条门槛，而是每种链一个形状**（2026-11-28 实测，`crossover` 模式，5 链 × 10 尺寸，两次独立运行）。
+  时间比中位差 1.0%（内存比 2.0%），50 格里只有 1 格判定翻转，且那次在 1.05 边界上。**两指标同亏只有 1 格**
+  （`copy` 320×180，纯拷贝没有可省的整帧）：
+
+  | 链 | 时间比 | 内存比 | 读法 |
+  |---|---|---|---|
+  | `point-3` / `blur-invert` | 1.00–1.05 | **0.47–0.51**（1080p） | **最佳形状**：几乎不出时间，省一半峰值 |
+  | `resize-half` | 1.12–1.29 | 0.25–0.42（≥1080p） | 内存大幅领先，时间有代价 |
+  | `resize-two` | 1.36–1.62 | 0.37–0.53 | **纯内存换时间**，10/10 格都省 |
+  | `copy` | 0.97–1.42 | 0.15–1.14 | 无算子时省的是解码/编码的那一帧，小图上没有 |
+
+  所以「该不该流式」没有单一尺寸门槛可定：`blur-invert` 在 320×180 就该流式（内存 0.84×、时间 1.20× 属于可接受权衡），
+  `copy` 在 320×180 不该（两指标同亏）。**结论按链记录，不按尺寸设常量**——这也是为什么没有加尺寸门槛。
+  一条被否定的路：让 `ExecutionPlanner` 在 `Auto` 下比较候选的 `RequiredBytes` 取最小。预测比与实测比在 720p/1080p
+  方向相反（见上表的内存比），因为它衡量的是引擎托管内存，而峰值是进程 RSS（含 GC 垃圾与编解码器缓冲，
+  后者明列在 `WorkspacePlan.Unmanaged`）。内存问题在估算器里修，不在选路里猜。
+- **流式缩放的并行度按批次像素量收敛**（2026-11-28 修）：`Emit` 用 `ForBands` 切一个 `OutputBatchRows` 行批次，
+  而 `ForBands` 本身没有像素门限。原先 `_degree` 直接取配置值，于是 320×180 → 160×90 把 6 行分给 16 个 worker，
+  实测 **1.19× 比单线程更慢**（1920×1080 → 960×540 是 0.35×）。现在按 `ResolveWorkers` 的同一规则收敛：批次
+  像素低于 `MinWorkPixels` 走单线程，之上每 `RowsPerWorker` 行一个 worker。修复后小图 ratio 1.19 → 0.99，
+  大图仍拿满并行（0.39×）。`ResizeWorkspace` 的 worker 行估算同步改了，否则它会为不存在的 worker 记内存。
 - **编码器尺寸仍由门面给出**：`Resize` 的 width/height 是参数；计划自己改变尺寸（不经过门面参数）还不支持。
 - **区域 + 几何（2026-11-26 起）**：`ImageTranscode.From(path).Region(rect).Resize(w, h)` 先由编译区域执行器产出
   矩形，再跑编译缩放段，结果与 `Load → Apply → Crop → Resize` 逐字节相同；矩形在缩放期间整块存在。仍未做的是

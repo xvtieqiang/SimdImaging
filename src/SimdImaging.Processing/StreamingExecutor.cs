@@ -151,9 +151,16 @@ internal static class StreamingExecutor
         var chain = CompiledPlanExecutor.CreateStreamChain(plan, source, options, pool);
         try
         {
+            // LastWorkerCount is thread-static and survives the call, so a run that reaches no row loop (an empty
+            // plan is one straight copy; a Nearest resize runs its point loop on the caller) would report whatever
+            // the previous run left there. Reset before the work from which the number is read.
+            RowParallel.LastWorkerCount = 1;
             using var resized = new ResizeRowSource(chain, width, height, resampler, options);
             var written = Pipeline.Copy(resized, sink, options.CancellationToken, options);
-            return new StreamResult(StreamRefusal.None, written, Bands(chain), 1);
+            // The last row loop is the resize's vertical pass, not a plan band: report the workers it actually used
+            // rather than a constant, which is what this field means on the chain-less entry point.
+            return new StreamResult(StreamRefusal.None, written, Bands(chain),
+                Math.Max(1, RowParallel.LastWorkerCount));
         }
         finally
         {
@@ -192,6 +199,7 @@ internal static class StreamingExecutor
         var chain = CompiledPlanExecutor.CreateStreamChain(plan, source, options, pool);
         try
         {
+            RowParallel.LastWorkerCount = 1;
             var written = Pipeline.Copy(chain, sink, options.CancellationToken, options);
             return new StreamResult(StreamRefusal.None, written, Bands(chain),
                 Math.Max(1, RowParallel.LastWorkerCount));
