@@ -90,6 +90,9 @@ internal sealed record ExecutionDecision(
     bool BudgetBestEffort,
     IReadOnlyList<CandidateEvaluation> Candidates)
 {
+    /// <summary>Wall-clock ticks the planner spent on this decision; 0 when it was not measured.</summary>
+    internal long PlanningTicks { get; init; }
+
     internal bool Succeeded => Plan is not null;
 
     internal ExecutionBackend? SelectedBackend => Plan?.Backend;
@@ -144,6 +147,7 @@ internal sealed record ExecutionDecision(
             SourceReads = sourceReads,
             ReplayRequired = replayRequired,
             BudgetBestEffort = BudgetBestEffort,
+            PlanningTicks = PlanningTicks,
         };
     }
 

@@ -71,6 +71,23 @@ public sealed class ExecutionPlannerTests
         decision.FallbackFrom.ShouldBeNull();
     }
 
+    /// <summary>
+    /// Planning cost is part of end-to-end time (§7: <c>T_total = T_planning + T_execution</c>), so the decision
+    /// has to carry it and the report has to expose it. A planner that costs nothing measurable would be a
+    /// different finding; this asserts the reading is taken, not that it is small.
+    /// </summary>
+    [Fact]
+    public void PlanningTimeIsRecorded()
+    {
+        var decision = Plan(Request(Recipe(PlanOps.Invert(), PlanOps.GaussianBlur(1f)),
+            preferred: ExecutionBackend.Stream, sink: SinkCapabilities.RowWritable));
+
+        decision.Succeeded.ShouldBeTrue();
+        decision.PlanningTicks.ShouldBeGreaterThan(0, "the planner always takes some time; 0 means it was not read");
+        decision.ToReport(OutputStrategy.Banded).PlanningTicks.ShouldBe(decision.PlanningTicks,
+            "the report must expose the same reading the decision took");
+    }
+
     [Fact]
     public void Region_IsFixedAndNeverFallsBack()
     {

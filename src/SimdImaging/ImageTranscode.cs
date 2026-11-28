@@ -435,11 +435,19 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
         // Paths and seekable streams can be probed without consuming the pixel data: plan on the real geometry
         // before opening the encoder, so the budget decision is not made from a 1x1 preflight.
         ExecutionDecision? plannedDecision = null;
+
+        // A two-pass equalize really does traverse the source twice (once for the histogram, once to apply it
+        // through the table). The report has to say so: a `SourceReads` of 1 on a run that reopened the file is a
+        // measurement that is simply wrong, and the field's whole purpose is to let a caller reason about cost.
+        var twoPass = _twoPassTable is not null;
         ProcessReport WithPlan(ProcessReport report) => plannedDecision is null
             ? report
             : report with
             {
-                Execution = plannedDecision.ToReport(OutputStrategy.Banded)
+                Execution = plannedDecision.ToReport(OutputStrategy.Banded,
+                        passes: twoPass ? 2 : 1,
+                        sourceReads: twoPass ? 2 : 1,
+                        replayRequired: twoPass)
                     with { PeakWorkingBytes = report.PeakWorkingBytes },
             };
 
@@ -476,7 +484,10 @@ public sealed class ImageTranscode : ImageOpPipeline<ImageTranscode>
                         cancellationToken);
                     return materializedReport with
                     {
-                        Execution = decision.ToReport(OutputStrategy.Buffered)
+                        Execution = decision.ToReport(OutputStrategy.Buffered,
+                                passes: twoPass ? 2 : 1,
+                                sourceReads: twoPass ? 2 : 1,
+                                replayRequired: twoPass)
                             with { PeakWorkingBytes = materializedReport.PeakWorkingBytes },
                     };
                 }

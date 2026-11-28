@@ -880,6 +880,14 @@ public sealed class ProcessingPlan
         workspaceLease?.Dispose();
         if (options.Diagnostics)
         {
+            // The pool's peak is the one measured figure a same-size run has; everything else here is a fact the
+            // executor already knew. The prediction is recomputed with the same arguments the ceiling used, so the
+            // two entries (`PlanReport` and `StreamResult.Execution`) describe the same shape rather than one
+            // carrying a number and the other carrying null.
+            var diagnosticEstimate = MemoryEstimator.EstimateForExecution(source.Width, source.Height,
+                source.Format, execution, bandRows,
+                StepwiseRowsFor(height, bandRows, options.MaxDegreeOfParallelism), segments,
+                options.MaxDegreeOfParallelism);
             report = new PlanReport
             {
                 SegmentCount = segments.Count,
@@ -890,6 +898,27 @@ public sealed class ProcessingPlan
                 PoolRentCount = counting!.Rents,
                 PoolReturnCount = counting.Returns,
                 ElapsedTicks = Stopwatch.GetTimestamp() - startTicks,
+                Execution = new ExecutionReport
+                {
+                    // A same-size plan returns one whole buffer, so the mode and the strategy are not in doubt.
+                    SelectedMode = ExecutionMode.Materialized,
+                    RequestedPolicy = options.Policy,
+                    FallbackReason = ExecutionFallbackReason.None,
+                    OutputStrategy = OutputStrategy.Buffered,
+                    Steps = segments
+                        .Select(segment => $"OperatorRun x{segment.Count}")
+                        .ToArray(),
+                    PredictedWorkingBytes = diagnosticEstimate.PeakBytes,
+                    PeakWorkingBytes = counting.PeakBytes,
+                    // The in-memory view is read once and needs no replay; there is no second pass to report.
+                    Passes = 1,
+                    SourceReads = 1,
+                    ReplayRequired = false,
+                    BudgetBestEffort = false,
+                    // No planner ran: this entry point executes a plan it was handed, so there is no planning
+                    // cost to attribute. 0 means "not measured", not "free".
+                    PlanningTicks = 0,
+                },
             };
         }
 

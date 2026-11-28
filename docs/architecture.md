@@ -998,6 +998,25 @@ ProcessReport report = ImageTranscode.From(sourcePath).GaussianBlur(1f).Run(dest
 （IO 层是不是真流式），`FullyStreamed` 是三者都成的派生结论。合成一个 bool 就是在撒谎——
 「执行流式、解码器内部整图缓冲」是真实且常见的一档（渐进式 JPEG、交错 PNG、带缩放的解码）。
 
+**报告里每个数字的口径**（2026-11-28 补齐，基线 §13「先可信、后丰富」）：
+
+| 字段 | 口径 | 谁来填 |
+|---|---|---|
+| `Passes` / `SourceReads` | 对源的**逻辑完整遍历**次数。两遍 Equalize 是 2（一次建直方图、一次套表），其余是 1 | `ImageTranscode` 按 `_twoPassTable is not null` 如实填 |
+| `ReplayRequired` | 源必须可重开（即 `SourceReads > 1`） | 同上 |
+| `PlanningTicks` | 规划耗时；`0` 表示**未测量**（计划是外部给的，没有规划成本可归属），不是「免费」 | `ExecutionPlanner.Plan` 计时 |
+| `PeakWorkingBytes` | 执行期 `WorkspaceManager` 的**实测**峰值 | 执行器 |
+| `PredictedWorkingBytes` | 编译期估算，与 `PeakWorkingBytes` 同源同参 | 规划器 |
+
+`Passes` 计的是遍历次数而非字节：带泵与瓦片会**重复读 halo 行**，那份放大属于区域成本（`RegionCost`），
+不在这里冒充「读了一整遍」。Codec 内部整图缓冲由 `ReaderIsStreaming` 报，不在计划账上。
+`PeakWorkingBytes` 是引擎托管的工作集，**不是**进程峰值——后者含 GC 垃圾与 codec 缓冲，`WorkspacePlan.Unmanaged`
+已逐项列出无法保证的部分。
+
+**`PlanReport.Execution` 与 `StreamResult.Execution` 同义**（2026-11-28 修）：`ProcessingPlan.Execute` 的
+诊断分支此前声明了该字段却从不赋值，于是 `Execute(Diagnostics=true)` 返回 null 而 `TryExecuteTo` 返回有值——
+同一条链、两个入口、两个答案。现在两者都填，且都用同一组 `EstimateForExecution` 参数算预测。
+
 #### 6.5.3 带泵：复用 `RunBand`，不新写内核
 
 把 `FusedExecutor.RunBand` 从「对整图 view 做 `Slice(winTop, rows)`」重构成「接收已填好的窗口 view」：

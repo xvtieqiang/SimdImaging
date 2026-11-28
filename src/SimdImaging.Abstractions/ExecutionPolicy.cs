@@ -76,8 +76,28 @@ public sealed record ExecutionReport
     public long PeakWorkingBytes { get; init; }
     public OutputStrategy OutputStrategy { get; init; }
     public IReadOnlyList<string> Steps { get; init; } = [];
+
+    /// <summary>
+    /// How many times the source was logically traversed in full. Two-pass equalize reads it twice (once to build
+    /// the histogram, once to apply the table); everything else reads it once. This counts traversals, not bytes:
+    /// a banded or tiled run re-reads its halo rows many times, and that amplification belongs to the region cost,
+    /// not here. A codec that buffers the whole image internally is outside this figure — it is reported on the
+    /// reader, not on the plan.
+    /// </summary>
     public int Passes { get; init; } = 1;
+
+    /// <summary>Alias of <see cref="Passes"/> for the source side; they are the same traversal.</summary>
     public int SourceReads { get; init; } = 1;
+
+    /// <summary>True when the source must be reopenable because it is read more than once.</summary>
     public bool ReplayRequired { get; init; }
+
     public bool BudgetBestEffort { get; init; }
+
+    /// <summary>
+    /// Wall-clock ticks the planner spent producing this decision, or 0 when it was not measured. A plan that
+    /// arrives already compiled (a cached plan, or a caller-built one) has no planning cost to attribute, and 0 is
+    /// the honest reading for that — it is not "the planner was free".
+    /// </summary>
+    public long PlanningTicks { get; init; }
 }

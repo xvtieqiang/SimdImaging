@@ -196,4 +196,55 @@ public sealed class TwoPassStreamingTests
             })
             .Run(destination);
     }
+
+    /// <summary>
+    /// The report's <c>SourceReads</c> / <c>Passes</c> / <c>ReplayRequired</c> describe what the run actually did.
+    /// The two-pass path reopens the file — once for the histogram, once to apply the table — so reporting 1 is a
+    /// measurement that is simply wrong, and the fields exist precisely so a caller can reason about cost.
+    /// <para>
+    /// Three cases, because a constant 2 would pass the first one alone: the two-pass chain must say 2, a
+    /// single-pass chain on the same source must say 1, and a materialised fallback (the source cannot be
+    /// replayed) must also say 1.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ReportedSourceReadsMatchTheTwoPassPath()
+    {
+        var source = Temp(".png");
+        var twoPassDestination = Temp(".png");
+        var singlePassDestination = Temp(".png");
+        var materializedDestination = Temp(".png");
+        try
+        {
+            using (var image = TestImages.Gradient(256, 192, WorkingFormat.Rgba8))
+                Image.Save(image, source);
+
+            // Two passes: the path source is reopenable and Rgba8, so the analysis runs first.
+            var twoPass = ImageTranscode.From(source).Equalize().Run(twoPassDestination);
+            twoPass.Mode.ShouldBe(ProcessMode.Streamed);
+            twoPass.Execution.SourceReads.ShouldBe(2, "the two-pass equalize traverses the source twice");
+            twoPass.Execution.Passes.ShouldBe(2);
+            twoPass.Execution.ReplayRequired.ShouldBeTrue("the source is reopened, so it must be replayable");
+
+            // One pass: no analysis, so the counts are 1 and the source is read once.
+            var singlePass = ImageTranscode.From(source).Invert().Run(singlePassDestination);
+            singlePass.Execution.SourceReads.ShouldBe(1);
+            singlePass.Execution.Passes.ShouldBe(1);
+            singlePass.Execution.ReplayRequired.ShouldBeFalse();
+
+            // A forward-only source cannot be replayed, so the chain materialises and reads the source once.
+            using var stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var output = new MemoryStream();
+            var materialized = ImageTranscode.From(stream).Equalize()
+                .Run(output, ImageFormat.Png);
+            materialized.Mode.ShouldBe(ProcessMode.Materialized);
+            materialized.Execution.SourceReads.ShouldBe(1,
+                "a materialised run reads the source once, whatever the chain contains");
+        }
+        finally
+        {
+            foreach (var path in new[] { source, twoPassDestination, singlePassDestination, materializedDestination })
+                File.Delete(path);
+        }
+    }
 }

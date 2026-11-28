@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Sdcb.SimdCodecs.Abstractions;
 using SimdImaging.Abstractions;
 using SimdImaging.Processing.Fusion;
@@ -15,13 +16,20 @@ internal static class ExecutionPlanner
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Planning cost is part of the end-to-end figure (§7: T_total = T_planning + T_execution), so the report
+        // has to carry it. Every exit below stamps the same reading.
+        var startTicks = Stopwatch.GetTimestamp();
+
         if (!TryBuildCandidates(request, out var candidates, out var invalidMessage))
         {
             var invalid = CandidateEvaluation.Failed(
                 request.Preferred ?? ExecutionBackend.Frame,
                 ExecutionRefusalReason.InvalidRequest, null, invalidMessage);
             return new ExecutionDecision(request.Policy, request.Preferred, null, invalid,
-                ExecutionRefusalReason.InvalidRequest, null, invalidMessage, false, [invalid]);
+                ExecutionRefusalReason.InvalidRequest, null, invalidMessage, false, [invalid])
+            {
+                PlanningTicks = Stopwatch.GetTimestamp() - startTicks,
+            };
         }
 
         var evaluations = new List<CandidateEvaluation>(candidates.Count);
@@ -35,7 +43,10 @@ internal static class ExecutionPlanner
 
             bestEffort = evaluation.IsLowerBound && request.Execute.AllowUnestimatedScratch;
             return new ExecutionDecision(request.Policy, request.Preferred, compiled, null,
-                ExecutionRefusalReason.None, null, null, bestEffort, evaluations);
+                ExecutionRefusalReason.None, null, null, bestEffort, evaluations)
+            {
+                PlanningTicks = Stopwatch.GetTimestamp() - startTicks,
+            };
         }
 
         // No candidate fits. The primary reason is the first candidate's blocker: that is the backend the
@@ -43,7 +54,10 @@ internal static class ExecutionPlanner
         // The rest stay in Candidates for diagnostics rather than being collapsed into "needs N bytes".
         var primary = evaluations[0];
         return new ExecutionDecision(request.Policy, request.Preferred, null, primary,
-            primary.Reason, primary.RefusingStep, primary.Message, false, evaluations);
+            primary.Reason, primary.RefusingStep, primary.Message, false, evaluations)
+        {
+            PlanningTicks = Stopwatch.GetTimestamp() - startTicks,
+        };
     }
 
     private static bool TryBuildCandidates(ExecutionRequest request, out List<ExecutionBackend> candidates,

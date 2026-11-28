@@ -320,6 +320,42 @@ public class FusedExecutorEquivalenceTests
         withObserver.Segments.ShouldAllBe(s => !s.Fused);
     }
 
+    /// <summary>
+    /// A diagnostics run carries an <see cref="ExecutionReport"/>, and it agrees with the shapes the report itself
+    /// names. <c>PlanReport.Execution</c> was declared but never assigned, so <c>Execute</c> returned null while
+    /// <c>TryExecuteTo</c> returned a filled one — the same chain, two entry points, two answers to "how did this
+    /// run". The assertions below are the contract that was missing: it is populated, it describes a materialised
+    /// buffered run, its predicted peak bounds its measured one, and its step list matches the segment count so a
+    /// reader cannot see two different shapes in one object.
+    /// </summary>
+    [Fact]
+    public void Diagnostics_ExecutionIsPopulated()
+    {
+        using var image = Ramp(64, 48, WorkingFormat.Rgba8);
+        var plan = Plan(2,
+            ("blur", OpCategory.Neighborhood, Blur(1), 1, 1),
+            ("p", OpCategory.Point, PlanSteps.Point(v => PointOps.Invert(v)), 0, 0));
+
+        var options = new ExecuteOptions { Diagnostics = true, MaxDegreeOfParallelism = 2 };
+        plan.ExecuteWithOptions(View(image), options, out var report);
+
+        report!.Execution.ShouldNotBeNull("a same-size run with diagnostics on has an execution to report");
+        report.Execution!.SelectedMode.ShouldBe(ExecutionMode.Materialized);
+        report.Execution.OutputStrategy.ShouldBe(OutputStrategy.Buffered);
+        report.Execution.RequestedPolicy.ShouldBe(options.Policy);
+
+        // The report must not describe two shapes at once.
+        report.Execution.Steps.Count.ShouldBe(report.SegmentCount);
+
+        // The estimator's one promise: the predicted peak is an upper bound on what the run held.
+        report.Execution.PeakWorkingBytes.ShouldBeLessThanOrEqualTo(report.Execution.PredictedWorkingBytes);
+
+        // The in-memory view is read once and has no planner to attribute time to.
+        report.Execution.SourceReads.ShouldBe(1);
+        report.Execution.Passes.ShouldBe(1);
+        report.Execution.ReplayRequired.ShouldBeFalse();
+    }
+
     [Fact]
     public void LocalLaplacian_IsAGlobalBoundaryAndMatchesTheDirectCall()
     {

@@ -931,6 +931,25 @@ Apache-2.0 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精
   `BoundedBytes`，仍靠 `WithTransferBuffer` 取大值的近似。这两条都需要一个"执行形状"值对象才谈得上真正合一，
   而那个抽象现在只有三个调用点，先不做。
 
+## 执行引擎 P0 可信基线（2026-11-28）
+
+按架构基线 v1.2 §15「先可信、不追求优化」清算的一轮。每一条都先有源码证据，再用测试钉住。
+
+| 项 | 修复前 | 修复后 |
+|---|---|---|
+| **估算器看不见融合开关** | `MemoryEstimator.Estimate` 硬编码 `allowFusion: true`，而 `ProcessingPlan` 读 `options.AllowFusion`。调用方关掉融合，预算是按融合估的、执行是逐步跑的 | 两个公开重载都接受 `ExecuteOptions`（**破坏性签名变更**，快照 diff 就是那两行）。像素视图重载另有一个内部 `observe` 形参，因为 `PlanObserver` 会强制逐步 |
+| **`SequentialBands.For` 绕过 `ResolveDegree`** | `degree == 0` 时直接读 `Environment.ProcessorCount`，绕开测试钩子 `DegreeOverride`：带高按 16 核算，实际只跑 1 线程 | 改走 `RowParallel.ResolveDegree`。5 个调用点全在 `EnterTopLevel` 之外，正常路径逐位相同 |
+| **`Passes` / `SourceReads` / `ReplayRequired` 恒为 1/1/false** | 两遍 Equalize 确实读源两遍（`Image.ScanRows` 一次 + 正式执行一次），报告写 1 | `ImageTranscode` 按 `_twoPassTable is not null` 如实填。口径写进 `architecture.md`：计遍历次数，不计字节；halo 重复读属 `RegionCost` |
+| **`PlanReport.Execution` 恒为 null** | `Execute(Diagnostics=true)` 返回 null，`TryExecuteTo` 返回有值——同一条链两个入口两个答案 | 诊断分支用与执行同参的 `EstimateForExecution` 算出预测并填入，`PeakWorkingBytes` 取 `CountingPool` 实测值 |
+| **规划耗时无任何记录** | `ExecutionReport` 没有任何计时字段；`PlanReport.ElapsedTicks` 是**执行**耗时 | 新增 `PlanningTicks`（唯一新增公开成员）。`0` 表示未测量（计划是外部给的），不是"免费" |
+
+**没有改的**（审查报告提过、核实后否定）：Tile 的整帧目标与一块 tile 不重叠，不是重复计数；编码器 band 在
+`WorkspacePlan.Unmanaged` 里明确排除，`predictedTotalBytes` 是报告总额；`BandRowsFor` / `ExecBandRows` /
+`SequentialBands.For` 服务三种不同执行器（整图带数=并行度、融合段修正、顺序出带带内并行），合并会破坏语义。
+
+**仍未做**：`OutputStrategy.Direct` 是零使用点的死枚举；`_steps.Count == 0 && Diagnostics` 时 `report` 仍为
+null（空计划没有段可报）。两条都记录不修。
+
 ## 转码的内存交叉点（2026-11-28，新 `transcode` 模式实测）
 
 新增的 `benchmarks/SimdImaging.Comparison` 模式 `transcode <宽x高>` 把文件级路径拉进来：PNG→PNG，三侧都是

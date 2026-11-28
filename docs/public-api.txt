@@ -56,6 +56,7 @@
   SimdImaging.Abstractions.ExecutionReport.OutputStrategy : SimdImaging.Abstractions.OutputStrategy { get; set; }
   SimdImaging.Abstractions.ExecutionReport.Passes : System.Int32 { get; set; }
   SimdImaging.Abstractions.ExecutionReport.PeakWorkingBytes : System.Int64 { get; set; }
+  SimdImaging.Abstractions.ExecutionReport.PlanningTicks : System.Int64 { get; set; }
   SimdImaging.Abstractions.ExecutionReport.PredictedWorkingBytes : System.Int64 { get; set; }
   SimdImaging.Abstractions.ExecutionReport.RefusingStep : System.String { get; set; }
   SimdImaging.Abstractions.ExecutionReport.ReplayRequired : System.Boolean { get; set; }
