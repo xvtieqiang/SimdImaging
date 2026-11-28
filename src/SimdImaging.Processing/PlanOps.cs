@@ -344,12 +344,20 @@ public static class PlanOps
     /// Unsharp mask. It blurs internally, so its support follows the Gaussian (<c>ceil(3σ)</c>), not the single
     /// row a 3x3 kernel would need — the mistake this type exists to prevent.
     /// </summary>
-    public static ImageOp Sharpen(float amount = 0.5f, float sigma = 1f) =>
-        Neighborhood(nameof(FilterOps.Sharpen), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)),
-            v => FilterOps.Sharpen(v, amount, sigma),
+    /// <remarks>
+    /// The combine table is created here, outside the kernel delegate, so the band executor shares one table across
+    /// every band of this step. Building it inside would allocate 64 KiB per band: on a 17-band 1080p sharpen that
+    /// measured 1554 KiB allocated per call against 66 KiB for a single band.
+    /// </remarks>
+    public static ImageOp Sharpen(float amount = 0.5f, float sigma = 1f)
+    {
+        var table = TwoInputLut.SharpenTable(amount);
+        return Neighborhood(nameof(FilterOps.Sharpen), Math.Max(1, (int)MathF.Ceiling(sigma * 3f)),
+            v => FilterOps.SharpenWithTable(v, amount, sigma, table, pool: null),
             (width, _, rows, format) => FilterOps.SeparablePlanWorkspaceBytes(width, rows,
                 Math.Max(1, (int)MathF.Ceiling(sigma * 3f)), format, sharpen: true),
             pass: PassModel.SeparableRows, scratchIncludesResult: true);
+    }
 
     /// <summary>3x3 emboss; one row and one column.</summary>
     public static ImageOp Emboss(float strength = 1f) =>

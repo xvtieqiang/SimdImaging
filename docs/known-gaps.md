@@ -877,6 +877,46 @@ Apache-2.0 免密钥、全库 NativeAOT 零 P/Invoke、16-bit 全链路不塌精
 - **仍未做**：`shp` 单算子 0.85× 仍在长链里主导剩余差距；4K 中档 0.94–0.95 的剩余差距未定位到单一原因。
   `FusionDecision` 文档里那张短链比值表是在本次修复前测的，仍成立但需要重录性能基线（`benchmarks/gates.sh --perf`）。
 
+### `shp` 落后的机理（2026-11-28 定位，未修）
+
+前面记的「`shp` 单算子 0.85×，未定位」到此为止有了具体解释，全部是可复现的分配数字：
+
+| 配置（1920×1080，Sharpen σ=1） | 分配 | band 数 |
+|---|---|---|
+| 默认带高 | **1554 KiB** | 17 |
+| `AllowFusion = false` | 1556 KiB | 17 |
+| `BandRows = 1080`（单带） | **8258 KiB** | 1 |
+
+**分配与 band 数成正比，与融合开关无关。** 机理在两层：
+
+1. `PlanOps.Sharpen`（`PlanOps.cs:347-352`）没有 `into:` 版本。`PlanSteps.Neighborhood` 的兜底分支
+   （`PlanSteps.cs:134-143`）每个 band 调一次整图算子 `@operator(window)`。Sharpen 的整图实现
+   （`FilterOps.cs:2510-2527`）先 `GaussianBlur` 再走 LUT 合并，而合并表是 `CombineRgba8` 里
+   `new byte[256*256]`（64 KiB，`FilterOps.cs:1673`）——**每个 band 重建一次**。
+2. 对比 `PointTable`（`PlanSteps.cs:54`）：它用 `Lazy<byte[]>` 只建一次。`Neighborhood` 路径没有对等机制，
+   因为它的委托持有的是「整图算子」而不是「表」。
+
+**为什么不能简单加 `into:`**：Emboss / Sobel / Median3x3 / Erode3x3 / Dilate3x3 这 5 个有 `into:` 的算子都是
+单行 halo、可窗口原地写。Sharpen 需要一个**完整的模糊结果**才能做 `src + amount·(src − blur)`，窗口 halo 只有
+`ceil(3σ)` 行，band 内重算模糊是必需的，无法像 3×3 那样逐窗口写。
+
+**已修（2026-11-28）：把合并表提到步之外。** 上一版记的是「需要新增抽象，暂不做」——那个判断是错的。
+`PlanSteps.PointTable` 早就在用 `Lazy<byte[]>` 做同一件事（每步建一次的单输入表），所以这不是新抽象，
+是复用既有模式。新增 `Internal/TwoInputLut.cs` 收拢三处手写的建表 + 行合并（Sharpen、GaussianSharpen、Glow
+原本各写一份，其中两处还各自 `new byte[256*256]`），表由 `PlanOps.Sharpen` 在步外创建并经
+`FilterOps.SharpenWithTable` 传入。
+
+实测（`TwoInputCombineTests.Sharpen_DoesNotAllocateATablePerBand` 反向验证过）：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| 1920×1080（17 bands） | 1554 KiB | **19 KiB** |
+| 3840×2160（34 bands） | ~2780 KiB | **18 KiB** |
+
+分配不再随 band 数增长。**但时间仍落后 0.65–0.90×**，根因是另一个：`sharpen` = blur(8.4 ms) + 合并(12.3 ms)，
+而合并是**逐字节标量查表**。全仓没有任何 SIMD 查表先例——`PointLut.ApplyRgba8` 也是标量——所以这不是本次
+修复引入的退化，而是 LUT 应用的独立议题。
+
 ## 执行引擎源码级走查（2026-11-28，第二轮）
 
 按风险顺序修的六项，全部带测试；字节结果不变，公开 API 只多两个成员。

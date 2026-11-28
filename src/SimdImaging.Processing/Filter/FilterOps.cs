@@ -1668,43 +1668,13 @@ public static class FilterOps
     private const long TwoInputLutFloor = RowParallel.MinWorkPixels;
 
     /// <summary>The sharpen combine for 8-bit input: <c>round((s + amount·(s − b))·255)</c>, as a table.</summary>
-    private static void CombineRgba8(PixelView source, PixelView destination, float amount)
-    {
-        var table = new byte[256 * 256];
-        for (var s8 = 0; s8 < 256; s8++)
-        {
-            var s = s8 * (1f / 255f);
-            for (var b8 = 0; b8 < 256; b8++)
-            {
-                var b = b8 * (1f / 255f);
-                var value = s + (amount * (s - b));
-
-                // Exactly Pixels.ToByte: scale, add a half, truncate, clamp. MathF.Round would be banker's
-                // rounding and would move one code in every hundred pixels.
-                var scaled = (value * 255f) + 0.5f;
-                table[(s8 << 8) | b8] = scaled <= 0f ? (byte)0 : scaled >= 255f ? (byte)255 : (byte)scaled;
-            }
-        }
-
-        var width = source.Width;
-        RowParallel.For(width, source.Height, (start, end) =>
-        {
-            for (var y = start; y < end; y++)
-            {
-                var sourceRow = source.Row(y);
-                var blurredRow = destination.Row(y);
-                var output = destination.Row(y);
-
-                for (var i = 0; i < sourceRow.Length; i += 4)
-                {
-                    output[i] = table[(sourceRow[i] << 8) | blurredRow[i]];
-                    output[i + 1] = table[(sourceRow[i + 1] << 8) | blurredRow[i + 1]];
-                    output[i + 2] = table[(sourceRow[i + 2] << 8) | blurredRow[i + 2]];
-                    output[i + 3] = sourceRow[i + 3];
-                }
-            }
-        });
-    }
+    /// <remarks>
+    /// The table is handed in as a <see cref="Lazy{T}"/> so it survives across the bands of one step; building it
+    /// here would repeat the 64 KiB allocation for every band, which measured 1554 KiB on a 17-band 1080p sharpen.
+    /// </remarks>
+    private static void CombineRgba8(PixelView source, PixelView destination, Lazy<byte[]> table)
+        // The combine reads and writes the same row, so the destination is also the "other" input.
+        => TwoInputLut.Apply(table.Value, source, destination, destination);
 
     /// <summary>
     /// Separable-or-not 2D convolution with an arbitrary odd kernel and a selectable border mode.
@@ -2508,7 +2478,16 @@ public static class FilterOps
     /// <param name="pool">Where the destination is rented.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="sigma"/> is not finite and positive.</exception>
     public static WorkingBuffer Sharpen(PixelView source, float amount = 0.5f, float sigma = 1f,
-        IPixelPool? pool = null)
+        IPixelPool? pool = null) =>
+        SharpenWithTable(source, amount, sigma, TwoInputLut.SharpenTable(amount), pool);
+
+    /// <summary>
+    /// The same operator with the combine table supplied, so a banded caller can build it once for the whole step
+    /// instead of once per band. <see cref="PlanOps"/> passes a table it owns; the public overload builds one per
+    /// call, which is right for a single whole-image run.
+    /// </summary>
+    internal static WorkingBuffer SharpenWithTable(PixelView source, float amount, float sigma,
+        Lazy<byte[]> table, IPixelPool? pool)
     {
         // The blurred frame becomes the destination: the combine reads and writes the same row, one pixel at a
         // time, so writing it back in place costs no extra frame. It used to rent a second full-size buffer for
@@ -2519,10 +2498,9 @@ public static class FilterOps
         // lerp, which at 1920x1080 cost more than the blur it follows: 13.7 ms of the operator's 24.3. A 64K table
         // over (source byte, blurred byte) computes the identical expression — same float ops, same rounding — so
         // the output bytes cannot move.
-        if (source.Format == WorkingFormat.Rgba8 && destination.View.Format == WorkingFormat.Rgba8
-            && (long)source.Width * source.Height >= TwoInputLutFloor)
+        if (TwoInputLut.Applies(source, destination.View))
         {
-            CombineRgba8(source, destination.View, amount);
+            CombineRgba8(source, destination.View, table);
             return destination;
         }
 
@@ -3147,39 +3125,9 @@ public static class FilterOps
 
         // Same shape as the sharpen combine: two rows in, one clamped sum out. A 64K table over the two byte
         // samples computes the identical expression, so the round trip through floats buys nothing.
-        if (source.Format == WorkingFormat.Rgba8 && halo.View.Format == WorkingFormat.Rgba8
-            && (long)width * source.Height >= TwoInputLutFloor)
+        if (TwoInputLut.Applies(source, halo.View))
         {
-            var table = new byte[256 * 256];
-            for (var s8 = 0; s8 < 256; s8++)
-            {
-                var s = s8 * (1f / 255f);
-                for (var h8 = 0; h8 < 256; h8++)
-                {
-                    var add = h8 * (1f / 255f) * amount;
-                    var value = s + add;
-                    var scaled = (Math.Clamp(value, 0f, 1f) * 255f) + 0.5f;
-                    table[(s8 << 8) | h8] = scaled <= 0f ? (byte)0 : scaled >= 255f ? (byte)255 : (byte)scaled;
-                }
-            }
-
-            RowParallel.For(width, source.Height, (start, end) =>
-            {
-                for (var y = start; y < end; y++)
-                {
-                    var sourceRow = source.Row(y);
-                    var haloRow = halo.View.Row(y);
-                    var output = destination.View.Row(y);
-                    for (var i = 0; i < sourceRow.Length; i += 4)
-                    {
-                        output[i] = table[(sourceRow[i] << 8) | haloRow[i]];
-                        output[i + 1] = table[(sourceRow[i + 1] << 8) | haloRow[i + 1]];
-                        output[i + 2] = table[(sourceRow[i + 2] << 8) | haloRow[i + 2]];
-                        output[i + 3] = sourceRow[i + 3];
-                    }
-                }
-            });
-
+            TwoInputLut.Apply(TwoInputLut.GlowTable(amount).Value, source, halo.View, destination.View);
             return destination;
         }
 
