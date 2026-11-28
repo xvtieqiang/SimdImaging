@@ -180,4 +180,38 @@ public class RowBandTests
         SequentialBands.For(plan, 1920, 1080, WorkingFormat.Rgba8, 16).ShouldBe(512);
         SequentialBands.For(plan, 1920, 1080, WorkingFormat.Rgba8, 16, withinOneFrame: true).ShouldBe(270);
     }
+
+    /// <summary>
+    /// The band height comes from the same degree the executor runs at. With `degree == 0` the old literal read
+    /// `Environment.ProcessorCount` directly, so a `DegreeOverride` (the test hook, and the only way a caller can pin
+    /// the degree without touching the machine) sized the band for cores that were not running. Resolving through
+    /// `RowParallel.ResolveDegree` makes both reads agree; the assertion is self-consistent rather than a constant,
+    /// so it holds on any machine.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(8)]
+    public void SequentialBandsUseTheResolvedDegree(int degreeOverride)
+    {
+        var plan = new ProcessingPlan()
+            .Add(PlanOps.Invert()).Add(PlanOps.Contrast(1.1f)).Add(PlanOps.Grayscale());
+
+        var previous = RowParallel.DegreeOverride;
+        try
+        {
+            RowParallel.DegreeOverride = degreeOverride;
+
+            // 0 means "the machine default" — it must resolve to the same degree the caller can pin explicitly,
+            // which is what the executor does when it only sees `MaxDegreeOfParallelism = 0`.
+            var automatic = SequentialBands.For(plan, 1920, 1080, WorkingFormat.Rgba8, degree: 0);
+            var pinned = SequentialBands.For(plan, 1920, 1080, WorkingFormat.Rgba8, degreeOverride);
+
+            automatic.ShouldBe(pinned,
+                $"degree 0 must resolve to {RowParallel.ResolveDegree(0)}, the degree the band is sized for");
+        }
+        finally
+        {
+            RowParallel.DegreeOverride = previous;
+        }
+    }
 }

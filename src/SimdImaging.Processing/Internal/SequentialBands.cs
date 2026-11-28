@@ -54,7 +54,12 @@ internal static class SequentialBands
         if (plan.BandRows > 0)
             return Math.Max(1, Math.Min(plan.BandRows, height));
 
-        var workers = Math.Max(1, degree > 0 ? degree : Environment.ProcessorCount);
+        // The degree is resolved by the one rule every executor uses, not by reading the machine directly. The
+        // difference is the test hook: with `degree == 0` and `RowParallel.DegreeOverride` set, the literal read
+        // gave the machine's core count while the executor ran at the override — so the band was sized for
+        // workers that never started. `ResolveDegree` also honours an active pump scope and nesting, which is
+        // what keeps a nested caller from over-subscribing the pool.
+        var workers = RowParallel.ResolveDegree(degree);
 
         // Two floors: enough rows for every worker (the row loop splits by RowsPerWorker), and enough pixels for the
         // loop to parallelise at all.
