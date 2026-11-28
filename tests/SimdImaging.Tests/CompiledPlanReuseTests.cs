@@ -96,4 +96,45 @@ public sealed class CompiledPlanReuseTests
             reused.View.Span.ToArray().ShouldBe(reference.View.Span.ToArray());
         }
     }
+
+    /// <summary>
+    /// A plan that is executed and then extended must re-derive its shape. The fold, the step arrays and the
+    /// segment count are cached per <c>_version</c>, and <c>Add</c> bumps it — but nothing asserted that the bump
+    /// is observed. A cache that kept the first shape would run two steps where the plan now has three, and the
+    /// bytes would be quietly wrong rather than throwing.
+    /// <para>
+    /// The check is a byte comparison against a fresh plan carrying the same steps: the first run warms the cache,
+    /// the second must not reuse it. The segment count is asserted too, because a stale shape could in principle
+    /// produce the right pixels on a short chain while still describing the wrong work.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ExecuteThenAdd_InvalidatesTheCachedShape()
+    {
+        using var image = Ramp(96, 72);
+
+        var plan = new ProcessingPlan();
+        plan.Add(PlanOps.Invert());
+
+        using var first = plan.ExecuteWithOptions(image[0].Pixels.View,
+            new ExecuteOptions { Diagnostics = true }, out var firstReport);
+        firstReport!.SegmentCount.ShouldBe(1);
+
+        plan.Add(PlanOps.Contrast(1.2f));
+
+        using var second = plan.ExecuteWithOptions(image[0].Pixels.View,
+            new ExecuteOptions { Diagnostics = true }, out var secondReport);
+        secondReport!.SegmentCount.ShouldBe(1, "two point steps fuse into one segment");
+
+        // The extended plan must match a plan built from the start with both steps.
+        var fresh = new ProcessingPlan();
+        fresh.Add(PlanOps.Invert());
+        fresh.Add(PlanOps.Contrast(1.2f));
+        using var reference = fresh.Execute(image[0].Pixels.View);
+
+        second.View.Span.ToArray().ShouldBe(reference.View.Span.ToArray());
+
+        // And the second run is affected by the new step: a stale shape would have returned the first result.
+        second.View.Span.ToArray().ShouldNotBe(first.View.Span.ToArray());
+    }
 }

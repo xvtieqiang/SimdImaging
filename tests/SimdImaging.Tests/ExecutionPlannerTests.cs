@@ -124,6 +124,36 @@ public sealed class ExecutionPlannerTests
         decision.Refusal.Message.ShouldNotBeNull().ShouldContain("MaxWorkingBytes");
     }
 
+    /// <summary>
+    /// A step the working format cannot run makes the compiler throw, and the planner has to turn that into a
+    /// candidate that lost — not an exception out of <c>Plan</c>, which would take the fallback down with it. The
+    /// point-chain kernel is 8-bit only, so Rgba16 is the case that exercises it.
+    /// <para>
+    /// <c>InvalidPlan</c> had no test at all: the enum value was reached only through the two catch blocks, and
+    /// nothing asserted they were wired up. A catch that silently dropped the message would have looked exactly
+    /// like a compiler that never throws.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void InvalidPlan_IsReportedRatherThanThrown()
+    {
+        var decision = Plan(Request(
+            Recipe(PlanOps.PointChain((row, width) => { })),
+            preferred: ExecutionBackend.Frame,
+            format: WorkingFormat.Rgba16));
+
+        decision.Succeeded.ShouldBeFalse();
+        decision.Reason.ShouldBe(ExecutionRefusalReason.InvalidPlan);
+        decision.Refusal!.Message.ShouldNotBeNull()
+            .ShouldContain("does not support", Case.Insensitive,
+                "the compiler's explanation has to survive the catch, or the refusal is unattributable");
+
+        // The refusal is mapped onto the public report rather than escaping as an exception.
+        var report = decision.ToReport(OutputStrategy.Buffered);
+        report.FallbackReason.ShouldBe(ExecutionFallbackReason.InvalidPlan);
+        report.Message.ShouldNotBeNull();
+    }
+
     [Fact]
     public void AutoPrimaryReason_IsThePreferredCandidatesBlocker_NotTheSmallestBudget()
     {
@@ -196,13 +226,14 @@ public sealed class ExecutionPlannerTests
         ExecutionBackend? preferred = null, ExecutionPolicy policy = ExecutionPolicy.Auto,
         SinkCapabilities sink = SinkCapabilities.None, PixelRect? region = null,
         bool tileRequested = false,
-        SourceCapabilities source = SourceCapabilities.Seekable | SourceCapabilities.StableContent) =>
+        SourceCapabilities source = SourceCapabilities.Seekable | SourceCapabilities.StableContent,
+        ExecuteOptions? execute = null, WorkingFormat format = WorkingFormat.Rgba8) =>
         new()
         {
             Recipe = recipe,
             Width = width,
             Height = height,
-            Format = WorkingFormat.Rgba8,
+            Format = format,
             Source = source,
             Sink = sink,
             Region = region,
@@ -211,7 +242,7 @@ public sealed class ExecutionPlannerTests
             TileHeight = 64,
             Preferred = preferred,
             Policy = policy,
-            Execute = new ExecuteOptions(),
+            Execute = execute ?? new ExecuteOptions(),
             BandRows = 64,
         };
 
